@@ -1,0 +1,47 @@
+vibecaster/
+├── backend/
+│   ├── .env.example           # Environment variables template
+│   ├── agents.py              # Gemini/Imagen AI logic (search, generate, post)
+│   ├── auth.py                # OAuth handlers for X and LinkedIn
+│   ├── database.py            # SQLite schema and operations
+│   ├── main.py                # FastAPI app + APScheduler
+│   ├── requirements.txt       # Python dependencies
+│   └── vibecaster.db          # (auto-created) SQLite database
+│
+├── frontend/
+│   ├── app/
+│   │   ├── globals.css        # Cyberpunk-themed global styles
+│   │   ├── layout.tsx         # Root layout component
+│   │   └── page.tsx           # Main page with three-box layout
+│   ├── components/
+│   │   ├── ConnectionBox.tsx  # OAuth connection UI component
+│   │   └── PromptBox.tsx      # Campaign prompt UI component
+│   ├── .eslintrc.json         # ESLint configuration
+│   ├── next.config.ts         # Next.js config with API rewrites
+│   ├── package.json           # Node.js dependencies
+│   ├── postcss.config.mjs     # PostCSS configuration
+│   ├── tailwind.config.ts     # TailwindCSS configuration
+│   └── tsconfig.json          # TypeScript configuration
+│
+├── .gitignore                 # Git ignore rules
+├── QUICKSTART.md              # Quick start guide
+├── README.md                  # Full documentation
+├── start-backend.sh           # Helper script to start backend
+└── start-frontend.sh          # Helper script to start frontend
+
+Key Files:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Backend (Python + FastAPI)
+  • main.py          → FastAPI app, scheduler setup, API endpoints
+  • database.py      → SQLite (secrets, campaign tables)
+  • agents.py        → AI workflow (search, draft, critique, image gen, post)
+  • auth.py          → OAuth flow for X/Twitter and LinkedIn
+
+Frontend (Next.js 15 + TailwindCSS)
+  • app/page.tsx     → Main UI with connection boxes + prompt box
+  • components/      → Reusable UI components
+  • next.config.ts   → Proxies /api → localhost:8000
+
+Configuration
+  • backend/.env     → (You create) API keys for Gemini, X, LinkedIn
+  • .env.example     → Template for environment variables
