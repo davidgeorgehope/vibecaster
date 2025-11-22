@@ -7,6 +7,8 @@ import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
 import { Zap, AlertCircle, LogOut } from 'lucide-react';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 interface ConnectionStatus {
   twitter: boolean;
   linkedin: boolean;
@@ -60,7 +62,7 @@ export default function Home() {
   const loadConnectionStatus = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/auth/status', {
+      const response = await fetch(`${API_URL}/auth/status`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -80,7 +82,7 @@ export default function Home() {
   const handleTwitterConnect = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/auth/twitter/login', {
+      const response = await fetch(`${API_URL}/auth/twitter/login`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -97,7 +99,7 @@ export default function Home() {
   const handleTwitterDisconnect = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/auth/twitter/disconnect', {
+      const response = await fetch(`${API_URL}/auth/twitter/disconnect`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -115,7 +117,7 @@ export default function Home() {
   const handleLinkedInConnect = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/auth/linkedin/login', {
+      const response = await fetch(`${API_URL}/auth/linkedin/login`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -132,7 +134,7 @@ export default function Home() {
   const handleLinkedInDisconnect = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/auth/linkedin/disconnect', {
+      const response = await fetch(`${API_URL}/auth/linkedin/disconnect`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -150,7 +152,7 @@ export default function Home() {
   const handleActivateCampaign = async (prompt: string) => {
     if (!token) return;
     try {
-      const response = await fetch('/api/setup', {
+      const response = await fetch(`${API_URL}/api/setup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -177,7 +179,7 @@ export default function Home() {
   const handleRunNow = async () => {
     if (!token) return;
     try {
-      const response = await fetch('/api/run-now', {
+      const response = await fetch(`${API_URL}/api/run-now`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`

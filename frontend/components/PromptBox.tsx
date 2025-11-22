@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, Play } from 'lucide-react';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 interface PromptBoxProps {
   onActivate: (prompt: string) => Promise<void>;
   onRunNow: () => Promise<void>;
@@ -16,7 +18,7 @@ export default function PromptBox({ onActivate, onRunNow }: PromptBoxProps) {
 
   useEffect(() => {
     // Check if campaign is configured
-    fetch('/api/campaign')
+    fetch(`${API_URL}/api/campaign`)
       .then(res => res.json())
       .then(data => {
         if (data.user_prompt) {

@@ -57,14 +57,44 @@ class CampaignResponse(BaseModel):
 
 # ===== SCHEDULER MANAGEMENT =====
 
-def setup_scheduler():
-    """Configure and start the scheduler with the current campaign settings."""
-    try:
-        # Remove existing jobs
-        scheduler.remove_all_jobs()
+def setup_scheduler(user_id: int = None):
+    """Configure and start the scheduler with the current campaign settings.
 
-        # Get campaign configuration
-        campaign = get_campaign()
+    Args:
+        user_id: If provided, set up scheduler for this user.
+                If None, set up schedulers for all users with campaigns.
+    """
+    try:
+        if user_id is not None:
+            # Set up scheduler for a specific user
+            _setup_user_scheduler(user_id)
+        else:
+            # On startup, set up schedulers for all users with campaigns
+            from database import get_db
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT user_id FROM campaign
+                    WHERE user_prompt IS NOT NULL AND user_prompt != ''
+                """)
+                users_with_campaigns = cursor.fetchall()
+
+            for row in users_with_campaigns:
+                _setup_user_scheduler(row[0])
+
+            print(f"Scheduler configured for {len(users_with_campaigns)} user(s)")
+
+    except Exception as e:
+        print(f"Error setting up scheduler: {e}")
+
+
+def _setup_user_scheduler(user_id: int):
+    """Set up scheduler for a specific user."""
+    try:
+        job_id = f"agent_cycle_user_{user_id}"
+
+        # Get campaign configuration for this user
+        campaign = get_campaign(user_id)
         if campaign and campaign.get("user_prompt"):
             cron_schedule = campaign.get("schedule_cron", "0 9 * * *")
 
@@ -73,7 +103,7 @@ def setup_scheduler():
             if len(parts) == 5:
                 minute, hour, day, month, day_of_week = parts
 
-                # Add job to scheduler
+                # Add job to scheduler (user-specific)
                 scheduler.add_job(
                     run_agent_cycle,
                     trigger=CronTrigger(
@@ -83,19 +113,23 @@ def setup_scheduler():
                         month=month,
                         day_of_week=day_of_week
                     ),
-                    id="agent_cycle",
-                    name="Vibecaster Agent Cycle",
+                    args=[user_id],  # Pass user_id to run_agent_cycle
+                    id=job_id,
+                    name=f"Vibecaster Agent Cycle (User {user_id})",
                     replace_existing=True
                 )
 
-                print(f"Scheduler configured with cron: {cron_schedule}")
+                print(f"Scheduler configured for user {user_id} with cron: {cron_schedule}")
             else:
-                print(f"Invalid cron schedule: {cron_schedule}")
+                print(f"Invalid cron schedule for user {user_id}: {cron_schedule}")
         else:
-            print("No campaign configured. Scheduler not started.")
+            # Remove job if campaign is empty or deleted
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+                print(f"Removed scheduler job for user {user_id}")
 
     except Exception as e:
-        print(f"Error setting up scheduler: {e}")
+        print(f"Error setting up scheduler for user {user_id}: {e}")
 
 
 # ===== LIFECYCLE EVENTS =====
@@ -187,8 +221,8 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
             schedule_cron=request.schedule_cron
         )
 
-        # Reconfigure scheduler
-        setup_scheduler()
+        # Reconfigure scheduler for this user
+        setup_scheduler(user_id)
 
         return {
             "success": True,
@@ -239,8 +273,10 @@ async def delete_campaign(user_id: int = Depends(get_current_user_id)):
             schedule_cron="0 9 * * *"
         )
 
-        # Remove scheduler jobs
-        scheduler.remove_all_jobs()
+        # Remove scheduler job for this user only
+        job_id = f"agent_cycle_user_{user_id}"
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
 
         return {
             "success": True,
