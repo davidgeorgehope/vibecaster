@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import re
 from typing import Optional, Dict, Any, Tuple
 from google import genai
 from google.genai import types
@@ -24,9 +25,32 @@ LLM_FALLBACK = "gemini-1.5-pro-002"  # Fallback model
 IMAGE_MODEL = "gemini-3-pro-image-preview"
 
 
+def strip_markdown_formatting(text: str) -> str:
+    """
+    Remove common markdown formatting that LinkedIn doesn't support.
+    LinkedIn only supports plain text, so we strip **bold**, __italic__, etc.
+    """
+    # Remove bold: **text** or __text__
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+
+    # Remove italic: *text* or _text_ (but be careful with underscores in URLs)
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'\1', text)
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', text)
+
+    # Remove strikethrough: ~~text~~
+    text = re.sub(r'~~(.+?)~~', r'\1', text)
+
+    # Remove code formatting: `text`
+    text = re.sub(r'`(.+?)`', r'\1', text)
+
+    return text
+
+
 def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
     """
     Analyze user prompt to generate refined persona and visual style.
+    CRITICAL: Preserves the user's exact creative vision and specific requirements.
 
     Returns:
         Tuple of (refined_persona, visual_style)
@@ -35,15 +59,17 @@ def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
         analysis_prompt = f"""
 Analyze this social media automation request and generate:
 
-1. A REFINED PERSONA - A detailed system instruction describing the voice, tone, and personality this account should embody
-2. A VISUAL STYLE - Art direction for image generation that matches the persona
+1. A REFINED PERSONA - A detailed system instruction that STRICTLY PRESERVES the user's exact creative vision, voice, tone, and specific requirements
+2. A VISUAL STYLE - Art direction that EXACTLY follows the user's specified visual requirements
+
+CRITICAL: If the user specifies a particular creative concept (e.g., "anime girl teaching", "stick figures explaining", "meme format"), you MUST preserve that exact concept in both outputs. DO NOT generalize or dilute their vision.
 
 User Request: "{user_prompt}"
 
 Respond in this exact JSON format:
 {{
-    "refined_persona": "Your detailed persona description here",
-    "visual_style": "Your visual style description here"
+    "refined_persona": "Your detailed persona description that preserves ALL user requirements",
+    "visual_style": "Your visual style description that EXACTLY matches user specifications"
 }}
 """
 
@@ -51,7 +77,7 @@ Respond in this exact JSON format:
             model=LLM_MODEL,
             contents=analysis_prompt,
             config={
-                "temperature": 0.7,
+                "temperature": 0.5,  # Lower temp to stay faithful to user input
                 "response_mime_type": "application/json"
             }
         )
@@ -64,19 +90,21 @@ Respond in this exact JSON format:
 
     except Exception as e:
         logger.error(f"Error analyzing prompt: {e}", exc_info=True)
-        # Fallback to simple defaults
+        # Fallback: preserve user's original prompt exactly
         return (
-            f"A social media account that posts about: {user_prompt}",
-            "Modern, clean, professional visual style"
+            f"IMPORTANT: Follow this exact creative direction: {user_prompt}",
+            f"Visual style as specified: {user_prompt}"
         )
 
 
 def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics: list = None) -> Tuple[str, list]:
     """
-    Use Gemini with Google Search grounding to find trending topics.
+    Search for relevant content that fits the user's creative vision.
+    CRITICAL: Finds content that can be presented in the user's specified format,
+    not just "trending news".
 
     Args:
-        user_prompt: The user's campaign prompt
+        user_prompt: The user's campaign prompt with creative direction
         refined_persona: The refined persona description
         recent_topics: List of specific topics covered in the last 2 weeks to avoid
 
@@ -97,12 +125,26 @@ Look for new angles, different sub-topics, or emerging developments we haven't d
 """
 
         search_prompt = f"""
-Find the latest trending news, discussions, or technical developments related to: {user_prompt}
+CRITICAL CONTEXT: The user has a specific creative format/vision described here: {user_prompt}
 
-Focus on recent (last 24-48 hours) content that would be interesting to someone with this persona:
-{refined_persona}{avoidance_text}
+Your task is to find content, concepts, or technical information that can be PRESENTED in this creative format.
 
-Provide a brief summary of the most interesting findings.
+For example:
+- If they want "anime girl teaching OTEL tutorials", find interesting OTEL concepts/features to teach
+- If they want "memes about kubernetes", find kubernetes pain points or funny scenarios
+- If they want "explained with diagrams", find architecture/technical concepts worth diagramming
+
+Search for:
+1. Recent technical developments, concepts, or discussions (last 48 hours preferred, but up to 1 week if needed)
+2. Content that FITS the user's creative presentation format
+3. Topics that would be interesting to explain/present in the user's style
+
+Persona for context: {refined_persona}{avoidance_text}
+
+Provide:
+1. A summary of interesting content found that fits the creative format
+2. Key concepts, features, or topics that would work well in this format
+3. Source URLs for credibility
 """
 
         # Use Google Search grounding with Gemini 3
@@ -248,22 +290,94 @@ Return only the final post text, nothing else.
         return draft
 
 
-def extract_topics_from_post(post_text: str) -> list:
+def validate_content_matches_vision(post_text: str, user_prompt: str, refined_persona: str) -> Tuple[bool, str]:
+    """
+    Validate that generated social media post text is appropriate.
+    IMPORTANT: user_prompt describes the IMAGE format, not the post text format.
+
+    Returns:
+        Tuple of (is_valid, feedback) where feedback explains any issues
+    """
+    try:
+        validation_prompt = f"""
+You are a quality control agent validating SOCIAL MEDIA POST TEXT.
+
+CRITICAL CONTEXT:
+- User's Creative Vision: {user_prompt}
+  This describes the IMAGE/VISUAL FORMAT that will accompany the post, NOT what the post text should look like.
+- Persona: {refined_persona}
+- Generated Post Text: "{post_text}"
+
+Your task: Validate if this is GOOD SOCIAL MEDIA POST TEXT (not an image description).
+
+CHECK FOR THESE ISSUES (mark as invalid if found):
+1. Is it an image generation prompt? (e.g., "Anime sketch of...", "Drawing showing...", "Diagram with...")
+2. Is it describing what's in the image instead of discussing the topic?
+3. Is it boring/generic? (e.g., "Check out this post about...")
+
+GOOD INDICATORS (mark as valid if present):
+1. It's a normal social media post ABOUT a technical topic
+2. It matches the persona's voice/tone
+3. It's engaging and would work on social media
+4. It can reference the visual format briefly, but focuses on the TOPIC
+
+Respond in this exact JSON format:
+{{
+    "is_valid": true/false,
+    "feedback": "Brief explanation"
+}}
+"""
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=validation_prompt,
+            config={
+                "temperature": 0.3,
+                "response_mime_type": "application/json"
+            }
+        )
+
+        import json
+        result = json.loads(response.text)
+        is_valid = result.get("is_valid", False)
+        feedback = result.get("feedback", "No feedback provided")
+
+        if is_valid:
+            logger.debug(f"Content validation PASS: {feedback}")
+        else:
+            logger.warning(f"Content validation FAIL: {feedback}")
+
+        return is_valid, feedback
+
+    except Exception as e:
+        logger.error(f"Error validating content: {e}", exc_info=True)
+        return True, "Validation skipped due to error"
+
+
+def extract_topics_from_post(post_text: str, user_prompt: str = "") -> list:
     """
     Extract specific, granular topics covered in the post.
+    Topics are extracted in the context of the user's creative vision to maintain thematic consistency.
 
     Returns:
         List of 3-5 specific topic strings (e.g., ["OpenTelemetry distributed tracing", "Kubernetes HPA configuration"])
     """
     try:
+        context_text = f"\n\nUser's Creative Vision: {user_prompt}" if user_prompt else ""
+
         extraction_prompt = f"""
 Analyze this social media post and extract 3-5 SPECIFIC, GRANULAR topics or concepts it covers.
 
-Post: "{post_text}"
+Post: "{post_text}"{context_text}
 
 Be SPECIFIC - not broad categories. Examples:
 - Good: "OpenTelemetry distributed tracing", "Kubernetes horizontal pod autoscaling", "React useEffect cleanup functions"
 - Bad: "OpenTelemetry", "Kubernetes", "React"
+
+Extract topics that are:
+1. Specific technical concepts, features, or implementations mentioned
+2. Consistent with the user's creative vision/format (don't extract the format itself, extract the technical content)
+3. Granular enough to avoid repetition in future posts
 
 Respond in this exact JSON format:
 {{
@@ -294,18 +408,25 @@ Respond in this exact JSON format:
 def generate_image(post_text: str, visual_style: str) -> Optional[bytes]:
     """
     Generate an image using Imagen based on the post and visual style.
+    CRITICAL: Strictly follows the user's specified visual requirements.
 
     Returns:
         Image bytes or None if generation fails
     """
     try:
         image_prompt = f"""
-Create a visually appealing image for this social media post:
-"{post_text}"
+CRITICAL: You MUST follow this exact visual style specification: {visual_style}
 
-Art Style: {visual_style}
+Create an image for this social media post: "{post_text}"
 
-The image should be eye-catching, professional, and complement the post content.
+STRICT REQUIREMENTS:
+- Follow the visual style specification EXACTLY (if it says "anime girl", draw an anime girl; if it says "simple drawn style", use simple drawn style)
+- If the style specifies specific elements (e.g., "pointing at architecture diagrams", "holding a sign"), include them
+- If the style specifies "no text outside of images" or similar, respect that constraint
+- Match the tone and aesthetic specified (e.g., "kawaii", "professional", "minimalist")
+- The image should be eye-catching and complement the post content while strictly adhering to the style requirements
+
+DO NOT deviate from the specified visual style. This is critical.
 """
 
         response = client.models.generate_content(
@@ -533,11 +654,19 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
             }
 
         # Create post
+        logger.info(f"Creating LinkedIn post with text length: {len(post_text)}")
+        logger.info(f"LinkedIn post text preview: {post_text[:200]}...")
         response = requests.post(
             "https://api.linkedin.com/v2/ugcPosts",
             headers=headers,
             json=post_data
         )
+
+        if not response.ok:
+            logger.error(f"LinkedIn API error response: {response.status_code}")
+            logger.error(f"Response body: {response.text}")
+            logger.error(f"Post data sent: {post_data}")
+
         response.raise_for_status()
 
         logger.info(f"Posted to LinkedIn: {response.json()['id']}")
@@ -548,21 +677,230 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         return False
 
 
+def generate_x_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list) -> Tuple[str, str]:
+    """
+    Generate X/Twitter-specific post (280 char limit, casual, punchy).
+    CRITICAL: Must follow user's exact creative format/vision.
+
+    Returns:
+        Tuple of (post_text, shortened_url)
+    """
+    try:
+        # X counts URLs as ~23 chars, but we'll use 230 chars for text to be safe
+        max_text_length = 230 if source_url else 280
+
+        avoidance_text = ""
+        if recent_topics:
+            topics_str = ", ".join(recent_topics[:5])
+            avoidance_text = f"\n- Explore a FRESH angle - we recently covered: {topics_str}"
+
+        draft_prompt = f"""
+CONTEXT: The user's creative vision is: {user_prompt}
+This describes the IMAGE/VISUAL FORMAT that will accompany the post.
+
+Your task: Write the SOCIAL MEDIA POST TEXT (not an image description) about this topic: {search_context}
+
+CRITICAL INSTRUCTIONS:
+- DO NOT write an image generation prompt
+- DO NOT describe what's in the image
+- DO write a normal, engaging X/Twitter post ABOUT the technical topic
+- Write FROM the persona's voice/tone: {refined_persona}
+- You can reference that there's a cool visual/tutorial, but focus on the TOPIC itself
+
+EXAMPLES OF WHAT TO DO:
+✓ "When your traces get ugly and the collector starts smoking 😱 Pay attention or face detention! #OpenTelemetry #Observability"
+✓ "KYAAA! Someone's sending bad traces to the collector again! Time for a lesson in proper instrumentation 📊 #OTEL"
+
+EXAMPLES OF WHAT NOT TO DO:
+✗ "(Anime sketch) Girl points at whiteboard with diagram showing..."
+✗ "Drawing of anime character teaching about..."
+
+X/TWITTER REQUIREMENTS:
+- MAXIMUM {max_text_length} characters - this is STRICT
+- Engaging, conversational tone
+- Hook readers immediately
+- Can use 1-2 relevant hashtags or emojis
+- DO NOT include URLs - we'll add that separately{avoidance_text}
+
+Write only the post text, nothing else.
+"""
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=draft_prompt,
+            config={"temperature": 0.8}  # Balanced for creativity + accuracy
+        )
+
+        post_text = response.text.strip()
+
+        # Critique specifically for X
+        critique_prompt = f"""
+Review this X/Twitter post:
+"{post_text}"
+
+Context: This post will be paired with an image that shows: {user_prompt}
+Persona: {refined_persona}
+
+Critique for:
+1. Is this a SOCIAL MEDIA POST (not an image description)? If it describes the image instead of discussing the topic, REWRITE IT.
+2. Character count (must be under {max_text_length} chars)
+3. Does it match the persona's voice/tone?
+4. Engagement potential on X/Twitter
+
+CRITICAL: If the post reads like an image generation prompt (e.g., "Anime sketch of..." or "Drawing showing..."), you MUST rewrite it as a normal social media post about the technical topic.
+
+If issues found, rewrite. Otherwise return unchanged.
+Return only the final post text.
+"""
+
+        critique_response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=critique_prompt,
+            config={"temperature": 0.7}
+        )
+
+        final_post = critique_response.text.strip()
+
+        # Add URL if provided (X will auto-shorten)
+        if source_url:
+            final_post = f"{final_post}\n\n{source_url}"
+            logger.info(f"X post with URL (total: {len(final_post)} chars)")
+
+        return final_post, source_url
+
+    except Exception as e:
+        logger.error(f"Error generating X post: {e}", exc_info=True)
+        fallback = "Excited to share insights on this! 🚀 #tech"
+        if source_url:
+            fallback = f"{fallback}\n\n{source_url}"
+        return fallback, source_url
+
+
+def generate_linkedin_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list) -> str:
+    """
+    Generate LinkedIn-specific post (longer form, professional, detailed).
+    CRITICAL: Must follow user's exact creative format/vision adapted for professional audience.
+
+    Returns:
+        Complete LinkedIn post text with context and insights
+    """
+    try:
+        avoidance_text = ""
+        if recent_topics:
+            topics_str = ", ".join(recent_topics[:5])
+            avoidance_text = f"\n- Explore a FRESH angle - we recently covered: {topics_str}"
+
+        draft_prompt = f"""
+CONTEXT: The user's creative vision is: {user_prompt}
+This describes the IMAGE/VISUAL FORMAT that will accompany the post.
+
+Your task: Write a PROFESSIONAL LINKEDIN POST about this topic: {search_context}
+
+CRITICAL INSTRUCTIONS:
+- DO NOT write an image generation prompt or detailed description of the visual
+- DO write a thoughtful LinkedIn post ABOUT the technical topic
+- Write FROM the persona's voice: {refined_persona}
+- You CAN mention that there's a unique visual/tutorial format, but keep it brief and focus on the VALUE/INSIGHTS
+
+EXAMPLES OF WHAT TO DO:
+✓ "Ever dealt with messy traces clogging your OTEL collector? Here's why proper trace management matters (explained in a fun, visual way that makes complex concepts stick). Key takeaway: configure your BadTrace filters early! #OpenTelemetry"
+✓ "Teaching observability concepts doesn't have to be dry. This visual breakdown of OTEL trace flow shows exactly why your collector configuration matters. The analogy? Think of it like detention for bad data 📊 #ObservabilityEngineering"
+
+EXAMPLES OF WHAT NOT TO DO:
+✗ "Check out this anime sketch showing a girl pointing at a whiteboard..."
+✗ "New diagram series featuring a character teaching..."
+
+LINKEDIN REQUIREMENTS:
+- 1-3 paragraphs (no strict character limit)
+- Professional, insightful tone
+- Provide VALUE to readers - what will they learn?
+- Engage the professional community
+- Can use relevant hashtags (2-3 max)
+- DO NOT use markdown formatting (no **bold**, __italics__, etc.) - LinkedIn doesn't support it
+- Use plain text only with emojis if appropriate
+- IMPORTANT: If there's a source URL, include it at the end on a new line: {source_url if source_url else ''}{avoidance_text}
+
+Write the complete post in plain text format.
+"""
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=draft_prompt,
+            config={"temperature": 0.7}  # Moderate temp for professionalism
+        )
+
+        post_text = response.text.strip()
+
+        # Critique specifically for LinkedIn
+        critique_prompt = f"""
+Review this LinkedIn post:
+"{post_text}"
+
+Context: This post will be paired with an image that shows: {user_prompt}
+Persona: {refined_persona}
+
+Critique for:
+1. Is this a PROFESSIONAL LINKEDIN POST (not an image description)? If it describes the image instead of discussing the topic's value, REWRITE IT.
+2. Does it use markdown formatting (**bold**, __italics__, etc.)? LinkedIn doesn't support markdown - remove all markdown syntax and use plain text.
+3. Professional tone appropriate for LinkedIn
+4. Does it provide value/insights to readers?
+5. Engagement potential and thought leadership
+
+CRITICAL FIXES NEEDED:
+- If the post reads like an image generation prompt (e.g., "Sketch showing..."), rewrite as a professional post
+- If it contains markdown syntax like **text** or __text__, remove the formatting symbols
+- Source URL should be at the end if present: {source_url if source_url else ''}
+
+If issues found, rewrite. Otherwise return unchanged.
+Return only the final post text in plain text format (no markdown).
+"""
+
+        critique_response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=critique_prompt,
+            config={"temperature": 0.6}  # Lower temp for consistency
+        )
+
+        final_post = critique_response.text.strip()
+
+        # Strip any markdown formatting (LinkedIn doesn't support it)
+        final_post = strip_markdown_formatting(final_post)
+
+        # Ensure URL is included if provided and not already in post
+        if source_url and source_url not in final_post:
+            final_post = f"{final_post}\n\n{source_url}"
+            logger.info(f"Added missing source URL to LinkedIn post")
+
+        logger.info(f"LinkedIn post ({len(final_post)} chars)")
+
+        return final_post
+
+    except Exception as e:
+        logger.error(f"Error generating LinkedIn post: {e}", exc_info=True)
+        fallback = f"""Excited to share insights on {user_prompt}.
+
+The landscape is evolving rapidly, and staying informed is crucial for success in this space.
+
+What are your thoughts on this development?"""
+        if source_url:
+            fallback = f"{fallback}\n\nSource: {source_url}"
+        return fallback
+
+
 def run_agent_cycle(user_id: int):
     """
-    Main agent cycle that runs the complete workflow:
+    Main agent cycle with PLATFORM-SPECIFIC content generation:
     1. Fetch campaign configuration
     2. Get recent topics to avoid repetition
     3. Search for trending topics
-    4. Generate post draft
-    5. Critique and refine
-    6. Generate image
-    7. Post to connected platforms
-    8. Extract and save topics for future avoidance
+    4. Generate SEPARATE posts for X and LinkedIn (different lengths, tones)
+    5. Generate platform-specific images
+    6. Post to connected platforms
+    7. Extract and save topics for future avoidance
     """
     try:
         logger.info("=" * 60)
-        logger.info(f"Starting agent cycle for user {user_id} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Starting PLATFORM-SPECIFIC agent cycle for user {user_id} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("=" * 60)
 
         # Get campaign configuration
@@ -582,65 +920,90 @@ def run_agent_cycle(user_id: int):
         recent_topics = get_recent_topics(user_id, days=14)
         if recent_topics:
             logger.info(f"Found {len(recent_topics)} recent topics to avoid")
-            logger.info(f"Recent topics: {recent_topics[:3]}...")  # Show first 3
+            logger.info(f"Recent topics: {recent_topics[:3]}...")
 
-        # Step 1: Search for trending topics
-        logger.info("[1/6] Searching for trending topics...")
+        # Step 1: Search for trending topics (shared between platforms)
+        logger.info("[1/7] Searching for trending topics...")
         search_context, source_urls = search_trending_topics(user_prompt, refined_persona, recent_topics)
         logger.info(f"Found context: {search_context[:200]}...")
 
-        # Select first URL if available
         source_url = source_urls[0] if source_urls else None
         if source_url:
             logger.info(f"Using source URL: {source_url[:80]}...")
 
-        # Step 2: Generate draft
-        logger.info("[2/6] Generating post draft...")
-        draft = generate_post_draft(search_context, refined_persona, user_prompt, source_url, recent_topics)
-        logger.info(f"Draft: {draft}")
+        # Check which platforms are connected
+        twitter_tokens = get_oauth_tokens(user_id, "twitter")
+        linkedin_tokens = get_oauth_tokens(user_id, "linkedin")
 
-        # Step 3: Critique and refine
-        logger.info("[3/6] Critiquing and refining...")
-        final_post = critique_and_refine_post(draft, refined_persona)
-        logger.info(f"Final post: {final_post}")
-
-        # Step 4: Generate image
-        logger.info("[4/6] Generating image...")
-        image_bytes = generate_image(final_post, visual_style)
-        if image_bytes:
-            logger.info(f"Image generated ({len(image_bytes)} bytes)")
-        else:
-            logger.warning("No image generated - skipping post")
-            logger.info("=" * 60)
-            return
-
-        # Step 5: Post to platforms
-        logger.info("[5/6] Posting to platforms...")
-        twitter_success = post_to_twitter(user_id, final_post, image_bytes)
-        linkedin_success = post_to_linkedin(user_id, final_post, image_bytes)
-
-        # Step 6: Extract topics and save post history
-        logger.info("[6/6] Extracting topics and saving history...")
-        extracted_topics = extract_topics_from_post(final_post)
-
-        # Track which platforms were posted to
+        twitter_success = False
+        linkedin_success = False
         posted_platforms = []
-        if twitter_success:
-            posted_platforms.append("twitter")
-        if linkedin_success:
-            posted_platforms.append("linkedin")
 
-        # Save to history if posted to any platform
-        if posted_platforms:
-            save_post_history(user_id, final_post, extracted_topics, posted_platforms)
-            logger.info(f"Saved to history with {len(extracted_topics)} topics")
+        # Step 2: Generate and post to X/Twitter if connected
+        if twitter_tokens:
+            logger.info("[2/7] Generating X-specific post...")
+            x_post, x_url = generate_x_post(search_context, refined_persona, user_prompt, source_url, recent_topics)
+            logger.info(f"X post: {x_post}")
+
+            # Validate X post matches user's creative vision
+            is_valid, validation_feedback = validate_content_matches_vision(x_post, user_prompt, refined_persona)
+            if not is_valid:
+                logger.warning(f"X post validation failed: {validation_feedback}")
+                # Continue anyway but log the issue
+
+            logger.info("[3/7] Generating X-optimized image...")
+            x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential")
+
+            if x_image:
+                logger.info(f"X image generated ({len(x_image)} bytes)")
+                logger.info("[4/7] Posting to X...")
+                twitter_success = post_to_twitter(user_id, x_post, x_image)
+                if twitter_success:
+                    posted_platforms.append("twitter")
+                    # Extract topics from X post with user prompt context
+                    x_topics = extract_topics_from_post(x_post, user_prompt)
+                    save_post_history(user_id, x_post, x_topics, ["twitter"])
+            else:
+                logger.warning("No X image generated")
+        else:
+            logger.info("[2-4/7] Skipping X (not connected)")
+
+        # Step 3: Generate and post to LinkedIn if connected
+        if linkedin_tokens:
+            logger.info("[5/7] Generating LinkedIn-specific post...")
+            linkedin_post = generate_linkedin_post(search_context, refined_persona, user_prompt, source_url, recent_topics)
+            logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
+
+            # Validate LinkedIn post matches user's creative vision
+            is_valid, validation_feedback = validate_content_matches_vision(linkedin_post, user_prompt, refined_persona)
+            if not is_valid:
+                logger.warning(f"LinkedIn post validation failed: {validation_feedback}")
+                # Continue anyway but log the issue
+
+            logger.info("[6/7] Generating LinkedIn-optimized image...")
+            linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context")
+
+            if linkedin_image:
+                logger.info(f"LinkedIn image generated ({len(linkedin_image)} bytes)")
+                logger.info("[7/7] Posting to LinkedIn...")
+                linkedin_success = post_to_linkedin(user_id, linkedin_post, linkedin_image)
+                if linkedin_success:
+                    posted_platforms.append("linkedin")
+                    # Extract topics from LinkedIn post with user prompt context
+                    linkedin_topics = extract_topics_from_post(linkedin_post, user_prompt)
+                    save_post_history(user_id, linkedin_post, linkedin_topics, ["linkedin"])
+            else:
+                logger.warning("No LinkedIn image generated")
+        else:
+            logger.info("[5-7/7] Skipping LinkedIn (not connected)")
 
         # Update last run timestamp
-        update_last_run(user_id, int(time.time()))
+        if posted_platforms:
+            update_last_run(user_id, int(time.time()))
 
         logger.info("Results:")
-        logger.info(f"  Twitter: {'✓' if twitter_success else '✗'}")
-        logger.info(f"  LinkedIn: {'✓' if linkedin_success else '✗'}")
+        logger.info(f"  X/Twitter: {'✓' if twitter_success else '✗ (not connected)' if not twitter_tokens else '✗'}")
+        logger.info(f"  LinkedIn: {'✓' if linkedin_success else '✗ (not connected)' if not linkedin_tokens else '✗'}")
         logger.info("=" * 60)
 
     except Exception as e:
