@@ -184,6 +184,11 @@ echo -e "   ✅ Frontend will use port: $FRONTEND_PORT"
 # ===== BUILD FRONTEND =====
 echo -e "${GREEN}[4/5] Building Frontend for Production...${NC}"
 cd "$FRONTEND_DIR"
+
+# Clean build cache to prevent chunk loading errors
+echo "   Cleaning build cache..."
+rm -rf .next node_modules/.cache
+
 echo "   Building Next.js application..."
 npm run build
 
