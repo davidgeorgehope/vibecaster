@@ -34,7 +34,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": int(expire.timestamp())})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -64,8 +64,13 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
     if payload is None:
         raise credentials_exception
 
-    user_id: int = payload.get("sub")
-    if user_id is None:
+    user_id_str = payload.get("sub")
+    if user_id_str is None:
+        raise credentials_exception
+
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
         raise credentials_exception
 
     return user_id
@@ -87,4 +92,11 @@ async def get_optional_user_id(
     if payload is None:
         return None
 
-    return payload.get("sub")
+    user_id_str = payload.get("sub")
+    if user_id_str is None:
+        return None
+
+    try:
+        return int(user_id_str)
+    except (ValueError, TypeError):
+        return None

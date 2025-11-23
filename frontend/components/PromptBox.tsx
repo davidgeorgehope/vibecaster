@@ -8,9 +8,10 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 interface PromptBoxProps {
   onActivate: (prompt: string) => Promise<void>;
   onRunNow: () => Promise<void>;
+  token: string | null;
 }
 
-export default function PromptBox({ onActivate, onRunNow }: PromptBoxProps) {
+export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProps) {
   const [prompt, setPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -18,7 +19,13 @@ export default function PromptBox({ onActivate, onRunNow }: PromptBoxProps) {
 
   useEffect(() => {
     // Check if campaign is configured
-    fetch(`${API_URL}/api/campaign`)
+    if (!token) return;
+
+    fetch(`${API_URL}/api/campaign`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
       .then(res => res.json())
       .then(data => {
         if (data.user_prompt) {
@@ -30,7 +37,7 @@ export default function PromptBox({ onActivate, onRunNow }: PromptBoxProps) {
         // Campaign not configured yet
         setCampaignConfigured(false);
       });
-  }, []);
+  }, [token]);
 
   const handleActivate = async () => {
     if (!prompt.trim()) return;

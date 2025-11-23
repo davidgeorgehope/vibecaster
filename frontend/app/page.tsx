@@ -33,31 +33,38 @@ export default function Home() {
     }
   }, [authLoading, token, router]);
 
-  // Load connection status
+  // Load connection status when token becomes available
   useEffect(() => {
     if (token) {
       loadConnectionStatus();
     }
+  }, [token]);
 
-    // Check for OAuth callback status in URL
+  // Check for OAuth callback status in URL (separate useEffect)
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('status');
     const error = params.get('error');
 
     if (status === 'twitter_connected') {
       showNotification('success', 'Successfully connected to X (Twitter)!');
-      loadConnectionStatus();
+      if (token) {
+        loadConnectionStatus();
+      }
       // Clean up URL
       window.history.replaceState({}, '', '/');
     } else if (status === 'linkedin_connected') {
       showNotification('success', 'Successfully connected to LinkedIn!');
-      loadConnectionStatus();
+      if (token) {
+        loadConnectionStatus();
+      }
+      // Clean up URL
       window.history.replaceState({}, '', '/');
     } else if (status === 'twitter_error' || status === 'linkedin_error') {
       showNotification('error', `Failed to connect: ${error || 'Unknown error'}`);
       window.history.replaceState({}, '', '/');
     }
-  }, []);
+  }, [token]);
 
   const loadConnectionStatus = async () => {
     if (!token) return;
@@ -288,6 +295,7 @@ export default function Home() {
             <PromptBox
               onActivate={handleActivateCampaign}
               onRunNow={handleRunNow}
+              token={token}
             />
           </div>
         </div>

@@ -57,8 +57,8 @@ async def signup(request: SignupRequest):
     hashed_password = get_password_hash(request.password)
     user_id = create_user(request.email, hashed_password)
 
-    # Create access token
-    access_token = create_access_token(data={"sub": user_id})
+    # Create access token (sub must be a string)
+    access_token = create_access_token(data={"sub": str(user_id)})
 
     return TokenResponse(access_token=access_token)
 
@@ -90,8 +90,8 @@ async def login(request: LoginRequest):
             detail="Account is inactive"
         )
 
-    # Create access token
-    access_token = create_access_token(data={"sub": user["id"]})
+    # Create access token (sub must be a string)
+    access_token = create_access_token(data={"sub": str(user["id"])})
 
     return TokenResponse(access_token=access_token)
 

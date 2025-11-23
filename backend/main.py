@@ -13,8 +13,13 @@ from agents import analyze_user_prompt, run_agent_cycle
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from auth_utils import get_current_user_id
+from logger_config import app_logger as logger
 
 load_dotenv()
+
+# Allow insecure OAuth transport for local development
+if os.getenv('ENVIRONMENT') == 'development':
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -82,10 +87,10 @@ def setup_scheduler(user_id: int = None):
             for row in users_with_campaigns:
                 _setup_user_scheduler(row[0])
 
-            print(f"Scheduler configured for {len(users_with_campaigns)} user(s)")
+            logger.info(f"Scheduler configured for {len(users_with_campaigns)} user(s)")
 
     except Exception as e:
-        print(f"Error setting up scheduler: {e}")
+        logger.error(f"Error setting up scheduler: {e}", exc_info=True)
 
 
 def _setup_user_scheduler(user_id: int):
@@ -119,17 +124,17 @@ def _setup_user_scheduler(user_id: int):
                     replace_existing=True
                 )
 
-                print(f"Scheduler configured for user {user_id} with cron: {cron_schedule}")
+                logger.info(f"Scheduler configured for user {user_id} with cron: {cron_schedule}")
             else:
-                print(f"Invalid cron schedule for user {user_id}: {cron_schedule}")
+                logger.warning(f"Invalid cron schedule for user {user_id}: {cron_schedule}")
         else:
             # Remove job if campaign is empty or deleted
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
-                print(f"Removed scheduler job for user {user_id}")
+                logger.info(f"Removed scheduler job for user {user_id}")
 
     except Exception as e:
-        print(f"Error setting up scheduler for user {user_id}: {e}")
+        logger.error(f"Error setting up scheduler for user {user_id}: {e}", exc_info=True)
 
 
 # ===== LIFECYCLE EVENTS =====
@@ -137,15 +142,15 @@ def _setup_user_scheduler(user_id: int):
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and scheduler on startup."""
-    print("Starting Vibecaster API...")
+    logger.info("Starting Vibecaster API...")
 
     # Initialize database
     init_database()
-    print("Database initialized")
+    logger.info("Database initialized")
 
     # Start scheduler
     scheduler.start()
-    print("Scheduler started")
+    logger.info("Scheduler started")
 
     # Configure scheduler with existing campaign
     setup_scheduler()
@@ -154,9 +159,9 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown."""
-    print("Shutting down Vibecaster API...")
+    logger.info("Shutting down Vibecaster API...")
     scheduler.shutdown()
-    print("Scheduler stopped")
+    logger.info("Scheduler stopped")
 
 
 # ===== API ENDPOINTS =====
@@ -209,7 +214,7 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
     """
     try:
         # Analyze user prompt with AI
-        print(f"Analyzing prompt: {request.user_prompt}")
+        logger.info(f"Analyzing prompt: {request.user_prompt}")
         refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
 
         # Update campaign in database

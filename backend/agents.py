@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from typing import Optional, Dict, Any, Tuple
 from google import genai
@@ -10,6 +11,7 @@ from io import BytesIO
 import base64
 from dotenv import load_dotenv
 from database import get_campaign, get_oauth_tokens, update_last_run
+from logger_config import agent_logger as logger
 
 load_dotenv()
 
@@ -17,9 +19,9 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Model configurations
-LLM_MODEL = "gemini-2.0-flash-exp"  # Primary model
+LLM_MODEL = "gemini-3-pro-preview"  # Primary model
 LLM_FALLBACK = "gemini-1.5-pro-002"  # Fallback model
-IMAGE_MODEL = "imagen-3.0-generate-001"
+IMAGE_MODEL = "gemini-3-pro-image-preview"
 
 
 def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
@@ -48,10 +50,10 @@ Respond in this exact JSON format:
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=analysis_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                response_mime_type="application/json"
-            )
+            config={
+                "temperature": 0.7,
+                "response_mime_type": "application/json"
+            }
         )
 
         result = response.text
@@ -61,7 +63,7 @@ Respond in this exact JSON format:
         return data.get("refined_persona", ""), data.get("visual_style", "")
 
     except Exception as e:
-        print(f"Error analyzing prompt: {e}")
+        logger.error(f"Error analyzing prompt: {e}", exc_info=True)
         # Fallback to simple defaults
         return (
             f"A social media account that posts about: {user_prompt}",
@@ -86,20 +88,22 @@ Focus on recent (last 24-48 hours) content that would be interesting to someone 
 Provide a brief summary of the most interesting findings.
 """
 
-        # Use Google Search grounding
+        # Use Google Search grounding with Gemini 3
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=search_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                tools=[types.Tool(google_search=types.GoogleSearch())]
-            )
+            config={
+                "temperature": 0.7,
+                "tools": [
+                    {"google_search": {}}
+                ]
+            }
         )
 
         return response.text
 
     except Exception as e:
-        print(f"Error searching topics: {e}")
+        logger.error(f"Error searching topics: {e}", exc_info=True)
         return f"General discussion about {user_prompt}"
 
 
@@ -133,16 +137,15 @@ Write only the post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=100
-            )
+            config={
+                "temperature": 0.8
+            }
         )
 
         return response.text.strip()
 
     except Exception as e:
-        print(f"Error generating draft: {e}")
+        logger.error(f"Error generating draft: {e}", exc_info=True)
         return "Excited to share thoughts on this topic! #ai #automation"
 
 
@@ -173,16 +176,15 @@ Return only the final post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                max_output_tokens=100
-            )
+            config={
+                "temperature": 0.7
+            }
         )
 
         return response.text.strip()
 
     except Exception as e:
-        print(f"Error critiquing post: {e}")
+        logger.error(f"Error critiquing post: {e}", exc_info=True)
         return draft
 
 
@@ -203,35 +205,65 @@ Art Style: {visual_style}
 The image should be eye-catching, professional, and complement the post content.
 """
 
-        response = client.models.generate_images(
+        response = client.models.generate_content(
             model=IMAGE_MODEL,
-            prompt=image_prompt,
-            config=types.GenerateImageConfig(
-                number_of_images=1,
-                aspect_ratio="1:1",  # Square format for social media
-                safety_filter_level="block_some",
-                person_generation="allow_adult"
+            contents=image_prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=['IMAGE']
             )
         )
 
-        # Get the first generated image
-        if response.generated_images:
-            image = response.generated_images[0]
-            # Convert PIL Image to bytes
-            img_byte_arr = BytesIO()
-            image.image.save(img_byte_arr, format='PNG')
-            return img_byte_arr.getvalue()
+        # Debug logging
+        logger.info(f"Image API response type: {type(response)}")
+        logger.info(f"Has candidates: {hasattr(response, 'candidates')}")
+        if hasattr(response, 'candidates'):
+            logger.info(f"Number of candidates: {len(response.candidates)}")
+            for i, candidate in enumerate(response.candidates):
+                logger.info(f"Candidate {i} type: {type(candidate)}")
+                if hasattr(candidate, 'content'):
+                    logger.info(f"  Has content: True")
+                    if hasattr(candidate.content, 'parts'):
+                        logger.info(f"  Number of parts: {len(candidate.content.parts)}")
+                        for j, part in enumerate(candidate.content.parts):
+                            logger.info(f"    Part {j} type: {type(part)}")
+                            logger.info(f"    Part {j} has as_image: {hasattr(part, 'as_image')}")
+                            logger.info(f"    Part {j} has inline_data: {hasattr(part, 'inline_data')}")
+                            logger.info(f"    Part {j} attributes: {dir(part)}")
 
+        # Extract image from response candidates
+        if hasattr(response, 'candidates'):
+            for candidate in response.candidates:
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    for part in candidate.content.parts:
+                        # Try as_image method first
+                        if hasattr(part, 'as_image'):
+                            image = part.as_image()
+                            if image:
+                                img_byte_arr = BytesIO()
+                                image.save(img_byte_arr, format='PNG')
+                                logger.info(f"Image generated successfully via as_image() ({len(img_byte_arr.getvalue())} bytes)")
+                                return img_byte_arr.getvalue()
+
+                        # Try inline_data if available
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            logger.info(f"Found inline_data: {type(part.inline_data)}")
+                            if hasattr(part.inline_data, 'data'):
+                                logger.info(f"Image generated successfully via inline_data ({len(part.inline_data.data)} bytes)")
+                                return part.inline_data.data
+                            elif hasattr(part.inline_data, 'mime_type'):
+                                logger.info(f"Inline data mime_type: {part.inline_data.mime_type}")
+
+        logger.warning("No image found in response candidates")
         return None
 
     except Exception as e:
-        print(f"Error generating image: {e}")
+        logger.error(f"Error generating image: {e}", exc_info=True)
         return None
 
 
 def post_to_twitter(user_id: int, post_text: str, image_bytes: Optional[bytes] = None) -> bool:
     """
-    Post to Twitter/X with optional image.
+    Post to Twitter/X with optional image using OAuth 1.0a.
 
     Returns:
         True if successful, False otherwise
@@ -239,23 +271,32 @@ def post_to_twitter(user_id: int, post_text: str, image_bytes: Optional[bytes] =
     try:
         tokens = get_oauth_tokens(user_id, "twitter")
         if not tokens:
-            print("No Twitter tokens found")
+            logger.warning(f"No Twitter tokens found for user {user_id}")
             return False
 
-        # Create Twitter client
+        # Get OAuth 1.0a credentials
+        access_token = tokens["access_token"]
+        access_token_secret = tokens["refresh_token"]  # Stored in refresh_token field
+        consumer_key = os.getenv("X_API_KEY")
+        consumer_secret = os.getenv("X_API_SECRET")
+
+        # Create Twitter client with OAuth 1.0a
         client = tweepy.Client(
-            bearer_token=tokens["access_token"]
+            consumer_key=consumer_key,
+            consumer_secret=consumer_secret,
+            access_token=access_token,
+            access_token_secret=access_token_secret
         )
 
-        # If image is provided, we need to use the v1.1 API for media upload
+        # If image is provided, upload media using v1.1 API
         media_id = None
         if image_bytes:
             # Create API v1.1 client for media upload
-            auth = tweepy.OAuth2UserHandler(
-                client_id=os.getenv("X_CLIENT_ID"),
-                client_secret=os.getenv("X_CLIENT_SECRET")
+            auth = tweepy.OAuth1UserHandler(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret
             )
-            auth.token = {"access_token": tokens["access_token"]}
+            auth.set_access_token(access_token, access_token_secret)
             api = tweepy.API(auth)
 
             # Upload media
@@ -268,11 +309,11 @@ def post_to_twitter(user_id: int, post_text: str, image_bytes: Optional[bytes] =
         else:
             response = client.create_tweet(text=post_text)
 
-        print(f"Posted to Twitter: {response.data['id']}")
+        logger.info(f"Posted to Twitter: {response.data['id']}")
         return True
 
     except Exception as e:
-        print(f"Error posting to Twitter: {e}")
+        logger.error(f"Error posting to Twitter: {e}", exc_info=True)
         return False
 
 
@@ -286,7 +327,7 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
     try:
         tokens = get_oauth_tokens(user_id, "linkedin")
         if not tokens:
-            print("No LinkedIn tokens found")
+            logger.warning(f"No LinkedIn tokens found for user {user_id}")
             return False
 
         headers = {
@@ -301,27 +342,92 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
             headers=headers
         )
         user_response.raise_for_status()
-        user_id = user_response.json()["sub"]
+        person_id = user_response.json()["sub"]
+        author_urn = f"urn:li:person:{person_id}"
+
+        # Handle image upload if provided
+        image_urn = None
+        if image_bytes:
+            logger.info("Uploading image to LinkedIn...")
+
+            # Step 1: Register upload
+            register_upload_request = {
+                "registerUploadRequest": {
+                    "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+                    "owner": author_urn,
+                    "serviceRelationships": [
+                        {
+                            "relationshipType": "OWNER",
+                            "identifier": "urn:li:userGeneratedContent"
+                        }
+                    ]
+                }
+            }
+
+            register_response = requests.post(
+                "https://api.linkedin.com/v2/assets?action=registerUpload",
+                headers=headers,
+                json=register_upload_request
+            )
+            register_response.raise_for_status()
+            register_data = register_response.json()
+
+            upload_url = register_data["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
+            asset_id = register_data["value"]["asset"]
+
+            # Step 2: Upload the image binary
+            upload_headers = {
+                "Authorization": f"Bearer {tokens['access_token']}"
+            }
+            upload_response = requests.put(
+                upload_url,
+                headers=upload_headers,
+                data=image_bytes
+            )
+            upload_response.raise_for_status()
+
+            image_urn = asset_id
+            logger.info(f"Image uploaded to LinkedIn: {image_urn}")
 
         # Prepare post data
-        post_data = {
-            "author": f"urn:li:person:{user_id}",
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {
-                        "text": post_text
-                    },
-                    "shareMediaCategory": "NONE"
+        if image_urn:
+            post_data = {
+                "author": author_urn,
+                "lifecycleState": "PUBLISHED",
+                "specificContent": {
+                    "com.linkedin.ugc.ShareContent": {
+                        "shareCommentary": {
+                            "text": post_text
+                        },
+                        "shareMediaCategory": "IMAGE",
+                        "media": [
+                            {
+                                "status": "READY",
+                                "media": image_urn
+                            }
+                        ]
+                    }
+                },
+                "visibility": {
+                    "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
                 }
-            },
-            "visibility": {
-                "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
             }
-        }
-
-        # TODO: Image upload for LinkedIn (requires additional API calls)
-        # For MVP, posting text only
+        else:
+            post_data = {
+                "author": author_urn,
+                "lifecycleState": "PUBLISHED",
+                "specificContent": {
+                    "com.linkedin.ugc.ShareContent": {
+                        "shareCommentary": {
+                            "text": post_text
+                        },
+                        "shareMediaCategory": "NONE"
+                    }
+                },
+                "visibility": {
+                    "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+                }
+            }
 
         # Create post
         response = requests.post(
@@ -331,11 +437,11 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         )
         response.raise_for_status()
 
-        print(f"Posted to LinkedIn: {response.json()['id']}")
+        logger.info(f"Posted to LinkedIn: {response.json()['id']}")
         return True
 
     except Exception as e:
-        print(f"Error posting to LinkedIn: {e}")
+        logger.error(f"Error posting to LinkedIn: {e}", exc_info=True)
         return False
 
 
@@ -350,60 +456,60 @@ def run_agent_cycle(user_id: int):
     6. Post to connected platforms
     """
     try:
-        print(f"\n{'='*60}")
-        print(f"Starting agent cycle for user {user_id} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*60}\n")
+        logger.info("=" * 60)
+        logger.info(f"Starting agent cycle for user {user_id} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=" * 60)
 
         # Get campaign configuration
         campaign = get_campaign(user_id)
         if not campaign or not campaign.get("user_prompt"):
-            print(f"No campaign configured for user {user_id}. Skipping cycle.")
+            logger.warning(f"No campaign configured for user {user_id}. Skipping cycle.")
             return
 
         user_prompt = campaign["user_prompt"]
         refined_persona = campaign.get("refined_persona", "")
         visual_style = campaign.get("visual_style", "")
 
-        print(f"Campaign: {user_prompt}")
-        print(f"Persona: {refined_persona[:100]}...")
+        logger.info(f"Campaign: {user_prompt}")
+        logger.info(f"Persona: {refined_persona[:100]}...")
 
         # Step 1: Search for trending topics
-        print("\n[1/5] Searching for trending topics...")
+        logger.info("[1/5] Searching for trending topics...")
         search_context = search_trending_topics(user_prompt, refined_persona)
-        print(f"Found context: {search_context[:200]}...")
+        logger.info(f"Found context: {search_context[:200]}...")
 
         # Step 2: Generate draft
-        print("\n[2/5] Generating post draft...")
+        logger.info("[2/5] Generating post draft...")
         draft = generate_post_draft(search_context, refined_persona, user_prompt)
-        print(f"Draft: {draft}")
+        logger.info(f"Draft: {draft}")
 
         # Step 3: Critique and refine
-        print("\n[3/5] Critiquing and refining...")
+        logger.info("[3/5] Critiquing and refining...")
         final_post = critique_and_refine_post(draft, refined_persona)
-        print(f"Final post: {final_post}")
+        logger.info(f"Final post: {final_post}")
 
         # Step 4: Generate image
-        print("\n[4/5] Generating image...")
+        logger.info("[4/5] Generating image...")
         image_bytes = generate_image(final_post, visual_style)
         if image_bytes:
-            print(f"Image generated ({len(image_bytes)} bytes)")
+            logger.info(f"Image generated ({len(image_bytes)} bytes)")
         else:
-            print("No image generated")
+            logger.warning("No image generated - skipping post")
+            logger.info("=" * 60)
+            return
 
         # Step 5: Post to platforms
-        print("\n[5/5] Posting to platforms...")
+        logger.info("[5/5] Posting to platforms...")
         twitter_success = post_to_twitter(user_id, final_post, image_bytes)
         linkedin_success = post_to_linkedin(user_id, final_post, image_bytes)
 
         # Update last run timestamp
         update_last_run(user_id, int(time.time()))
 
-        print(f"\nResults:")
-        print(f"  Twitter: {'✓' if twitter_success else '✗'}")
-        print(f"  LinkedIn: {'✓' if linkedin_success else '✗'}")
-        print(f"\n{'='*60}\n")
+        logger.info("Results:")
+        logger.info(f"  Twitter: {'✓' if twitter_success else '✗'}")
+        logger.info(f"  LinkedIn: {'✓' if linkedin_success else '✗'}")
+        logger.info("=" * 60)
 
     except Exception as e:
-        print(f"Error in agent cycle for user {user_id}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in agent cycle for user {user_id}: {e}", exc_info=True)

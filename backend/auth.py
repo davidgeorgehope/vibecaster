@@ -8,6 +8,7 @@ import requests
 from dotenv import load_dotenv
 from database import save_oauth_tokens, get_oauth_tokens, delete_oauth_tokens
 from auth_utils import get_current_user_id
+from logger_config import app_logger as logger
 import time
 
 load_dotenv()
@@ -15,15 +16,15 @@ load_dotenv()
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # OAuth state storage (in-memory for MVP, consider Redis for production)
-# Format: {state: {service: str, user_id: int, timestamp: float}}
+# Format: {state: {service: str, user_id: int, timestamp: float, oauth_handler: Optional[object]}}
 oauth_states = {}
 
 # Environment variables
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-# Twitter/X Configuration
-X_CLIENT_ID = os.getenv("X_CLIENT_ID")
-X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET")
+# Twitter/X Configuration - OAuth 1.0a
+X_API_KEY = os.getenv("X_API_KEY")
+X_API_SECRET = os.getenv("X_API_SECRET")
 X_REDIRECT_URI = os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/auth/twitter/callback")
 
 # LinkedIn Configuration
@@ -36,76 +37,108 @@ LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://127.0.0.1:800
 
 @router.get("/twitter/login")
 async def twitter_login(user_id: int = Depends(get_current_user_id)):
-    """Initiate Twitter OAuth flow."""
+    """Initiate Twitter OAuth 1.0a flow."""
     try:
-        # Create OAuth2 handler
-        oauth2_user_handler = tweepy.OAuth2UserHandler(
-            client_id=X_CLIENT_ID,
-            redirect_uri=X_REDIRECT_URI,
-            scope=["tweet.read", "tweet.write", "users.read", "offline.access"],
-            client_secret=X_CLIENT_SECRET
+        # Create OAuth1 handler
+        oauth1_handler = tweepy.OAuth1UserHandler(
+            consumer_key=X_API_KEY,
+            consumer_secret=X_API_SECRET,
+            callback=X_REDIRECT_URI
         )
 
-        # Generate authorization URL
-        auth_url = oauth2_user_handler.get_authorization_url()
+        # Get authorization URL
+        auth_url = oauth1_handler.get_authorization_url()
+        logger.info(f"Twitter auth URL: {auth_url}")
 
-        # Store state for validation (extract from URL)
-        state = auth_url.split("state=")[1].split("&")[0] if "state=" in auth_url else None
-        if state:
-            oauth_states[state] = {"service": "twitter", "user_id": user_id, "timestamp": time.time()}
+        # Store request token for callback validation
+        # OAuth 1.0a uses oauth_token as the identifier
+        request_token = oauth1_handler.request_token["oauth_token"]
+        oauth_states[request_token] = {
+            "service": "twitter",
+            "user_id": user_id,
+            "timestamp": time.time(),
+            "oauth_handler": oauth1_handler
+        }
+        logger.info(f"Stored Twitter OAuth request token: {request_token}")
 
         return {"auth_url": auth_url}
 
     except Exception as e:
+        logger.error(f"Twitter login error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to initiate Twitter OAuth: {str(e)}")
 
 
 @router.get("/twitter/callback")
-async def twitter_callback(code: str = Query(...), state: Optional[str] = Query(None)):
-    """Handle Twitter OAuth callback."""
+async def twitter_callback(
+    oauth_token: str = Query(...),
+    oauth_verifier: str = Query(...),
+    denied: Optional[str] = Query(None)
+):
+    """Handle Twitter OAuth 1.0a callback."""
     try:
-        # Validate state if present
-        if not state or state not in oauth_states:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=Invalid state")
+        # Check if user denied authorization
+        if denied:
+            logger.warning(f"Twitter OAuth denied: {denied}")
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=Authorization denied")
 
-        # Get user_id from state
-        state_data = oauth_states.pop(state)
+        # Validate oauth_token
+        if not oauth_token or oauth_token not in oauth_states:
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=Invalid oauth_token")
+
+        # Get user_id and OAuth handler from stored state
+        state_data = oauth_states.pop(oauth_token)
         user_id = state_data.get("user_id")
+        oauth1_handler = state_data.get("oauth_handler")
 
         if not user_id:
             return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=User not authenticated")
 
-        # Exchange code for tokens
-        oauth2_user_handler = tweepy.OAuth2UserHandler(
-            client_id=X_CLIENT_ID,
-            redirect_uri=X_REDIRECT_URI,
-            scope=["tweet.read", "tweet.write", "users.read", "offline.access"],
-            client_secret=X_CLIENT_SECRET
+        if not oauth1_handler:
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=OAuth handler not found")
+
+        # Get access token using the verifier
+        logger.info(f"Fetching Twitter access token with verifier...")
+        access_token, access_token_secret = oauth1_handler.get_access_token(oauth_verifier)
+        logger.info(f"Successfully received access token")
+
+        # Create client with OAuth 1.0a credentials to get user info
+        client = tweepy.Client(
+            consumer_key=X_API_KEY,
+            consumer_secret=X_API_SECRET,
+            access_token=access_token,
+            access_token_secret=access_token_secret
         )
-
-        # Fetch access token
-        access_token = oauth2_user_handler.fetch_token(code)
-
-        # Get user info
-        client = tweepy.Client(access_token["access_token"])
         me = client.get_me()
 
+        # Extract user ID
+        platform_user_id = None
+        if me and me.data:
+            platform_user_id = str(me.data.id)
+        else:
+            logger.warning("Could not fetch Twitter user info")
+
         # Save tokens to database
+        # OAuth 1.0a tokens don't expire, so we set a far future expiration
         save_oauth_tokens(
             user_id=user_id,
             service="twitter",
-            access_token=access_token["access_token"],
-            refresh_token=access_token.get("refresh_token"),
-            platform_user_id=str(me.data.id) if me.data else None,
-            expires_at=int(time.time()) + access_token.get("expires_in", 7200)
+            access_token=access_token,
+            refresh_token=access_token_secret,  # Store access_token_secret in refresh_token field
+            platform_user_id=platform_user_id,
+            expires_at=int(time.time()) + (365 * 24 * 60 * 60)  # 1 year (tokens don't expire)
         )
+
+        logger.info(f"Successfully saved Twitter tokens for user {user_id}")
 
         # Redirect back to frontend with success
         return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_connected")
 
     except Exception as e:
+        # Log the full error for debugging
+        logger.error(f"Twitter OAuth error: {str(e)}", exc_info=True)
         # Redirect back with error
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error={str(e)}")
+        error_msg = str(e)[:200]  # Limit error message length for URL
+        return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error={error_msg}")
 
 
 @router.post("/twitter/disconnect")
