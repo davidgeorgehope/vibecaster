@@ -111,7 +111,14 @@ echo "   Building Next.js application..."
 npm run build
 
 # ===== FIND AVAILABLE PORTS =====
-echo -e "${GREEN}[3/6] Finding available ports...${NC}"
+echo -e "${GREEN}[3/6] Checking ports...${NC}"
+
+# Check if nginx reverse proxy is configured
+NGINX_CONFIGURED=false
+if [ -f "/etc/nginx/sites-enabled/vibecaster" ]; then
+    NGINX_CONFIGURED=true
+    echo -e "   ${GREEN}Nginx reverse proxy detected${NC}"
+fi
 
 # Function to find available port
 find_port() {
@@ -126,17 +133,53 @@ find_port() {
     echo "0"
 }
 
-BACKEND_PORT=$(find_port 8000)
-FRONTEND_PORT=$(find_port 3000)
+# Function to check if a port is available
+is_port_available() {
+    local port=$1
+    if ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+        return 0  # Available
+    else
+        return 1  # In use
+    fi
+}
 
-if [ "$BACKEND_PORT" = "0" ]; then
-    echo -e "${RED}❌ No available port found for backend${NC}"
-    exit 1
-fi
+if [ "$NGINX_CONFIGURED" = true ]; then
+    # Nginx is configured - must use ports 3000 and 8000
+    echo -e "   ${YELLOW}Using fixed ports for nginx compatibility${NC}"
 
-if [ "$FRONTEND_PORT" = "0" ]; then
-    echo -e "${RED}❌ No available port found for frontend${NC}"
-    exit 1
+    BACKEND_PORT=8000
+    FRONTEND_PORT=3000
+
+    # Check if ports are available
+    if ! is_port_available $BACKEND_PORT; then
+        echo -e "${RED}❌ Port $BACKEND_PORT is in use but required for nginx!${NC}"
+        echo -e "   Free it with: ./kill_port.sh $BACKEND_PORT"
+        echo -e "   Or check what's using it: lsof -i :$BACKEND_PORT"
+        exit 1
+    fi
+
+    if ! is_port_available $FRONTEND_PORT; then
+        echo -e "${RED}❌ Port $FRONTEND_PORT is in use but required for nginx!${NC}"
+        echo -e "   Free it with: ./kill_port.sh $FRONTEND_PORT"
+        echo -e "   Or check what's using it: lsof -i :$FRONTEND_PORT"
+        exit 1
+    fi
+else
+    # No nginx - find any available ports
+    echo -e "   ${YELLOW}Finding available ports (no nginx detected)${NC}"
+
+    BACKEND_PORT=$(find_port 8000)
+    FRONTEND_PORT=$(find_port 3000)
+
+    if [ "$BACKEND_PORT" = "0" ]; then
+        echo -e "${RED}❌ No available port found for backend${NC}"
+        exit 1
+    fi
+
+    if [ "$FRONTEND_PORT" = "0" ]; then
+        echo -e "${RED}❌ No available port found for frontend${NC}"
+        exit 1
+    fi
 fi
 
 echo -e "   ✅ Backend will use port: $BACKEND_PORT"
