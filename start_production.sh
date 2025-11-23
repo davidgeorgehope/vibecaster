@@ -225,6 +225,15 @@ sleep 2
 echo -e "${GREEN}[6/6] Starting Frontend (Production Mode)...${NC}"
 cd "$FRONTEND_DIR"
 
+# Check for any lingering Next.js processes
+LINGERING_NEXT=$(ps aux | grep "next start" | grep "$BASE_DIR" | grep -v grep)
+if [ ! -z "$LINGERING_NEXT" ]; then
+    echo -e "${RED}❌ Found lingering Next.js processes!${NC}"
+    echo "$LINGERING_NEXT"
+    echo -e "${YELLOW}Run ./stop_production.sh to clean up first${NC}"
+    exit 1
+fi
+
 # Double-check port is free right before starting
 if ! is_port_available $FRONTEND_PORT; then
     echo -e "${RED}❌ Port $FRONTEND_PORT became unavailable!${NC}"
@@ -232,6 +241,9 @@ if ! is_port_available $FRONTEND_PORT; then
     lsof -i :$FRONTEND_PORT || netstat -tuln | grep :$FRONTEND_PORT
     exit 1
 fi
+
+# Give the system a moment to ensure port is fully released
+sleep 1
 
 # Start Next.js in production mode with custom port
 # Bind to 0.0.0.0 (IPv4) to avoid IPv6 conflicts

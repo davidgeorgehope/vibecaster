@@ -87,35 +87,80 @@ fi
 # Also kill any orphaned processes by port
 echo -e "${GREEN}Checking for orphaned processes...${NC}"
 
+# Function to kill all processes on a port (including children)
+kill_port_processes() {
+    local port=$1
+    local pids=$(lsof -ti :$port 2>/dev/null)
+
+    if [ ! -z "$pids" ]; then
+        echo -e "${YELLOW}Found process(es) on port $port (PIDs: $pids)${NC}"
+
+        # Kill each PID
+        for pid in $pids; do
+            # First try graceful kill
+            kill $pid 2>/dev/null || true
+        done
+
+        # Wait a moment for graceful shutdown
+        sleep 2
+
+        # Force kill any remaining processes
+        for pid in $pids; do
+            if kill -0 $pid 2>/dev/null; then
+                echo -e "${YELLOW}   Force killing PID $pid...${NC}"
+                kill -9 $pid 2>/dev/null || true
+            fi
+        done
+
+        # Double-check the port is free
+        local remaining=$(lsof -ti :$port 2>/dev/null)
+        if [ ! -z "$remaining" ]; then
+            echo -e "${RED}   Still found processes on port $port: $remaining${NC}"
+            echo -e "${RED}   Force killing all...${NC}"
+            for pid in $remaining; do
+                kill -9 $pid 2>/dev/null || true
+            done
+        fi
+
+        STOPPED=1
+        return 0
+    fi
+    return 1
+}
+
 # Kill any process on common frontend ports (starting with default 3000)
 for port in 3000 3001 3002 3003; do
-    ORPHAN_PID=$(lsof -ti :$port 2>/dev/null)
-    if [ ! -z "$ORPHAN_PID" ]; then
-        echo -e "${YELLOW}Found orphaned process on port $port (PID: $ORPHAN_PID)${NC}"
-        kill $ORPHAN_PID 2>/dev/null || true
-        sleep 1
-        if lsof -ti :$port >/dev/null 2>&1; then
-            echo -e "${YELLOW}   Force killing...${NC}"
-            kill -9 $ORPHAN_PID 2>/dev/null || true
-        fi
-        STOPPED=1
-    fi
+    kill_port_processes $port
 done
 
 # Kill any process on common backend ports (starting with new defaults)
 for port in 8001 8002 8003 8000; do
-    ORPHAN_PID=$(lsof -ti :$port 2>/dev/null)
-    if [ ! -z "$ORPHAN_PID" ]; then
-        echo -e "${YELLOW}Found orphaned process on port $port (PID: $ORPHAN_PID)${NC}"
-        kill $ORPHAN_PID 2>/dev/null || true
-        sleep 1
-        if lsof -ti :$port >/dev/null 2>&1; then
-            echo -e "${YELLOW}   Force killing...${NC}"
-            kill -9 $ORPHAN_PID 2>/dev/null || true
-        fi
-        STOPPED=1
-    fi
+    kill_port_processes $port
 done
+
+# Also kill any lingering Next.js or uvicorn processes related to vibecaster
+echo -e "${GREEN}Checking for lingering Node/Python processes...${NC}"
+VIBECASTER_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Find and kill any Next.js processes in the vibecaster frontend directory
+NEXTJS_PIDS=$(ps aux | grep "next start" | grep "$VIBECASTER_DIR" | grep -v grep | awk '{print $2}')
+if [ ! -z "$NEXTJS_PIDS" ]; then
+    echo -e "${YELLOW}Found lingering Next.js processes: $NEXTJS_PIDS${NC}"
+    for pid in $NEXTJS_PIDS; do
+        kill -9 $pid 2>/dev/null || true
+    done
+    STOPPED=1
+fi
+
+# Find and kill any uvicorn processes in the vibecaster backend directory
+UVICORN_PIDS=$(ps aux | grep "uvicorn main:app" | grep "$VIBECASTER_DIR" | grep -v grep | awk '{print $2}')
+if [ ! -z "$UVICORN_PIDS" ]; then
+    echo -e "${YELLOW}Found lingering uvicorn processes: $UVICORN_PIDS${NC}"
+    for pid in $UVICORN_PIDS; do
+        kill -9 $pid 2>/dev/null || true
+    done
+    STOPPED=1
+fi
 
 echo ""
 if [ $STOPPED -eq 1 ]; then
