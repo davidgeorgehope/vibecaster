@@ -53,7 +53,27 @@ server {
     # Increase max upload size for images
     client_max_body_size 10M;
 
-    # Frontend - Next.js
+    # Next.js static files and assets (must come before / location)
+    location /_next/static/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        # Cache static assets for 1 year
+        proxy_cache_bypass \$http_upgrade;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # Next.js public files
+    location /public/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+    }
+
+    # Frontend - Next.js (catch-all for pages)
     location / {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
