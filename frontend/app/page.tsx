@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
@@ -26,6 +26,27 @@ export default function Home() {
     message: string;
   } | null>(null);
 
+  // Define helper functions with useCallback before useEffect hooks
+  const showNotification = useCallback((type: 'success' | 'error' | 'info', message: string) => {
+    setNotification({ type, message });
+    setTimeout(() => setNotification(null), 5000);
+  }, []);
+
+  const loadConnectionStatus = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/auth/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      setConnections(data);
+    } catch (error) {
+      console.error('Failed to load connection status:', error);
+    }
+  }, [token]);
+
   // Redirect to login if not authenticated
   useEffect(() => {
     if (!authLoading && !token) {
@@ -38,7 +59,7 @@ export default function Home() {
     if (token) {
       loadConnectionStatus();
     }
-  }, [token]);
+  }, [token, loadConnectionStatus]);
 
   // Check for OAuth callback status in URL (separate useEffect)
   useEffect(() => {
@@ -64,27 +85,7 @@ export default function Home() {
       showNotification('error', `Failed to connect: ${error || 'Unknown error'}`);
       window.history.replaceState({}, '', '/');
     }
-  }, [token]);
-
-  const loadConnectionStatus = async () => {
-    if (!token) return;
-    try {
-      const response = await fetch(`${API_URL}/auth/status`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      setConnections(data);
-    } catch (error) {
-      console.error('Failed to load connection status:', error);
-    }
-  };
-
-  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
-    setNotification({ type, message });
-    setTimeout(() => setNotification(null), 5000);
-  };
+  }, [token, loadConnectionStatus, showNotification]);
 
   const handleTwitterConnect = async () => {
     if (!token) return;
