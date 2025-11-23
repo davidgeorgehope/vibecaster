@@ -63,21 +63,26 @@ if grep -q "^ENVIRONMENT=development" .env; then
 fi
 
 # Setup virtual environment
-if [ ! -d "venv" ]; then
+# Check if venv exists AND is valid (has activate script)
+if [ ! -f "venv/bin/activate" ]; then
+    if [ -d "venv" ]; then
+        echo "   Removing corrupted virtual environment..."
+        rm -rf venv
+    fi
+
     echo "   Creating Python virtual environment..."
     python3 -m venv venv
+
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ Failed to create virtual environment${NC}"
-        echo "   Try: apt-get install python3-venv"
+        echo "   Install python3-venv with: apt-get install python3-venv"
         exit 1
     fi
-fi
 
-# Activate virtual environment
-if [ ! -f "venv/bin/activate" ]; then
-    echo -e "${RED}❌ Virtual environment is corrupted${NC}"
-    echo "   Try: rm -rf venv && python3 -m venv venv"
-    exit 1
+    if [ ! -f "venv/bin/activate" ]; then
+        echo -e "${RED}❌ Virtual environment creation failed${NC}"
+        exit 1
+    fi
 fi
 
 source venv/bin/activate
