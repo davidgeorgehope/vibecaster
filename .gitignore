@@ -114,6 +114,10 @@ Desktop.ini
 *.backup
 *.cache
 
+# Production runtime files
+/logs/
+/pids/
+
 # ===== Testing =====
 .coverage
 .pytest_cache/
