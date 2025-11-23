@@ -66,12 +66,25 @@ fi
 if [ ! -d "venv" ]; then
     echo "   Creating Python virtual environment..."
     python3 -m venv venv
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Failed to create virtual environment${NC}"
+        echo "   Try: apt-get install python3-venv"
+        exit 1
+    fi
+fi
+
+# Activate virtual environment
+if [ ! -f "venv/bin/activate" ]; then
+    echo -e "${RED}❌ Virtual environment is corrupted${NC}"
+    echo "   Try: rm -rf venv && python3 -m venv venv"
+    exit 1
 fi
 
 source venv/bin/activate
 
 # Install dependencies
 echo "   Installing Python dependencies..."
+pip install -q --upgrade pip
 pip install -q -r requirements.txt
 
 # Initialize database
