@@ -1,0 +1,409 @@
+# Vibecaster Production Deployment Guide
+
+## Table of Contents
+1. [Architecture Options](#architecture-options)
+2. [Quick Start (Simple)](#quick-start-simple)
+3. [Production Deployment (Recommended)](#production-deployment-recommended)
+4. [Configuration](#configuration)
+
+---
+
+## Architecture Options
+
+### Option 1: Direct Access (Simple, NOT Recommended)
+
+```
+Internet -> Your Server
+              ├─ Frontend :3000 (exposed)
+              └─ Backend  :8000 (exposed)
+
+Browser talks directly to both ports
+```
+
+**Pros:**
+- ✅ Simple setup
+- ✅ Works for testing
+
+**Cons:**
+- ❌ Browser needs access to both ports
+- ❌ CORS issues
+- ❌ Backend exposed to internet
+- ❌ No SSL/HTTPS termination
+- ❌ Can't use same domain
+
+---
+
+### Option 2: Nginx Reverse Proxy (Recommended)
+
+```
+Internet -> Nginx :80/:443 (single entry point)
+              ├─ /     -> Frontend :3000 (internal)
+              └─ /api  -> Backend  :8000 (internal)
+              └─ /auth -> Backend  :8000 (internal)
+
+Browser only talks to Nginx
+```
+
+**Pros:**
+- ✅ Single domain/port for browser
+- ✅ No CORS issues
+- ✅ Backend not exposed
+- ✅ Easy SSL/HTTPS
+- ✅ Can add caching, rate limiting, etc.
+- ✅ Production-ready
+
+**Cons:**
+- ⚠️ Requires nginx setup (automated with our script)
+
+---
+
+## Quick Start (Simple)
+
+**WARNING: This is for testing only, not production!**
+
+```bash
+# 1. Clone and setup
+git clone https://github.com/davidgeorgehope/vibecaster
+cd vibecaster
+
+# 2. Install system dependencies
+sudo ./setup_server.sh
+
+# 3. Configure environment
+cd backend
+cp .env.example .env
+nano .env  # Add your API keys
+
+# 4. Start services
+cd ..
+./start_production.sh
+
+# 5. Open firewall ports
+sudo ufw allow 3000  # Frontend
+sudo ufw allow 8000  # Backend
+sudo ufw allow 22    # SSH
+sudo ufw enable
+```
+
+**Access:**
+- Frontend: `http://your-server-ip:3000`
+- Backend: `http://your-server-ip:8000`
+- Docs: `http://your-server-ip:8000/docs`
+
+**Issues with this approach:**
+- OAuth redirect URIs must point to port 8000
+- Browser makes cross-origin requests (CORS)
+- Both ports exposed to internet
+
+---
+
+## Production Deployment (Recommended)
+
+### Step 1: Server Setup
+
+```bash
+# Clone repository
+git clone https://github.com/davidgeorgehope/vibecaster
+cd vibecaster
+
+# Install dependencies (Python, Node.js, etc.)
+sudo ./setup_server.sh
+```
+
+### Step 2: Configure Nginx Reverse Proxy
+
+```bash
+# Run automated nginx setup
+sudo ./setup_nginx.sh
+
+# It will ask for your domain/IP
+# Enter: your-domain.com or your-server-ip
+```
+
+This script:
+- ✅ Installs nginx
+- ✅ Creates reverse proxy configuration
+- ✅ Routes `/` to frontend, `/api` and `/auth` to backend
+- ✅ Enables and starts nginx
+
+### Step 3: Configure Backend Environment
+
+```bash
+cd backend
+cp .env.example .env
+nano .env
+```
+
+**Update these values:**
+
+```bash
+# Your domain (must match nginx setup)
+FRONTEND_URL=http://your-domain.com
+
+# Set to production
+ENVIRONMENT=production
+
+# OAuth redirect URIs (NO port numbers!)
+X_REDIRECT_URI=http://your-domain.com/auth/twitter/callback
+LINKEDIN_REDIRECT_URI=http://your-domain.com/auth/linkedin/callback
+
+# Add your API keys
+GEMINI_API_KEY=your_actual_key
+X_CLIENT_ID=your_actual_client_id
+X_CLIENT_SECRET=your_actual_secret
+LINKEDIN_CLIENT_ID=your_actual_client_id
+LINKEDIN_CLIENT_SECRET=your_actual_secret
+
+# Generate strong JWT secret
+JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+```
+
+### Step 4: Update OAuth Apps
+
+**Twitter/X Developer Portal:**
+- Callback URL: `http://your-domain.com/auth/twitter/callback`
+
+**LinkedIn Developer Portal:**
+- Redirect URL: `http://your-domain.com/auth/linkedin/callback`
+
+### Step 5: Configure Firewall
+
+```bash
+# Allow nginx (HTTP/HTTPS)
+sudo ufw allow 'Nginx Full'
+
+# Allow SSH (important!)
+sudo ufw allow 22
+
+# Enable firewall
+sudo ufw enable
+
+# Verify rules
+sudo ufw status
+```
+
+**Important:** Do NOT open ports 3000 or 8000! Nginx proxies everything through port 80/443.
+
+### Step 6: Start Application
+
+```bash
+cd ~/vibecaster
+./start_production.sh
+```
+
+The script will:
+- Find available ports (defaults 3000 and 8000)
+- Configure frontend to talk to backend
+- Start both services in background
+- Show you the URLs
+
+### Step 7: (Optional) Enable HTTPS
+
+```bash
+# Install certbot
+sudo apt-get install certbot python3-certbot-nginx
+
+# Get SSL certificate (automatic nginx configuration)
+sudo certbot --nginx -d your-domain.com
+
+# Auto-renewal is configured automatically
+# Test renewal:
+sudo certbot renew --dry-run
+```
+
+After HTTPS is enabled:
+1. Update `backend/.env`:
+   ```
+   FRONTEND_URL=https://your-domain.com
+   X_REDIRECT_URI=https://your-domain.com/auth/twitter/callback
+   LINKEDIN_REDIRECT_URI=https://your-domain.com/auth/linkedin/callback
+   ```
+
+2. Update OAuth apps with HTTPS URLs
+
+3. Restart services:
+   ```bash
+   ./stop_production.sh
+   ./start_production.sh
+   ```
+
+---
+
+## Configuration
+
+### Frontend Environment Variables
+
+**Auto-generated by `start_production.sh`:**
+
+`frontend/.env.local`:
+```bash
+# Generated automatically - points to backend
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+With nginx, this stays as `localhost:8000` because:
+- Frontend server-side code runs on the server
+- Browser requests go through nginx (same domain)
+
+### Backend Environment Variables
+
+`backend/.env`:
+```bash
+# Development
+FRONTEND_URL=http://localhost:3000
+ENVIRONMENT=development
+X_REDIRECT_URI=http://127.0.0.1:8000/auth/twitter/callback
+
+# Production with nginx
+FRONTEND_URL=http://your-domain.com
+ENVIRONMENT=production
+X_REDIRECT_URI=http://your-domain.com/auth/twitter/callback
+```
+
+---
+
+## How It Works (Production)
+
+### With Nginx Reverse Proxy:
+
+1. **User visits `http://your-domain.com`**
+   - Request goes to nginx on port 80
+   - Nginx proxies to frontend on localhost:3000
+   - Frontend HTML/CSS/JS delivered to browser
+
+2. **Browser loads JavaScript**
+   - JavaScript contains API calls to `/api/...`
+   - These use RELATIVE paths (same domain)
+   - No CORS issues!
+
+3. **Browser makes API call to `/api/setup`**
+   - Goes to `http://your-domain.com/api/setup`
+   - Nginx sees `/api` prefix
+   - Proxies to `localhost:8000/api/setup`
+   - Backend responds
+   - Nginx sends response to browser
+
+4. **OAuth callback**
+   - Twitter redirects to `http://your-domain.com/auth/twitter/callback`
+   - Nginx proxies to `localhost:8000/auth/twitter/callback`
+   - Backend processes OAuth
+   - Redirects browser to frontend
+
+**Key Point:** Browser ONLY talks to `your-domain.com`. It never knows about ports 3000 or 8000.
+
+---
+
+## Monitoring
+
+### Check Service Status
+
+```bash
+./status_production.sh
+```
+
+### View Logs
+
+```bash
+# Follow logs in real-time
+tail -f logs/backend.log
+tail -f logs/frontend.log
+
+# Check nginx logs
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+```
+
+### Restart Services
+
+```bash
+./stop_production.sh
+./start_production.sh
+```
+
+### Reload Nginx (after config changes)
+
+```bash
+sudo nginx -t  # Test configuration
+sudo systemctl reload nginx
+```
+
+---
+
+## Troubleshooting
+
+### Browser can't connect
+
+**Check nginx is running:**
+```bash
+sudo systemctl status nginx
+```
+
+**Check firewall:**
+```bash
+sudo ufw status
+```
+
+**Check services are running:**
+```bash
+./status_production.sh
+```
+
+### OAuth redirects fail
+
+**Verify redirect URIs match:**
+1. Check `backend/.env`
+2. Check Twitter/LinkedIn app settings
+3. Must NOT include port numbers with nginx
+4. Must use HTTPS if you enabled SSL
+
+### CORS errors
+
+**With nginx:** You shouldn't get CORS errors. If you do:
+- Make sure browser is accessing via nginx (not :3000 or :8000 directly)
+- Check nginx is properly proxying requests
+
+**Without nginx (direct access):**
+- Normal to see CORS issues
+- Use nginx setup (recommended)
+
+---
+
+## Best Practices
+
+1. ✅ **Use nginx reverse proxy** (not direct access)
+2. ✅ **Enable HTTPS** with Let's Encrypt
+3. ✅ **Keep ports 3000/8000 closed** in firewall
+4. ✅ **Set strong JWT_SECRET_KEY**
+5. ✅ **Keep `.env` file secure** (`chmod 600`)
+6. ✅ **Monitor logs** regularly
+7. ✅ **Backup database** (`backend/vibecaster.db`)
+8. ✅ **Update OAuth URIs** to match your domain
+9. ✅ **Set ENVIRONMENT=production** in backend/.env
+10. ✅ **Use HTTPS in production** (required for OAuth)
+
+---
+
+## Quick Reference
+
+```bash
+# Start services
+./start_production.sh
+
+# Stop services
+./stop_production.sh
+
+# Check status
+./status_production.sh
+
+# View logs
+tail -f logs/backend.log
+
+# Setup nginx
+sudo ./setup_nginx.sh
+
+# Kill process on port
+./kill_port.sh 8000
+
+# Enable HTTPS
+sudo certbot --nginx -d your-domain.com
+```

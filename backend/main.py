@@ -29,9 +29,20 @@ app = FastAPI(
 )
 
 # Configure CORS
+# In production with nginx reverse proxy, CORS is handled by nginx
+# For direct access (development), we need to allow frontend origin
+frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    frontend_url
+]
+# Remove duplicates
+allowed_origins = list(set(allowed_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
