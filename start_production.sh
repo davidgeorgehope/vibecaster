@@ -96,8 +96,8 @@ pip install -q -r requirements.txt
 echo "   Initializing database..."
 python3 -c "from database import init_database; init_database()"
 
-# ===== FRONTEND BUILD =====
-echo -e "${GREEN}[2/4] Building Frontend for Production...${NC}"
+# ===== FRONTEND DEPENDENCIES =====
+echo -e "${GREEN}[2/4] Installing Frontend Dependencies...${NC}"
 cd "$FRONTEND_DIR"
 
 # Check if node_modules exists
@@ -105,10 +105,6 @@ if [ ! -d "node_modules" ]; then
     echo "   Installing Node dependencies..."
     npm install
 fi
-
-# Build Next.js for production
-echo "   Building Next.js application..."
-npm run build
 
 # ===== FIND AVAILABLE PORTS =====
 echo -e "${GREEN}[3/6] Checking ports...${NC}"
@@ -187,6 +183,7 @@ echo -e "   ✅ Frontend will use port: $FRONTEND_PORT"
 
 # ===== CONFIGURE FRONTEND ENVIRONMENT =====
 echo -e "${GREEN}[4/6] Configuring frontend environment...${NC}"
+cd "$FRONTEND_DIR"
 
 # Create or update frontend .env.local with backend URL
 # If nginx is configured, use relative URL so browser requests go through nginx
@@ -205,6 +202,11 @@ NEXT_PUBLIC_API_URL=http://localhost:$BACKEND_PORT
 EOF
     echo -e "   ✅ Frontend configured to use backend at http://localhost:$BACKEND_PORT"
 fi
+
+# ===== BUILD FRONTEND =====
+echo -e "${GREEN}[4.5/6] Building Frontend for Production...${NC}"
+echo "   Building Next.js application with updated environment..."
+npm run build
 
 # ===== START BACKEND =====
 echo -e "${GREEN}[5/6] Starting Backend (Production Mode)...${NC}"
