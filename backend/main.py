@@ -215,7 +215,8 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
     try:
         # Analyze user prompt with AI
         logger.info(f"Analyzing prompt: {request.user_prompt}")
-        refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
+        refined_persona, visual_style, include_links = analyze_user_prompt(request.user_prompt)
+        logger.info(f"Include links: {include_links}")
 
         # Update campaign in database
         update_campaign(
@@ -223,7 +224,8 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
             user_prompt=request.user_prompt,
             refined_persona=refined_persona,
             visual_style=visual_style,
-            schedule_cron=request.schedule_cron
+            schedule_cron=request.schedule_cron,
+            include_links=include_links
         )
 
         # Reconfigure scheduler for this user

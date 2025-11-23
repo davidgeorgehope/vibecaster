@@ -62,6 +62,7 @@ def init_database():
                 visual_style TEXT,
                 schedule_cron TEXT DEFAULT '0 9 * * *',
                 last_run INTEGER DEFAULT 0,
+                include_links INTEGER DEFAULT 0,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 UNIQUE(user_id)
             )
@@ -79,6 +80,13 @@ def init_database():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+
+        # Migration: Add include_links column to existing campaign tables
+        cursor.execute("PRAGMA table_info(campaign)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'include_links' not in columns:
+            cursor.execute("ALTER TABLE campaign ADD COLUMN include_links INTEGER DEFAULT 0")
+            print("Migration: Added include_links column to campaign table")
 
         conn.commit()
 
@@ -145,7 +153,7 @@ def delete_oauth_tokens(user_id: int, service: str):
 
 # Campaign table operations
 def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_persona: Optional[str] = None,
-                   visual_style: Optional[str] = None, schedule_cron: Optional[str] = None):
+                   visual_style: Optional[str] = None, schedule_cron: Optional[str] = None, include_links: Optional[bool] = None):
     """Update or create campaign configuration for a user."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -171,6 +179,9 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
             if schedule_cron is not None:
                 updates.append("schedule_cron = ?")
                 params.append(schedule_cron)
+            if include_links is not None:
+                updates.append("include_links = ?")
+                params.append(1 if include_links else 0)
 
             if updates:
                 query = f"UPDATE campaign SET {', '.join(updates)} WHERE user_id = ?"
@@ -179,9 +190,9 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
         else:
             # Create new campaign
             cursor.execute("""
-                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, user_prompt or "", refined_persona or "", visual_style or "", schedule_cron or "0 9 * * *"))
+                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron, include_links)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (user_id, user_prompt or "", refined_persona or "", visual_style or "", schedule_cron or "0 9 * * *", 1 if include_links else 0))
 
 
 def get_campaign(user_id: int) -> Optional[Dict[str, Any]]:

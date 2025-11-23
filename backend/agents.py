@@ -47,13 +47,34 @@ def strip_markdown_formatting(text: str) -> str:
     return text
 
 
-def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
+def resolve_redirect_url(url: str) -> str:
+    """
+    Follow redirects to get the actual destination URL.
+    This handles Vertex AI Search grounding API redirect URLs and other redirects.
+
+    Args:
+        url: The URL to resolve (may be a redirect)
+
+    Returns:
+        The final destination URL after following all redirects
+    """
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=10)
+        final_url = response.url
+        logger.info(f"Resolved redirect: {url[:60]}... -> {final_url}")
+        return final_url
+    except Exception as e:
+        logger.warning(f"Could not resolve redirect for {url[:60]}...: {e}")
+        return url  # Return original URL if resolution fails
+
+
+def analyze_user_prompt(user_prompt: str) -> Tuple[str, str, bool]:
     """
     Analyze user prompt to generate refined persona and visual style.
     CRITICAL: Preserves the user's exact creative vision and specific requirements.
 
     Returns:
-        Tuple of (refined_persona, visual_style)
+        Tuple of (refined_persona, visual_style, include_links)
     """
     try:
         analysis_prompt = f"""
@@ -61,15 +82,25 @@ Analyze this social media automation request and generate:
 
 1. A REFINED PERSONA - A detailed system instruction that STRICTLY PRESERVES the user's exact creative vision, voice, tone, and specific requirements
 2. A VISUAL STYLE - Art direction that EXACTLY follows the user's specified visual requirements
+3. INCLUDE_LINKS - Detect if the user wants source links/URLs included in posts
 
 CRITICAL: If the user specifies a particular creative concept (e.g., "anime girl teaching", "stick figures explaining", "meme format"), you MUST preserve that exact concept in both outputs. DO NOT generalize or dilute their vision.
+
+For include_links, look for phrases like:
+- "include links", "add links", "with links", "share links"
+- "include sources", "add sources", "with sources", "cite sources"
+- "include URL", "add URL", "with URL"
+- "link to article", "link to source"
+
+If NO mention of links/sources/URLs is found, set include_links to false.
 
 User Request: "{user_prompt}"
 
 Respond in this exact JSON format:
 {{
     "refined_persona": "Your detailed persona description that preserves ALL user requirements",
-    "visual_style": "Your visual style description that EXACTLY matches user specifications"
+    "visual_style": "Your visual style description that EXACTLY matches user specifications",
+    "include_links": true or false
 }}
 """
 
@@ -86,14 +117,15 @@ Respond in this exact JSON format:
         import json
         data = json.loads(result)
 
-        return data.get("refined_persona", ""), data.get("visual_style", "")
+        return data.get("refined_persona", ""), data.get("visual_style", ""), data.get("include_links", False)
 
     except Exception as e:
         logger.error(f"Error analyzing prompt: {e}", exc_info=True)
-        # Fallback: preserve user's original prompt exactly
+        # Fallback: preserve user's original prompt exactly and default to not including links
         return (
             f"IMPORTANT: Follow this exact creative direction: {user_prompt}",
-            f"Visual style as specified: {user_prompt}"
+            f"Visual style as specified: {user_prompt}",
+            False
         )
 
 
@@ -159,7 +191,7 @@ Provide:
             }
         )
 
-        # Extract URLs from grounding metadata
+        # Extract URLs from grounding metadata and resolve redirects
         urls = []
         if hasattr(response, 'candidates') and len(response.candidates) > 0:
             candidate = response.candidates[0]
@@ -168,8 +200,11 @@ Provide:
                 if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
                     for chunk in metadata.grounding_chunks:
                         if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
-                            urls.append(chunk.web.uri)
-                    logger.info(f"Extracted {len(urls)} URLs from search results")
+                            redirect_url = chunk.web.uri
+                            # Resolve redirect to get actual URL
+                            actual_url = resolve_redirect_url(redirect_url)
+                            urls.append(actual_url)
+                    logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
 
         return response.text, urls
 
@@ -677,17 +712,21 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         return False
 
 
-def generate_x_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list) -> Tuple[str, str]:
+def generate_x_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, include_links: bool = False) -> Tuple[str, str]:
     """
     Generate X/Twitter-specific post (280 char limit, casual, punchy).
     CRITICAL: Must follow user's exact creative format/vision.
+
+    Args:
+        include_links: If True, append source URL to the post
 
     Returns:
         Tuple of (post_text, shortened_url)
     """
     try:
         # X counts URLs as ~23 chars, but we'll use 230 chars for text to be safe
-        max_text_length = 230 if source_url else 280
+        # Only adjust max length if we're actually including the link
+        max_text_length = 230 if (source_url and include_links) else 280
 
         avoidance_text = ""
         if recent_topics:
@@ -761,25 +800,28 @@ Return only the final post text.
 
         final_post = critique_response.text.strip()
 
-        # Add URL if provided (X will auto-shorten)
-        if source_url:
+        # Add URL if provided and user wants links included (X will auto-shorten)
+        if source_url and include_links:
             final_post = f"{final_post}\n\n{source_url}"
             logger.info(f"X post with URL (total: {len(final_post)} chars)")
 
-        return final_post, source_url
+        return final_post, source_url if include_links else None
 
     except Exception as e:
         logger.error(f"Error generating X post: {e}", exc_info=True)
         fallback = "Excited to share insights on this! 🚀 #tech"
-        if source_url:
+        if source_url and include_links:
             fallback = f"{fallback}\n\n{source_url}"
-        return fallback, source_url
+        return fallback, source_url if include_links else None
 
 
-def generate_linkedin_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list) -> str:
+def generate_linkedin_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, include_links: bool = False) -> str:
     """
     Generate LinkedIn-specific post (longer form, professional, detailed).
     CRITICAL: Must follow user's exact creative format/vision adapted for professional audience.
+
+    Args:
+        include_links: If True, append source URL to the post
 
     Returns:
         Complete LinkedIn post text with context and insights
@@ -866,8 +908,8 @@ Return only the final post text in plain text format (no markdown).
         # Strip any markdown formatting (LinkedIn doesn't support it)
         final_post = strip_markdown_formatting(final_post)
 
-        # Ensure URL is included if provided and not already in post
-        if source_url and source_url not in final_post:
+        # Ensure URL is included if provided, user wants links, and not already in post
+        if source_url and include_links and source_url not in final_post:
             final_post = f"{final_post}\n\n{source_url}"
             logger.info(f"Added missing source URL to LinkedIn post")
 
@@ -882,7 +924,7 @@ Return only the final post text in plain text format (no markdown).
 The landscape is evolving rapidly, and staying informed is crucial for success in this space.
 
 What are your thoughts on this development?"""
-        if source_url:
+        if source_url and include_links:
             fallback = f"{fallback}\n\nSource: {source_url}"
         return fallback
 
@@ -912,9 +954,11 @@ def run_agent_cycle(user_id: int):
         user_prompt = campaign["user_prompt"]
         refined_persona = campaign.get("refined_persona", "")
         visual_style = campaign.get("visual_style", "")
+        include_links = campaign.get("include_links", False)
 
         logger.info(f"Campaign: {user_prompt}")
         logger.info(f"Persona: {refined_persona[:100]}...")
+        logger.info(f"Include links: {include_links}")
 
         # Get recent topics to avoid repetition
         recent_topics = get_recent_topics(user_id, days=14)
@@ -942,7 +986,7 @@ def run_agent_cycle(user_id: int):
         # Step 2: Generate and post to X/Twitter if connected
         if twitter_tokens:
             logger.info("[2/7] Generating X-specific post...")
-            x_post, x_url = generate_x_post(search_context, refined_persona, user_prompt, source_url, recent_topics)
+            x_post, x_url = generate_x_post(search_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
             logger.info(f"X post: {x_post}")
 
             # Validate X post matches user's creative vision
@@ -971,7 +1015,7 @@ def run_agent_cycle(user_id: int):
         # Step 3: Generate and post to LinkedIn if connected
         if linkedin_tokens:
             logger.info("[5/7] Generating LinkedIn-specific post...")
-            linkedin_post = generate_linkedin_post(search_context, refined_persona, user_prompt, source_url, recent_topics)
+            linkedin_post = generate_linkedin_post(search_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
             logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
 
             # Validate LinkedIn post matches user's creative vision
