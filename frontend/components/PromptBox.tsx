@@ -3,8 +3,6 @@
 import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, Play, Trash2 } from 'lucide-react';
 
-const API_URL = '/api';
-
 interface PromptBoxProps {
   onActivate: (prompt: string) => Promise<void>;
   onRunNow: () => Promise<void>;
@@ -22,7 +20,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
     // Check if campaign is configured
     if (!token) return;
 
-    fetch(`${API_URL}/api/campaign`, {
+    fetch('/api/campaign', {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -68,7 +66,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
 
     setIsDeleting(true);
     try {
-      const response = await fetch(`${API_URL}/api/campaign`, {
+      const response = await fetch('/api/campaign', {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
