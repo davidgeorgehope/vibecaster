@@ -234,7 +234,8 @@ if ! is_port_available $FRONTEND_PORT; then
 fi
 
 # Start Next.js in production mode with custom port
-nohup npx next start -p $FRONTEND_PORT > "$LOGS_DIR/frontend.log" 2>&1 &
+# Bind to 0.0.0.0 (IPv4) to avoid IPv6 conflicts
+nohup npx next start -p $FRONTEND_PORT -H 0.0.0.0 > "$LOGS_DIR/frontend.log" 2>&1 &
 
 FRONTEND_PID=$!
 echo $FRONTEND_PID > "$PIDS_DIR/frontend.pid"
