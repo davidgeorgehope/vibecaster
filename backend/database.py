@@ -67,6 +67,19 @@ def init_database():
             )
         """)
 
+        # Create post_history table to track covered topics
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS post_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                post_text TEXT NOT NULL,
+                topics_json TEXT,
+                created_at INTEGER NOT NULL,
+                platforms TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
         conn.commit()
 
 
@@ -198,3 +211,41 @@ def get_connection_status(user_id: int) -> Dict[str, bool]:
             "twitter": "twitter" in connected_services,
             "linkedin": "linkedin" in connected_services
         }
+
+
+# Post history operations
+def save_post_history(user_id: int, post_text: str, topics: list, platforms: list):
+    """Save post history with extracted topics."""
+    import json
+    import time
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO post_history (user_id, post_text, topics_json, created_at, platforms)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, post_text, json.dumps(topics), int(time.time()), json.dumps(platforms)))
+
+
+def get_recent_topics(user_id: int, days: int = 14) -> list:
+    """Get all topics covered in the last N days."""
+    import json
+    import time
+
+    cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT topics_json FROM post_history
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at DESC
+        """, (user_id, cutoff_time))
+
+        all_topics = []
+        for row in cursor.fetchall():
+            if row[0]:
+                topics = json.loads(row[0])
+                all_topics.extend(topics)
+
+        return all_topics

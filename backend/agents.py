@@ -10,7 +10,7 @@ from PIL import Image
 from io import BytesIO
 import base64
 from dotenv import load_dotenv
-from database import get_campaign, get_oauth_tokens, update_last_run
+from database import get_campaign, get_oauth_tokens, update_last_run, get_recent_topics, save_post_history
 from logger_config import agent_logger as logger
 
 load_dotenv()
@@ -71,19 +71,36 @@ Respond in this exact JSON format:
         )
 
 
-def search_trending_topics(user_prompt: str, refined_persona: str) -> str:
+def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics: list = None) -> Tuple[str, list]:
     """
     Use Gemini with Google Search grounding to find trending topics.
 
+    Args:
+        user_prompt: The user's campaign prompt
+        refined_persona: The refined persona description
+        recent_topics: List of specific topics covered in the last 2 weeks to avoid
+
     Returns:
-        Search context as a string
+        Tuple of (search_context, urls_list) where urls_list contains source URLs
     """
     try:
+        # Build avoidance instruction if we have recent topics
+        avoidance_text = ""
+        if recent_topics:
+            topics_str = "\n- ".join(recent_topics)
+            avoidance_text = f"""
+
+IMPORTANT: We've recently covered these specific topics, so explore DIFFERENT aspects or angles:
+- {topics_str}
+
+Look for new angles, different sub-topics, or emerging developments we haven't discussed yet.
+"""
+
         search_prompt = f"""
 Find the latest trending news, discussions, or technical developments related to: {user_prompt}
 
 Focus on recent (last 24-48 hours) content that would be interesting to someone with this persona:
-{refined_persona}
+{refined_persona}{avoidance_text}
 
 Provide a brief summary of the most interesting findings.
 """
@@ -100,21 +117,52 @@ Provide a brief summary of the most interesting findings.
             }
         )
 
-        return response.text
+        # Extract URLs from grounding metadata
+        urls = []
+        if hasattr(response, 'candidates') and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'grounding_metadata'):
+                metadata = candidate.grounding_metadata
+                if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                    for chunk in metadata.grounding_chunks:
+                        if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
+                            urls.append(chunk.web.uri)
+                    logger.info(f"Extracted {len(urls)} URLs from search results")
+
+        return response.text, urls
 
     except Exception as e:
         logger.error(f"Error searching topics: {e}", exc_info=True)
-        return f"General discussion about {user_prompt}"
+        return f"General discussion about {user_prompt}", []
 
 
-def generate_post_draft(search_context: str, refined_persona: str, user_prompt: str) -> str:
+def generate_post_draft(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str] = None, recent_topics: list = None) -> str:
     """
     Generate a social media post draft based on search context and persona.
 
+    Args:
+        search_context: Context from trending search results
+        refined_persona: The persona description
+        user_prompt: The user's campaign prompt
+        source_url: Optional URL to include in the post
+        recent_topics: List of specific topics covered in the last 2 weeks to avoid
+
     Returns:
-        Post text (under 280 characters)
+        Post text (under 280 characters including URL)
     """
     try:
+        # Account for URL in character count (Twitter counts URLs as ~23 chars)
+        # Use 220 chars to be safe and leave room for the URL
+        max_text_length = 220 if source_url else 280
+
+        # Build avoidance instruction if we have recent topics
+        avoidance_text = ""
+        if recent_topics:
+            topics_str = ", ".join(recent_topics[:5])  # Limit to first 5 for brevity
+            avoidance_text = f"""
+- Explore a FRESH angle - we recently covered: {topics_str}
+"""
+
         draft_prompt = f"""
 You are acting as this persona:
 {refined_persona}
@@ -124,12 +172,14 @@ Based on this trending information:
 
 Write a single social media post about {user_prompt}.
 
-Requirements:
-- Maximum 280 characters
+CRITICAL REQUIREMENTS:
+- MAXIMUM {max_text_length} characters - this is STRICT, go shorter if needed
 - Engaging and authentic to the persona
 - Include relevant insights from the trending information
 - Can include 1-2 relevant hashtags if appropriate
 - Natural, conversational tone
+- DO NOT include any URLs or links in your response
+- Keep it concise and punchy{avoidance_text}
 
 Write only the post text, nothing else.
 """
@@ -142,11 +192,21 @@ Write only the post text, nothing else.
             }
         )
 
-        return response.text.strip()
+        post_text = response.text.strip()
+
+        # Append URL if provided
+        if source_url:
+            post_text = f"{post_text} {source_url}"
+            logger.info(f"Added source URL to post (total length: {len(post_text)} chars)")
+
+        return post_text
 
     except Exception as e:
         logger.error(f"Error generating draft: {e}", exc_info=True)
-        return "Excited to share thoughts on this topic! #ai #automation"
+        fallback = "Excited to share thoughts on this topic! #ai #automation"
+        if source_url:
+            fallback = f"{fallback} {source_url}"
+        return fallback
 
 
 def critique_and_refine_post(draft: str, refined_persona: str) -> str:
@@ -186,6 +246,49 @@ Return only the final post text, nothing else.
     except Exception as e:
         logger.error(f"Error critiquing post: {e}", exc_info=True)
         return draft
+
+
+def extract_topics_from_post(post_text: str) -> list:
+    """
+    Extract specific, granular topics covered in the post.
+
+    Returns:
+        List of 3-5 specific topic strings (e.g., ["OpenTelemetry distributed tracing", "Kubernetes HPA configuration"])
+    """
+    try:
+        extraction_prompt = f"""
+Analyze this social media post and extract 3-5 SPECIFIC, GRANULAR topics or concepts it covers.
+
+Post: "{post_text}"
+
+Be SPECIFIC - not broad categories. Examples:
+- Good: "OpenTelemetry distributed tracing", "Kubernetes horizontal pod autoscaling", "React useEffect cleanup functions"
+- Bad: "OpenTelemetry", "Kubernetes", "React"
+
+Respond in this exact JSON format:
+{{
+    "topics": ["specific topic 1", "specific topic 2", "specific topic 3"]
+}}
+"""
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=extraction_prompt,
+            config={
+                "temperature": 0.3,
+                "response_mime_type": "application/json"
+            }
+        )
+
+        import json
+        result = json.loads(response.text)
+        topics = result.get("topics", [])
+        logger.info(f"Extracted {len(topics)} topics: {topics}")
+        return topics
+
+    except Exception as e:
+        logger.error(f"Error extracting topics: {e}", exc_info=True)
+        return []
 
 
 def generate_image(post_text: str, visual_style: str) -> Optional[bytes]:
@@ -449,11 +552,13 @@ def run_agent_cycle(user_id: int):
     """
     Main agent cycle that runs the complete workflow:
     1. Fetch campaign configuration
-    2. Search for trending topics
-    3. Generate post draft
-    4. Critique and refine
-    5. Generate image
-    6. Post to connected platforms
+    2. Get recent topics to avoid repetition
+    3. Search for trending topics
+    4. Generate post draft
+    5. Critique and refine
+    6. Generate image
+    7. Post to connected platforms
+    8. Extract and save topics for future avoidance
     """
     try:
         logger.info("=" * 60)
@@ -473,23 +578,34 @@ def run_agent_cycle(user_id: int):
         logger.info(f"Campaign: {user_prompt}")
         logger.info(f"Persona: {refined_persona[:100]}...")
 
+        # Get recent topics to avoid repetition
+        recent_topics = get_recent_topics(user_id, days=14)
+        if recent_topics:
+            logger.info(f"Found {len(recent_topics)} recent topics to avoid")
+            logger.info(f"Recent topics: {recent_topics[:3]}...")  # Show first 3
+
         # Step 1: Search for trending topics
-        logger.info("[1/5] Searching for trending topics...")
-        search_context = search_trending_topics(user_prompt, refined_persona)
+        logger.info("[1/6] Searching for trending topics...")
+        search_context, source_urls = search_trending_topics(user_prompt, refined_persona, recent_topics)
         logger.info(f"Found context: {search_context[:200]}...")
 
+        # Select first URL if available
+        source_url = source_urls[0] if source_urls else None
+        if source_url:
+            logger.info(f"Using source URL: {source_url[:80]}...")
+
         # Step 2: Generate draft
-        logger.info("[2/5] Generating post draft...")
-        draft = generate_post_draft(search_context, refined_persona, user_prompt)
+        logger.info("[2/6] Generating post draft...")
+        draft = generate_post_draft(search_context, refined_persona, user_prompt, source_url, recent_topics)
         logger.info(f"Draft: {draft}")
 
         # Step 3: Critique and refine
-        logger.info("[3/5] Critiquing and refining...")
+        logger.info("[3/6] Critiquing and refining...")
         final_post = critique_and_refine_post(draft, refined_persona)
         logger.info(f"Final post: {final_post}")
 
         # Step 4: Generate image
-        logger.info("[4/5] Generating image...")
+        logger.info("[4/6] Generating image...")
         image_bytes = generate_image(final_post, visual_style)
         if image_bytes:
             logger.info(f"Image generated ({len(image_bytes)} bytes)")
@@ -499,9 +615,25 @@ def run_agent_cycle(user_id: int):
             return
 
         # Step 5: Post to platforms
-        logger.info("[5/5] Posting to platforms...")
+        logger.info("[5/6] Posting to platforms...")
         twitter_success = post_to_twitter(user_id, final_post, image_bytes)
         linkedin_success = post_to_linkedin(user_id, final_post, image_bytes)
+
+        # Step 6: Extract topics and save post history
+        logger.info("[6/6] Extracting topics and saving history...")
+        extracted_topics = extract_topics_from_post(final_post)
+
+        # Track which platforms were posted to
+        posted_platforms = []
+        if twitter_success:
+            posted_platforms.append("twitter")
+        if linkedin_success:
+            posted_platforms.append("linkedin")
+
+        # Save to history if posted to any platform
+        if posted_platforms:
+            save_post_history(user_id, final_post, extracted_topics, posted_platforms)
+            logger.info(f"Saved to history with {len(extracted_topics)} topics")
 
         # Update last run timestamp
         update_last_run(user_id, int(time.time()))
