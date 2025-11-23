@@ -145,8 +145,6 @@ is_port_available() {
 
 if [ "$NGINX_CONFIGURED" = true ]; then
     # Nginx is configured - prefer ports 3000 and 8001, but use alternatives if needed
-    echo -e "   ${YELLOW}Nginx reverse proxy detected${NC}"
-
     # Try standard ports first (3000/8001 to avoid port 8000 conflicts)
     if is_port_available 8001 && is_port_available 3000; then
         BACKEND_PORT=8001
@@ -220,9 +218,20 @@ echo -e "   ✅ Backend started (PID: $BACKEND_PID)"
 echo -e "      Logs: $LOGS_DIR/backend.log"
 echo -e "      URL: http://localhost:$BACKEND_PORT"
 
+# Give backend a moment to fully bind to its port
+sleep 2
+
 # ===== START FRONTEND =====
 echo -e "${GREEN}[6/6] Starting Frontend (Production Mode)...${NC}"
 cd "$FRONTEND_DIR"
+
+# Double-check port is free right before starting
+if ! is_port_available $FRONTEND_PORT; then
+    echo -e "${RED}❌ Port $FRONTEND_PORT became unavailable!${NC}"
+    echo -e "   Checking what's using it:"
+    lsof -i :$FRONTEND_PORT || netstat -tuln | grep :$FRONTEND_PORT
+    exit 1
+fi
 
 # Start Next.js in production mode with custom port
 nohup npx next start -p $FRONTEND_PORT > "$LOGS_DIR/frontend.log" 2>&1 &
@@ -258,21 +267,37 @@ if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRON
     fi
 fi
 
-# Wait a moment to check if processes started successfully
-sleep 3
+# Wait for services to fully initialize
+echo -e "${GREEN}Waiting for services to initialize...${NC}"
+sleep 5
 
 # Verify processes are still running
+echo -e "${GREEN}Verifying services...${NC}"
+
 if ! kill -0 $BACKEND_PID 2>/dev/null; then
     echo -e "${RED}❌ Backend failed to start! Check logs:${NC}"
     echo "   tail -f $LOGS_DIR/backend.log"
     exit 1
 fi
+echo -e "   ✅ Backend is running"
 
 if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-    echo -e "${RED}❌ Frontend failed to start! Check logs:${NC}"
+    echo -e "${RED}❌ Frontend failed to start!${NC}"
+    echo -e "   Checking why..."
+
+    # Check if port is now in use (frontend might have crashed)
+    if lsof -i :$FRONTEND_PORT >/dev/null 2>&1; then
+        echo -e "   ${YELLOW}Port $FRONTEND_PORT IS in use by:${NC}"
+        lsof -i :$FRONTEND_PORT
+    else
+        echo -e "   ${YELLOW}Port $FRONTEND_PORT is FREE${NC}"
+    fi
+
+    echo -e "   ${RED}Check logs:${NC}"
     echo "   tail -f $LOGS_DIR/frontend.log"
     exit 1
 fi
+echo -e "   ✅ Frontend is running"
 
 # ===== SUCCESS =====
 echo ""
