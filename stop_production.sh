@@ -84,6 +84,39 @@ else
     echo -e "${YELLOW}Frontend not running (no PID file)${NC}"
 fi
 
+# Also kill any orphaned processes by port
+echo -e "${GREEN}Checking for orphaned processes...${NC}"
+
+# Kill any process on common frontend ports
+for port in 3000 3001 3002; do
+    ORPHAN_PID=$(lsof -ti :$port 2>/dev/null)
+    if [ ! -z "$ORPHAN_PID" ]; then
+        echo -e "${YELLOW}Found orphaned process on port $port (PID: $ORPHAN_PID)${NC}"
+        kill $ORPHAN_PID 2>/dev/null || true
+        sleep 1
+        if lsof -ti :$port >/dev/null 2>&1; then
+            echo -e "${YELLOW}   Force killing...${NC}"
+            kill -9 $ORPHAN_PID 2>/dev/null || true
+        fi
+        STOPPED=1
+    fi
+done
+
+# Kill any process on common backend ports
+for port in 8000 8001 8002; do
+    ORPHAN_PID=$(lsof -ti :$port 2>/dev/null)
+    if [ ! -z "$ORPHAN_PID" ]; then
+        echo -e "${YELLOW}Found orphaned process on port $port (PID: $ORPHAN_PID)${NC}"
+        kill $ORPHAN_PID 2>/dev/null || true
+        sleep 1
+        if lsof -ti :$port >/dev/null 2>&1; then
+            echo -e "${YELLOW}   Force killing...${NC}"
+            kill -9 $ORPHAN_PID 2>/dev/null || true
+        fi
+        STOPPED=1
+    fi
+done
+
 echo ""
 if [ $STOPPED -eq 1 ]; then
     echo -e "${GREEN}✅ All services stopped successfully${NC}"
