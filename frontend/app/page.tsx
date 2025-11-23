@@ -7,7 +7,7 @@ import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
 import { Zap, AlertCircle, LogOut } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = '/api';
 
 interface ConnectionStatus {
   twitter: boolean;

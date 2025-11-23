@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, Play, Trash2 } from 'lucide-react';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_URL = '/api';
 
 interface PromptBoxProps {
   onActivate: (prompt: string) => Promise<void>;
