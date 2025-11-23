@@ -47,7 +47,7 @@ echo -e "${GREEN}Updating nginx configuration...${NC}"
 sed -i '/location \/ {/i\
     # Next.js static files and assets (must come before / location)\
     location /_next/static/ {\
-        proxy_pass http://localhost:3001;\
+        proxy_pass http://localhost:3000;\
         proxy_http_version 1.1;\
         proxy_set_header Host $host;\
         proxy_set_header X-Real-IP $remote_addr;\
@@ -60,7 +60,7 @@ sed -i '/location \/ {/i\
 \
     # Next.js public files\
     location /public/ {\
-        proxy_pass http://localhost:3001;\
+        proxy_pass http://localhost:3000;\
         proxy_http_version 1.1;\
         proxy_set_header Host $host;\
     }\

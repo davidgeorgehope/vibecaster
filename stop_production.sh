@@ -87,8 +87,8 @@ fi
 # Also kill any orphaned processes by port
 echo -e "${GREEN}Checking for orphaned processes...${NC}"
 
-# Kill any process on common frontend ports (starting with new defaults)
-for port in 3001 3002 3003 3000; do
+# Kill any process on common frontend ports (starting with default 3000)
+for port in 3000 3001 3002 3003; do
     ORPHAN_PID=$(lsof -ti :$port 2>/dev/null)
     if [ ! -z "$ORPHAN_PID" ]; then
         echo -e "${YELLOW}Found orphaned process on port $port (PID: $ORPHAN_PID)${NC}"

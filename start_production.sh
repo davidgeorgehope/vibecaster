@@ -144,19 +144,19 @@ is_port_available() {
 }
 
 if [ "$NGINX_CONFIGURED" = true ]; then
-    # Nginx is configured - prefer ports 3001 and 8001, but use alternatives if needed
+    # Nginx is configured - prefer ports 3000 and 8001, but use alternatives if needed
     echo -e "   ${YELLOW}Nginx reverse proxy detected${NC}"
 
-    # Try standard ports first (3001/8001 to avoid conflicts with common services)
-    if is_port_available 8001 && is_port_available 3001; then
+    # Try standard ports first (3000/8001 to avoid port 8000 conflicts)
+    if is_port_available 8001 && is_port_available 3000; then
         BACKEND_PORT=8001
-        FRONTEND_PORT=3001
-        echo -e "   ${GREEN}Using standard ports (3001, 8001)${NC}"
+        FRONTEND_PORT=3000
+        echo -e "   ${GREEN}Using standard ports (3000, 8001)${NC}"
     else
         # Find alternative ports
         echo -e "   ${YELLOW}Standard ports unavailable, finding alternatives...${NC}"
         BACKEND_PORT=$(find_port 8001)
-        FRONTEND_PORT=$(find_port 3001)
+        FRONTEND_PORT=$(find_port 3000)
 
         if [ "$BACKEND_PORT" = "0" ] || [ "$FRONTEND_PORT" = "0" ]; then
             echo -e "${RED}❌ No available ports found${NC}"
@@ -167,11 +167,11 @@ if [ "$NGINX_CONFIGURED" = true ]; then
         echo -e "   ${YELLOW}⚠️  Nginx will be updated to use these ports${NC}"
     fi
 else
-    # No nginx - find any available ports (start from 3001/8001)
+    # No nginx - find any available ports (start from 3000/8001)
     echo -e "   ${YELLOW}Finding available ports (no nginx detected)${NC}"
 
     BACKEND_PORT=$(find_port 8001)
-    FRONTEND_PORT=$(find_port 3001)
+    FRONTEND_PORT=$(find_port 3000)
 
     if [ "$BACKEND_PORT" = "0" ]; then
         echo -e "${RED}❌ No available port found for backend${NC}"
@@ -234,12 +234,12 @@ echo -e "      Logs: $LOGS_DIR/frontend.log"
 echo -e "      URL: http://localhost:$FRONTEND_PORT"
 
 # ===== UPDATE NGINX IF USING NON-STANDARD PORTS =====
-if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRONTEND_PORT" != "3001" ]; }; then
+if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRONTEND_PORT" != "3000" ]; }; then
     echo -e "${GREEN}Updating Nginx configuration for ports $FRONTEND_PORT and $BACKEND_PORT...${NC}"
 
     if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
         # We have sudo access, update nginx config
-        sudo sed -i "s|http://localhost:3001|http://localhost:$FRONTEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i "s|http://localhost:3000|http://localhost:$FRONTEND_PORT|g" /etc/nginx/sites-available/vibecaster
         sudo sed -i "s|http://localhost:8001|http://localhost:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
 
         # Test and reload nginx
@@ -252,7 +252,7 @@ if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRON
     else
         echo -e "${YELLOW}   ⚠️  Cannot update nginx (no sudo access)${NC}"
         echo -e "   Manually update /etc/nginx/sites-available/vibecaster:"
-        echo -e "   - Change port 3001 to $FRONTEND_PORT"
+        echo -e "   - Change port 3000 to $FRONTEND_PORT"
         echo -e "   - Change port 8001 to $BACKEND_PORT"
         echo -e "   Then: sudo nginx -t && sudo systemctl reload nginx"
     fi

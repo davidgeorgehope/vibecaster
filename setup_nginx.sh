@@ -55,7 +55,7 @@ server {
 
     # Next.js static files and assets (must come before / location)
     location /_next/static/ {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -68,14 +68,14 @@ server {
 
     # Next.js public files
     location /public/ {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
     }
 
     # Frontend - Next.js (catch-all for pages)
     location / {
-        proxy_pass http://localhost:3001;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -164,7 +164,7 @@ echo -e "   sudo apt-get install certbot python3-certbot-nginx"
 echo -e "   sudo certbot --nginx -d $DOMAIN"
 echo ""
 echo -e "${YELLOW}⚠️  Important:${NC}"
-echo -e "   - Frontend and Backend should run on localhost:3001 and :8000"
+echo -e "   - Frontend and Backend should run on localhost:3000 and :8000"
 echo -e "   - Nginx will proxy all external traffic through port 80"
 echo -e "   - Browser will only talk to Nginx (single domain)"
 echo ""
