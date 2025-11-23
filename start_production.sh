@@ -144,25 +144,27 @@ is_port_available() {
 }
 
 if [ "$NGINX_CONFIGURED" = true ]; then
-    # Nginx is configured - must use ports 3000 and 8000
-    echo -e "   ${YELLOW}Using fixed ports for nginx compatibility${NC}"
+    # Nginx is configured - prefer ports 3000 and 8000, but use alternatives if needed
+    echo -e "   ${YELLOW}Nginx reverse proxy detected${NC}"
 
-    BACKEND_PORT=8000
-    FRONTEND_PORT=3000
+    # Try standard ports first
+    if is_port_available 8000 && is_port_available 3000; then
+        BACKEND_PORT=8000
+        FRONTEND_PORT=3000
+        echo -e "   ${GREEN}Using standard ports (3000, 8000)${NC}"
+    else
+        # Find alternative ports
+        echo -e "   ${YELLOW}Standard ports unavailable, finding alternatives...${NC}"
+        BACKEND_PORT=$(find_port 8000)
+        FRONTEND_PORT=$(find_port 3000)
 
-    # Check if ports are available
-    if ! is_port_available $BACKEND_PORT; then
-        echo -e "${RED}❌ Port $BACKEND_PORT is in use but required for nginx!${NC}"
-        echo -e "   Free it with: ./kill_port.sh $BACKEND_PORT"
-        echo -e "   Or check what's using it: lsof -i :$BACKEND_PORT"
-        exit 1
-    fi
+        if [ "$BACKEND_PORT" = "0" ] || [ "$FRONTEND_PORT" = "0" ]; then
+            echo -e "${RED}❌ No available ports found${NC}"
+            exit 1
+        fi
 
-    if ! is_port_available $FRONTEND_PORT; then
-        echo -e "${RED}❌ Port $FRONTEND_PORT is in use but required for nginx!${NC}"
-        echo -e "   Free it with: ./kill_port.sh $FRONTEND_PORT"
-        echo -e "   Or check what's using it: lsof -i :$FRONTEND_PORT"
-        exit 1
+        echo -e "   ${YELLOW}Using alternative ports: $FRONTEND_PORT, $BACKEND_PORT${NC}"
+        echo -e "   ${YELLOW}⚠️  Nginx will be updated to use these ports${NC}"
     fi
 else
     # No nginx - find any available ports
@@ -231,6 +233,31 @@ echo -e "   ✅ Frontend started (PID: $FRONTEND_PID)"
 echo -e "      Logs: $LOGS_DIR/frontend.log"
 echo -e "      URL: http://localhost:$FRONTEND_PORT"
 
+# ===== UPDATE NGINX IF USING NON-STANDARD PORTS =====
+if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8000" ] || [ "$FRONTEND_PORT" != "3000" ]; }; then
+    echo -e "${GREEN}Updating Nginx configuration for ports $FRONTEND_PORT and $BACKEND_PORT...${NC}"
+
+    if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
+        # We have sudo access, update nginx config
+        sudo sed -i "s|http://localhost:3000|http://localhost:$FRONTEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i "s|http://localhost:8000|http://localhost:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+
+        # Test and reload nginx
+        if sudo nginx -t >/dev/null 2>&1; then
+            sudo systemctl reload nginx
+            echo -e "   ✅ Nginx configuration updated and reloaded"
+        else
+            echo -e "${YELLOW}   ⚠️  Nginx config test failed, manual update may be needed${NC}"
+        fi
+    else
+        echo -e "${YELLOW}   ⚠️  Cannot update nginx (no sudo access)${NC}"
+        echo -e "   Manually update /etc/nginx/sites-available/vibecaster:"
+        echo -e "   - Change port 3000 to $FRONTEND_PORT"
+        echo -e "   - Change port 8000 to $BACKEND_PORT"
+        echo -e "   Then: sudo nginx -t && sudo systemctl reload nginx"
+    fi
+fi
+
 # Wait a moment to check if processes started successfully
 sleep 3
 
@@ -253,10 +280,24 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║   🚀 Vibecaster is now running!       ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "📊 ${GREEN}Status:${NC}"
-echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
-echo -e "   Backend:  http://localhost:$BACKEND_PORT"
-echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
+
+if [ "$NGINX_CONFIGURED" = true ]; then
+    # Get the domain from nginx config
+    NGINX_DOMAIN=$(grep -E "^\s*server_name" /etc/nginx/sites-available/vibecaster | head -1 | awk '{print $2}' | sed 's/;//')
+    echo -e "📊 ${GREEN}Access your site at:${NC}"
+    echo -e "   ${GREEN}http://$NGINX_DOMAIN${NC}"
+    echo ""
+    echo -e "📡 ${GREEN}Internal services (localhost only):${NC}"
+    echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
+    echo -e "   Backend:  http://localhost:$BACKEND_PORT"
+    echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
+else
+    echo -e "📊 ${GREEN}Status:${NC}"
+    echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
+    echo -e "   Backend:  http://localhost:$BACKEND_PORT"
+    echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
+fi
+
 echo ""
 echo -e "📝 ${GREEN}Logs:${NC}"
 echo -e "   Backend:  tail -f $LOGS_DIR/backend.log"
