@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Play } from 'lucide-react';
+import { Sparkles, Loader2, Play, Trash2 } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -15,6 +15,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
   const [prompt, setPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [campaignConfigured, setCampaignConfigured] = useState(false);
 
   useEffect(() => {
@@ -60,6 +61,34 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
     }
   };
 
+  const handleReset = async () => {
+    if (!confirm('Are you sure you want to reset your campaign? This will clear all configuration.')) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`${API_URL}/api/campaign`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to reset campaign');
+      }
+
+      setPrompt('');
+      setCampaignConfigured(false);
+    } catch (error) {
+      console.error('Failed to reset campaign:', error);
+      alert('Failed to reset campaign');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-lg p-6 hover:border-gray-700 transition-all">
       <div className="flex items-center justify-between mb-4">
@@ -98,23 +127,43 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
         </button>
 
         {campaignConfigured && (
-          <button
-            onClick={handleRunNow}
-            disabled={isRunning}
-            className="w-full py-3 px-4 rounded-lg font-medium transition-all bg-gradient-to-r from-green-600 to-emerald-600 hover:opacity-90 text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {isRunning ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Running...
-              </>
-            ) : (
-              <>
-                <Play className="w-5 h-5" />
-                Run Now
-              </>
-            )}
-          </button>
+          <>
+            <button
+              onClick={handleRunNow}
+              disabled={isRunning}
+              className="w-full py-3 px-4 rounded-lg font-medium transition-all bg-gradient-to-r from-green-600 to-emerald-600 hover:opacity-90 text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isRunning ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="w-5 h-5" />
+                  Run Now
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleReset}
+              disabled={isDeleting}
+              className="w-full py-3 px-4 rounded-lg font-medium transition-all bg-gradient-to-r from-red-600 to-rose-600 hover:opacity-90 text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-5 h-5" />
+                  Reset Campaign
+                </>
+              )}
+            </button>
+          </>
         )}
       </div>
 
