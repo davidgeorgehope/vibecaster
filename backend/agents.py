@@ -566,23 +566,26 @@ def generate_image(post_text: str, visual_style: str) -> Optional[bytes]:
             for candidate in response.candidates:
                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
                     for part in candidate.content.parts:
-                        # Try as_image method first
-                        if hasattr(part, 'as_image'):
-                            image = part.as_image()
-                            if image:
-                                img_byte_arr = BytesIO()
-                                image.save(img_byte_arr, format='PNG')
-                                logger.info(f"Image generated successfully via as_image() ({len(img_byte_arr.getvalue())} bytes)")
-                                return img_byte_arr.getvalue()
-
-                        # Try inline_data if available
+                        # Try inline_data first (raw bytes - most reliable)
                         if hasattr(part, 'inline_data') and part.inline_data:
                             logger.info(f"Found inline_data: {type(part.inline_data)}")
-                            if hasattr(part.inline_data, 'data'):
+                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
                                 logger.info(f"Image generated successfully via inline_data ({len(part.inline_data.data)} bytes)")
                                 return part.inline_data.data
-                            elif hasattr(part.inline_data, 'mime_type'):
-                                logger.info(f"Inline data mime_type: {part.inline_data.mime_type}")
+
+                        # Try as_image method as fallback
+                        if hasattr(part, 'as_image'):
+                            try:
+                                image = part.as_image()
+                                if image:
+                                    img_byte_arr = BytesIO()
+                                    # Check if it's a PIL Image with save method that takes format
+                                    if hasattr(image, 'save'):
+                                        image.save(img_byte_arr, format='PNG')
+                                        logger.info(f"Image generated successfully via as_image() ({len(img_byte_arr.getvalue())} bytes)")
+                                        return img_byte_arr.getvalue()
+                            except Exception as e:
+                                logger.warning(f"as_image() method failed: {e}")
 
         logger.warning("No image found in response candidates")
         return None

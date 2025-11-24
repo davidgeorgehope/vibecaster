@@ -17,6 +17,33 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Model to test
 IMAGE_MODEL = "gemini-3-pro-image-preview"
 
+def extract_image_bytes(response):
+    """
+    Extract image bytes from response using the same logic as agents.py.
+    Returns (bytes, method_used) or (None, None) if no image found.
+    """
+    if hasattr(response, 'candidates'):
+        for candidate in response.candidates:
+            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                for part in candidate.content.parts:
+                    # Try inline_data first (raw bytes - most reliable)
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                            return part.inline_data.data, 'inline_data'
+
+                    # Try as_image method as fallback
+                    if hasattr(part, 'as_image'):
+                        try:
+                            image = part.as_image()
+                            if image and hasattr(image, 'save'):
+                                img_byte_arr = BytesIO()
+                                image.save(img_byte_arr, format='PNG')
+                                return img_byte_arr.getvalue(), 'as_image'
+                        except Exception as e:
+                            print(f"  Warning: as_image() failed: {e}")
+    return None, None
+
+
 def test_image_generation():
     """Test basic image generation."""
     print("=" * 60)
@@ -44,51 +71,60 @@ The diagram should show distributed tracing concepts.
                 "image_config": {
                     "aspect_ratio": "1:1",
                     "image_size": "1K"
-                },
-                "thinking_config": {
-                    "thinking_level": "HIGH"
                 }
             }
         )
 
         print(f"Response received!")
         print(f"Response type: {type(response)}")
-        print(f"Has parts: {hasattr(response, 'parts')}")
+        print(f"Has candidates: {hasattr(response, 'candidates')}")
 
-        if hasattr(response, 'parts'):
-            print(f"Number of parts: {len(response.parts)}")
+        # Debug: show structure
+        if hasattr(response, 'candidates'):
+            print(f"Number of candidates: {len(response.candidates)}")
+            for i, candidate in enumerate(response.candidates):
+                print(f"\nCandidate {i}:")
+                print(f"  Type: {type(candidate)}")
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    print(f"  Number of parts: {len(candidate.content.parts)}")
+                    for j, part in enumerate(candidate.content.parts):
+                        print(f"    Part {j}:")
+                        print(f"      Type: {type(part)}")
+                        print(f"      Has as_image: {hasattr(part, 'as_image')}")
+                        print(f"      Has inline_data: {hasattr(part, 'inline_data')}")
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            print(f"      inline_data type: {type(part.inline_data)}")
+                            if hasattr(part.inline_data, 'data'):
+                                print(f"      inline_data.data length: {len(part.inline_data.data) if part.inline_data.data else 0}")
+                            if hasattr(part.inline_data, 'mime_type'):
+                                print(f"      inline_data.mime_type: {part.inline_data.mime_type}")
 
-            for i, part in enumerate(response.parts):
-                print(f"\nPart {i}:")
-                print(f"  Type: {type(part)}")
-                print(f"  Has as_image: {hasattr(part, 'as_image')}")
-                print(f"  Has inline_data: {hasattr(part, 'inline_data')}")
-                print(f"  Has text: {hasattr(part, 'text')}")
+        # Try extraction using same logic as agents.py
+        print("\n--- Testing extraction (agents.py logic) ---")
+        image_bytes, method = extract_image_bytes(response)
 
-                # Try to extract image
-                if hasattr(part, 'as_image'):
-                    image = part.as_image()
-                    if image:
-                        print(f"  ✓ Image extracted successfully!")
-                        print(f"  Image type: {type(image)}")
-                        print(f"  Image size: {image.size if hasattr(image, 'size') else 'unknown'}")
+        if image_bytes:
+            print(f"✓ Image extracted successfully via {method}!")
+            print(f"  Bytes length: {len(image_bytes)}")
 
-                        # Save image
-                        output_path = "/Users/davidhope/IdeaProjects/vibecaster/test_output.png"
-                        image.save(output_path)
-                        print(f"  ✓ Image saved to: {output_path}")
-                        return True
-                    else:
-                        print(f"  ✗ as_image() returned None")
+            # Save to verify it's valid
+            output_path = "/tmp/test_output.png"
+            with open(output_path, 'wb') as f:
+                f.write(image_bytes)
+            print(f"  ✓ Image saved to: {output_path}")
 
-                if hasattr(part, 'inline_data') and part.inline_data:
-                    print(f"  Has inline_data: {part.inline_data}")
+            # Verify it's a valid image
+            try:
+                from PIL import Image
+                img = Image.open(BytesIO(image_bytes))
+                print(f"  ✓ Valid image: {img.format} {img.size}")
+            except Exception as e:
+                print(f"  Warning: Could not verify image with PIL: {e}")
 
-                if hasattr(part, 'text') and part.text:
-                    print(f"  Text content: {part.text[:100]}")
-
-        print("\n✗ No image found in response")
-        return False
+            return True
+        else:
+            print("✗ No image extracted")
+            return False
 
     except Exception as e:
         print(f"\n✗ Error: {e}")
@@ -109,42 +145,27 @@ def test_with_types_config():
             model=IMAGE_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_modalities=['IMAGE'],
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
+                response_modalities=['IMAGE']
             )
         )
 
         print(f"✓ Response received with types.GenerateContentConfig!")
         print(f"Response type: {type(response)}")
-        print(f"Response attributes: {dir(response)}")
 
-        # Try different ways to access the response
-        if hasattr(response, 'candidates'):
-            print(f"\nHas candidates: {len(response.candidates)}")
-            for i, candidate in enumerate(response.candidates):
-                print(f"Candidate {i} type: {type(candidate)}")
-                if hasattr(candidate, 'content'):
-                    print(f"  Has content: {candidate.content}")
-                    if hasattr(candidate.content, 'parts'):
-                        print(f"  Content has parts: {len(candidate.content.parts)}")
-                        for j, part in enumerate(candidate.content.parts):
-                            print(f"    Part {j}: {type(part)}")
-                            if hasattr(part, 'as_image'):
-                                image = part.as_image()
-                                if image:
-                                    output_path = "/Users/davidhope/IdeaProjects/vibecaster/test_output_2.png"
-                                    image.save(output_path)
-                                    print(f"    ✓ Image saved to: {output_path}")
-                                    return True
+        # Use same extraction logic as agents.py
+        image_bytes, method = extract_image_bytes(response)
 
-        if hasattr(response, 'text'):
-            print(f"\nResponse text: {response.text}")
+        if image_bytes:
+            print(f"✓ Image extracted successfully via {method}!")
+            print(f"  Bytes length: {len(image_bytes)}")
 
-        if hasattr(response, 'parts'):
-            print(f"\nDirect parts access: {response.parts}")
+            output_path = "/tmp/test_output_2.png"
+            with open(output_path, 'wb') as f:
+                f.write(image_bytes)
+            print(f"  ✓ Image saved to: {output_path}")
+            return True
 
+        print("✗ No image extracted")
         return False
 
     except Exception as e:
