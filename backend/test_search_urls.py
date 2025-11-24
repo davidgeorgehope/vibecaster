@@ -36,7 +36,10 @@ Provide a brief summary of the most interesting findings, focusing on recent dev
                 "temperature": 0.7,
                 "tools": [
                     {"google_search": {}}
-                ]
+                ],
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 

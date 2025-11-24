@@ -109,7 +109,10 @@ Respond in this exact JSON format:
             contents=analysis_prompt,
             config={
                 "temperature": 0.5,  # Lower temp to stay faithful to user input
-                "response_mime_type": "application/json"
+                "response_mime_type": "application/json",
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -187,7 +190,10 @@ Provide:
                 "temperature": 0.7,
                 "tools": [
                     {"google_search": {}}
-                ]
+                ],
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -265,7 +271,10 @@ Write only the post text, nothing else.
             model=LLM_MODEL,
             contents=draft_prompt,
             config={
-                "temperature": 0.8
+                "temperature": 0.8,
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -314,7 +323,10 @@ Return only the final post text, nothing else.
             model=LLM_MODEL,
             contents=critique_prompt,
             config={
-                "temperature": 0.7
+                "temperature": 0.7,
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -368,7 +380,10 @@ Respond in this exact JSON format:
             contents=validation_prompt,
             config={
                 "temperature": 0.3,
-                "response_mime_type": "application/json"
+                "response_mime_type": "application/json",
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -425,7 +440,10 @@ Respond in this exact JSON format:
             contents=extraction_prompt,
             config={
                 "temperature": 0.3,
-                "response_mime_type": "application/json"
+                "response_mime_type": "application/json",
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
             }
         )
 
@@ -468,7 +486,10 @@ DO NOT deviate from the specified visual style. This is critical.
             model=IMAGE_MODEL,
             contents=image_prompt,
             config=types.GenerateContentConfig(
-                response_modalities=['IMAGE']
+                response_modalities=['IMAGE'],
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
             )
         )
 
@@ -767,7 +788,12 @@ Write only the post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config={"temperature": 0.8}  # Balanced for creativity + accuracy
+            config={
+                "temperature": 0.8,  # Balanced for creativity + accuracy
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
+            }
         )
 
         post_text = response.text.strip()
@@ -795,7 +821,12 @@ Return only the final post text.
         critique_response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config={"temperature": 0.7}
+            config={
+                "temperature": 0.7,
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
+            }
         )
 
         final_post = critique_response.text.strip()
@@ -868,7 +899,12 @@ Write the complete post in plain text format.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config={"temperature": 0.7}  # Moderate temp for professionalism
+            config={
+                "temperature": 0.7,  # Moderate temp for professionalism
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
+            }
         )
 
         post_text = response.text.strip()
@@ -900,7 +936,12 @@ Return only the final post text in plain text format (no markdown).
         critique_response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config={"temperature": 0.6}  # Lower temp for consistency
+            config={
+                "temperature": 0.6,  # Lower temp for consistency
+                "thinking_config": {
+                    "thinking_level": "HIGH"
+                }
+            }
         )
 
         final_post = critique_response.text.strip()

@@ -44,6 +44,9 @@ The diagram should show distributed tracing concepts.
                 "image_config": {
                     "aspect_ratio": "1:1",
                     "image_size": "1K"
+                },
+                "thinking_config": {
+                    "thinking_level": "HIGH"
                 }
             }
         )
@@ -106,7 +109,10 @@ def test_with_types_config():
             model=IMAGE_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_modalities=['IMAGE']
+                response_modalities=['IMAGE'],
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
             )
         )
 
