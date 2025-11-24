@@ -107,13 +107,13 @@ Respond in this exact JSON format:
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=analysis_prompt,
-            config={
-                "temperature": 0.5,  # Lower temp to stay faithful to user input
-                "response_mime_type": "application/json",
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.5,  # Lower temp to stay faithful to user input
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         result = response.text
@@ -186,15 +186,13 @@ Provide:
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=search_prompt,
-            config={
-                "temperature": 0.7,
-                "tools": [
-                    {"google_search": {}}
-                ],
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         # Extract URLs from grounding metadata and resolve redirects
@@ -270,12 +268,12 @@ Write only the post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config={
-                "temperature": 0.8,
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.8,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         post_text = response.text.strip()
@@ -322,12 +320,12 @@ Return only the final post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config={
-                "temperature": 0.7,
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         return response.text.strip()
@@ -378,13 +376,13 @@ Respond in this exact JSON format:
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=validation_prompt,
-            config={
-                "temperature": 0.3,
-                "response_mime_type": "application/json",
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         import json
@@ -438,13 +436,13 @@ Respond in this exact JSON format:
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=extraction_prompt,
-            config={
-                "temperature": 0.3,
-                "response_mime_type": "application/json",
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json",
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         import json
@@ -458,38 +456,91 @@ Respond in this exact JSON format:
         return []
 
 
+def refine_image_prompt(post_text: str, visual_style: str) -> str:
+    """
+    STEP 1 (The Brain): Use the text reasoning model to deeply think about
+    the best way to visualize the content and generate a refined, detailed prompt.
+
+    This enables "thinking" before image generation since the image model
+    doesn't support thinking_config.
+
+    Returns:
+        A refined, detailed image generation prompt
+    """
+    try:
+        refining_prompt = f"""
+You are an expert art director specializing in social media visuals.
+
+VISUAL STYLE SPECIFICATION (MUST FOLLOW EXACTLY): {visual_style}
+
+SOCIAL MEDIA POST CONTENT: "{post_text}"
+
+Your task:
+1. Think deeply about the best way to visualize this post while STRICTLY adhering to the visual style specification
+2. Consider lighting, composition, color palette, mood, and focal points
+3. If the style specifies specific elements (e.g., "anime girl", "simple drawn style", "kawaii aesthetic"), these are NON-NEGOTIABLE
+4. Plan how to make the image eye-catching and shareable on social media
+5. Consider aspect ratio (1:1 works well for most social platforms)
+
+OUTPUT: Write ONLY the final, detailed prompt for the image generator.
+- Be specific about visual elements, positioning, colors, and mood
+- Include technical art direction (lighting, perspective, style)
+- Keep the prompt focused and actionable for image generation
+- DO NOT include any explanations or meta-commentary, just the prompt itself
+"""
+
+        logger.info("🧠 Thinking about image composition...")
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,  # Use text/reasoning model with thinking
+            contents=refining_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
+        )
+
+        refined_prompt = response.text.strip()
+        logger.info(f"📝 Refined image prompt: {refined_prompt[:200]}...")
+
+        return refined_prompt
+
+    except Exception as e:
+        logger.error(f"Error refining image prompt: {e}", exc_info=True)
+        # Fallback to basic prompt if reasoning fails
+        return f"Create an image in this style: {visual_style}. Content: {post_text}"
+
+
 def generate_image(post_text: str, visual_style: str) -> Optional[bytes]:
     """
-    Generate an image using Imagen based on the post and visual style.
-    CRITICAL: Strictly follows the user's specified visual requirements.
+    Generate an image using a two-step "Think then Draw" workflow:
+
+    STEP 1 (Brain/Reasoning): Uses LLM_MODEL with thinking to analyze the request
+    and generate a highly detailed, refined image prompt.
+
+    STEP 2 (Artist/Generation): Uses IMAGE_MODEL to execute the refined prompt.
+    Note: IMAGE_MODEL does NOT support thinking_config.
 
     Returns:
         Image bytes or None if generation fails
     """
     try:
-        image_prompt = f"""
-CRITICAL: You MUST follow this exact visual style specification: {visual_style}
+        # STEP 1: The Brain (Reasoning Phase)
+        # Use text model with thinking to create a refined, detailed prompt
+        refined_prompt = refine_image_prompt(post_text, visual_style)
 
-Create an image for this social media post: "{post_text}"
-
-STRICT REQUIREMENTS:
-- Follow the visual style specification EXACTLY (if it says "anime girl", draw an anime girl; if it says "simple drawn style", use simple drawn style)
-- If the style specifies specific elements (e.g., "pointing at architecture diagrams", "holding a sign"), include them
-- If the style specifies "no text outside of images" or similar, respect that constraint
-- Match the tone and aesthetic specified (e.g., "kawaii", "professional", "minimalist")
-- The image should be eye-catching and complement the post content while strictly adhering to the style requirements
-
-DO NOT deviate from the specified visual style. This is critical.
-"""
+        # STEP 2: The Artist (Generation Phase)
+        # Pass the refined prompt to the image model WITHOUT thinking_config
+        logger.info("🎨 Generating image with refined prompt...")
 
         response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=image_prompt,
+            model=IMAGE_MODEL,  # Image model - NO thinking_config support
+            contents=refined_prompt,
             config=types.GenerateContentConfig(
-                response_modalities=['IMAGE'],
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
+                response_modalities=["IMAGE"]
+                # CRITICAL: Do NOT pass thinking_config here - image model doesn't support it
             )
         )
 
@@ -788,12 +839,12 @@ Write only the post text, nothing else.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config={
-                "temperature": 0.8,  # Balanced for creativity + accuracy
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.8,  # Balanced for creativity + accuracy
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         post_text = response.text.strip()
@@ -821,12 +872,12 @@ Return only the final post text.
         critique_response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config={
-                "temperature": 0.7,
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         final_post = critique_response.text.strip()
@@ -899,12 +950,12 @@ Write the complete post in plain text format.
         response = client.models.generate_content(
             model=LLM_MODEL,
             contents=draft_prompt,
-            config={
-                "temperature": 0.7,  # Moderate temp for professionalism
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.7,  # Moderate temp for professionalism
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         post_text = response.text.strip()
@@ -936,12 +987,12 @@ Return only the final post text in plain text format (no markdown).
         critique_response = client.models.generate_content(
             model=LLM_MODEL,
             contents=critique_prompt,
-            config={
-                "temperature": 0.6,  # Lower temp for consistency
-                "thinking_config": {
-                    "thinking_level": "HIGH"
-                }
-            }
+            config=types.GenerateContentConfig(
+                temperature=0.6,  # Lower temp for consistency
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
         )
 
         final_post = critique_response.text.strip()
