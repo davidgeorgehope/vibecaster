@@ -200,11 +200,12 @@ source venv/bin/activate
 # Set production environment
 export ENVIRONMENT=production
 
-# Start backend with uvicorn (4 workers for better performance)
+# Start backend with uvicorn (1 worker to preserve in-memory OAuth state)
+# TODO: Use Redis or database for OAuth state storage to enable multiple workers
 nohup uvicorn main:app \
     --host 0.0.0.0 \
     --port $BACKEND_PORT \
-    --workers 4 \
+    --workers 1 \
     --log-level warning \
     > "$LOGS_DIR/backend.log" 2>&1 &
 

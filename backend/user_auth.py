@@ -7,7 +7,7 @@ from auth_utils import (
     create_access_token,
     get_current_user_id
 )
-from database import create_user, get_user_by_email, get_user_by_id
+from database import create_user, get_user_by_email, get_user_by_id, get_connection_status
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
@@ -113,3 +113,13 @@ async def get_current_user(user_id: int = Depends(get_current_user_id)):
         email=user["email"],
         created_at=user["created_at"]
     )
+
+
+@router.get("/status")
+async def get_auth_status(user_id: int = Depends(get_current_user_id)):
+    """
+    Get OAuth connection status for the current user.
+    Returns which social media platforms are connected.
+    """
+    connections = get_connection_status(user_id)
+    return connections

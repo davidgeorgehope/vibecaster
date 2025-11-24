@@ -13,7 +13,7 @@ import time
 
 load_dotenv()
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # OAuth state storage (in-memory for MVP, consider Redis for production)
 # Format: {state: {service: str, user_id: int, timestamp: float, oauth_handler: Optional[object]}}
@@ -25,12 +25,12 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 # Twitter/X Configuration - OAuth 1.0a
 X_API_KEY = os.getenv("X_API_KEY")
 X_API_SECRET = os.getenv("X_API_SECRET")
-X_REDIRECT_URI = os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/auth/twitter/callback")
+X_REDIRECT_URI = os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/twitter/callback")
 
 # LinkedIn Configuration
 LINKEDIN_CLIENT_ID = os.getenv("LINKEDIN_CLIENT_ID")
 LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET")
-LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://127.0.0.1:8000/auth/linkedin/callback")
+LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/linkedin/callback")
 
 
 # ===== TWITTER/X OAUTH =====
