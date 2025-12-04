@@ -456,7 +456,7 @@ Respond in this exact JSON format:
         return []
 
 
-def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str) -> str:
+def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str, search_context: str = "") -> str:
     """
     STEP 1 (The Brain): Use the text reasoning model to deeply think about
     the best way to visualize the content and generate a refined, detailed prompt.
@@ -468,31 +468,43 @@ def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str) -> 
         post_text: The generated social media post content
         visual_style: The extracted visual style specification
         user_prompt: The original user prompt - provides crucial context about intent and purpose
+        search_context: The detailed topic/content from search - provides specific technical details to visualize
 
     Returns:
         A refined, detailed image generation prompt
     """
     try:
+        # Build search context section if available
+        search_context_section = ""
+        if search_context:
+            search_context_section = f"""
+TOPIC DETAILS (use this to understand WHAT specific concept/feature to visualize):
+{search_context[:1500]}
+
+"""
+
         refining_prompt = f"""
 You are an expert art director specializing in social media visuals.
 
 ORIGINAL USER INTENT (important context for understanding the purpose): {user_prompt}
 
 VISUAL STYLE SPECIFICATION (MUST FOLLOW EXACTLY): {visual_style}
-
+{search_context_section}
 SOCIAL MEDIA POST CONTENT: "{post_text}"
 
 Your task:
 1. Think deeply about the best way to visualize this post while STRICTLY adhering to the visual style specification
 2. Consider the ORIGINAL USER INTENT - this tells you the PURPOSE of the content (e.g., educational, promotional, entertainment)
-3. Consider lighting, composition, color palette, mood, and focal points
-4. If the style specifies specific elements (e.g., "anime girl", "simple drawn style", "kawaii aesthetic"), these are NON-NEGOTIABLE
-5. Plan how to make the image eye-catching and shareable on social media
-6. Consider aspect ratio (1:1 works well for most social platforms)
+3. Use the TOPIC DETAILS to understand the specific technical concept being discussed - the image should clearly relate to THIS topic
+4. Consider lighting, composition, color palette, mood, and focal points
+5. If the style specifies specific elements (e.g., "anime girl", "simple drawn style", "kawaii aesthetic"), these are NON-NEGOTIABLE
+6. Plan how to make the image eye-catching and shareable on social media
+7. Consider aspect ratio (1:1 works well for most social platforms)
 
 OUTPUT: Write ONLY the final, detailed prompt for the image generator.
 - Be specific about visual elements, positioning, colors, and mood
 - Include technical art direction (lighting, perspective, style)
+- Make sure the image clearly relates to the specific topic from TOPIC DETAILS
 - Keep the prompt focused and actionable for image generation
 - DO NOT include any explanations or meta-commentary, just the prompt itself
 """
@@ -521,7 +533,7 @@ OUTPUT: Write ONLY the final, detailed prompt for the image generator.
         return f"Create an image in this style: {visual_style}. Content: {post_text}"
 
 
-def generate_image(post_text: str, visual_style: str, user_prompt: str) -> Optional[bytes]:
+def generate_image(post_text: str, visual_style: str, user_prompt: str, search_context: str = "") -> Optional[bytes]:
     """
     Generate an image using a two-step "Think then Draw" workflow:
 
@@ -535,6 +547,7 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str) -> Optio
         post_text: The generated social media post content
         visual_style: The extracted visual style specification
         user_prompt: The original user prompt - provides crucial context about intent and purpose
+        search_context: The detailed topic/content from search - provides specific technical details to visualize
 
     Returns:
         Image bytes or None if generation fails
@@ -542,7 +555,7 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str) -> Optio
     try:
         # STEP 1: The Brain (Reasoning Phase)
         # Use text model with thinking to create a refined, detailed prompt
-        refined_prompt = refine_image_prompt(post_text, visual_style, user_prompt)
+        refined_prompt = refine_image_prompt(post_text, visual_style, user_prompt, search_context)
 
         # STEP 2: The Artist (Generation Phase)
         # Pass the refined prompt to the image model WITHOUT thinking_config
@@ -1121,7 +1134,7 @@ def run_agent_cycle(user_id: int):
                     # Continue anyway but log the issue
 
                 logger.info("[3/7] Generating X-optimized image...")
-                x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt)
+                x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt, search_context)
 
                 if x_image:
                     logger.info(f"X image generated ({len(x_image)} bytes)")
@@ -1154,7 +1167,7 @@ def run_agent_cycle(user_id: int):
                     # Continue anyway but log the issue
 
                 logger.info("[6/7] Generating LinkedIn-optimized image...")
-                linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt)
+                linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt, search_context)
 
                 if linkedin_image:
                     logger.info(f"LinkedIn image generated ({len(linkedin_image)} bytes)")
