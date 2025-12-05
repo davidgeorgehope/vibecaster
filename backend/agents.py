@@ -68,6 +68,75 @@ def resolve_redirect_url(url: str) -> str:
         return url  # Return original URL if resolution fails
 
 
+def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[str], Optional[int]]:
+    """
+    Validate a URL by fetching it and checking for 404 or other errors.
+    Optionally returns raw HTML content for additional context.
+
+    Args:
+        url: The URL to validate
+        fetch_content: If True, fetches and returns raw HTML content
+
+    Returns:
+        Tuple of (is_valid, html_content, status_code)
+        - is_valid: True if URL returns 2xx status
+        - html_content: Raw HTML if fetch_content=True and URL is valid, else None
+        - status_code: HTTP status code or None if request failed
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; Vibecaster/1.0; +https://vibecaster.app)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+
+        if fetch_content:
+            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        else:
+            response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
+
+        status_code = response.status_code
+        is_valid = 200 <= status_code < 300
+
+        if is_valid:
+            logger.info(f"URL validated successfully: {url[:60]}... (status: {status_code})")
+            html_content = response.text if fetch_content else None
+            return True, html_content, status_code
+        else:
+            logger.warning(f"URL validation failed: {url[:60]}... (status: {status_code})")
+            return False, None, status_code
+
+    except requests.exceptions.Timeout:
+        logger.warning(f"URL validation timeout: {url[:60]}...")
+        return False, None, None
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"URL validation error for {url[:60]}...: {e}")
+        return False, None, None
+
+
+def validate_and_select_url(urls: list, fetch_content: bool = True) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Validate a list of URLs and return the first valid one with its content.
+
+    Args:
+        urls: List of URLs to validate
+        fetch_content: If True, fetches and returns raw HTML content
+
+    Returns:
+        Tuple of (valid_url, html_content) or (None, None) if all URLs are invalid
+    """
+    for url in urls:
+        is_valid, html_content, status_code = validate_url(url, fetch_content)
+        if is_valid:
+            return url, html_content
+        elif status_code == 404:
+            logger.info(f"Skipping 404 URL, trying next: {url[:60]}...")
+        else:
+            logger.info(f"Skipping invalid URL (status {status_code}), trying next: {url[:60]}...")
+
+    logger.warning(f"All {len(urls)} URLs failed validation")
+    return None, None
+
+
 def analyze_user_prompt(user_prompt: str) -> Tuple[str, str, bool]:
     """
     Analyze user prompt to generate refined persona and visual style.
@@ -132,26 +201,39 @@ Respond in this exact JSON format:
         )
 
 
-def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics: list = None) -> Tuple[str, list]:
+def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics: list = None, max_search_retries: int = 3, validate_urls: bool = True) -> Tuple[str, list, Optional[str]]:
     """
     Search for relevant content that fits the user's creative vision.
     CRITICAL: Finds content that can be presented in the user's specified format,
     not just "trending news".
 
+    Includes URL validation - will retry the Google search if all URLs return 404.
+
     Args:
         user_prompt: The user's campaign prompt with creative direction
         refined_persona: The refined persona description
         recent_topics: List of specific topics covered in the last 2 weeks to avoid
+        max_search_retries: Number of times to retry search if all URLs are 404 (default: 3)
+        validate_urls: If True, validates URLs and fetches content (default: True)
 
     Returns:
-        Tuple of (search_context, urls_list) where urls_list contains source URLs
+        Tuple of (search_context, urls_list, html_content) where:
+        - search_context: The search results text
+        - urls_list: List of source URLs (validated if validate_urls=True)
+        - html_content: Raw HTML from the first valid URL (for additional context)
     """
-    try:
-        # Build avoidance instruction if we have recent topics
-        avoidance_text = ""
-        if recent_topics:
-            topics_str = "\n- ".join(recent_topics)
-            avoidance_text = f"""
+    # Retry loop for URL validation
+    for search_attempt in range(max_search_retries):
+        try:
+            if search_attempt > 0:
+                logger.info(f"Search retry attempt {search_attempt + 1}/{max_search_retries} - previous URLs were invalid")
+                time.sleep(2 ** search_attempt)  # Exponential backoff
+
+            # Build avoidance instruction if we have recent topics
+            avoidance_text = ""
+            if recent_topics:
+                topics_str = "\n- ".join(recent_topics)
+                avoidance_text = f"""
 
 IMPORTANT: We've recently covered these specific topics, so explore DIFFERENT aspects or angles:
 - {topics_str}
@@ -159,7 +241,12 @@ IMPORTANT: We've recently covered these specific topics, so explore DIFFERENT as
 Look for new angles, different sub-topics, or emerging developments we haven't discussed yet.
 """
 
-        search_prompt = f"""
+            # Add retry context to get different results
+            retry_context = ""
+            if search_attempt > 0:
+                retry_context = f"\n\nNOTE: Previous search returned outdated/broken links. Please find DIFFERENT, more recent sources (attempt {search_attempt + 1})."
+
+            search_prompt = f"""
 CRITICAL CONTEXT: The user has a specific creative format/vision described here: {user_prompt}
 
 Your task is to find content, concepts, or technical information that can be PRESENTED in this creative format.
@@ -174,7 +261,7 @@ Search for:
 2. Content that FITS the user's creative presentation format
 3. Topics that would be interesting to explain/present in the user's style
 
-Persona for context: {refined_persona}{avoidance_text}
+Persona for context: {refined_persona}{avoidance_text}{retry_context}
 
 Provide:
 1. A summary of interesting content found that fits the creative format
@@ -182,39 +269,60 @@ Provide:
 3. Source URLs for credibility
 """
 
-        # Use Google Search grounding with Gemini 3
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=search_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
+            # Use Google Search grounding with Gemini 3
+            response = client.models.generate_content(
+                model=LLM_MODEL,
+                contents=search_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7 + (search_attempt * 0.1),  # Slightly increase temperature on retries for variety
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level="HIGH"
+                    )
                 )
             )
-        )
 
-        # Extract URLs from grounding metadata and resolve redirects
-        urls = []
-        if hasattr(response, 'candidates') and len(response.candidates) > 0:
-            candidate = response.candidates[0]
-            if hasattr(candidate, 'grounding_metadata'):
-                metadata = candidate.grounding_metadata
-                if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
-                    for chunk in metadata.grounding_chunks:
-                        if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
-                            redirect_url = chunk.web.uri
-                            # Resolve redirect to get actual URL
-                            actual_url = resolve_redirect_url(redirect_url)
-                            urls.append(actual_url)
-                    logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
+            # Extract URLs from grounding metadata and resolve redirects
+            urls = []
+            if hasattr(response, 'candidates') and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'grounding_metadata'):
+                    metadata = candidate.grounding_metadata
+                    if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                        for chunk in metadata.grounding_chunks:
+                            if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
+                                redirect_url = chunk.web.uri
+                                # Resolve redirect to get actual URL
+                                actual_url = resolve_redirect_url(redirect_url)
+                                urls.append(actual_url)
+                        logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
 
-        return response.text, urls
+            # Validate URLs if enabled
+            if validate_urls and urls:
+                valid_url, html_content = validate_and_select_url(urls, fetch_content=True)
+                if valid_url:
+                    logger.info(f"Found valid URL: {valid_url[:60]}...")
+                    if html_content:
+                        logger.info(f"Fetched {len(html_content)} bytes of HTML content for additional context")
+                    return response.text, [valid_url] + [u for u in urls if u != valid_url], html_content
+                else:
+                    # All URLs failed validation - retry search
+                    logger.warning(f"All {len(urls)} URLs failed validation on search attempt {search_attempt + 1}")
+                    if search_attempt < max_search_retries - 1:
+                        continue  # Retry the search
+                    else:
+                        logger.error("All search retries exhausted with no valid URLs")
+                        return response.text, urls, None  # Return anyway with unvalidated URLs
+            else:
+                # No validation requested or no URLs found
+                return response.text, urls, None
 
-    except Exception as e:
-        logger.error(f"Error searching topics: {e}", exc_info=True)
-        return f"General discussion about {user_prompt}", []
+        except Exception as e:
+            logger.error(f"Error in search attempt {search_attempt + 1}: {e}", exc_info=True)
+            if search_attempt == max_search_retries - 1:
+                return f"General discussion about {user_prompt}", [], None
+
+    return f"General discussion about {user_prompt}", [], None
 
 
 def generate_post_draft(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str] = None, recent_topics: list = None) -> str:
@@ -1104,13 +1212,33 @@ def run_agent_cycle(user_id: int):
             logger.info(f"Recent topics: {recent_topics[:3]}...")
 
         # Step 1: Search for trending topics (shared between platforms)
-        logger.info("[1/7] Searching for trending topics...")
-        search_context, source_urls = search_trending_topics(user_prompt, refined_persona, recent_topics)
+        # Now includes URL validation - will retry if all URLs are 404
+        logger.info("[1/7] Searching for trending topics (with URL validation)...")
+        search_context, source_urls, html_content = search_trending_topics(user_prompt, refined_persona, recent_topics)
         logger.info(f"Found context: {search_context[:200]}...")
 
         source_url = source_urls[0] if source_urls else None
         if source_url:
-            logger.info(f"Using source URL: {source_url[:80]}...")
+            logger.info(f"Using validated source URL: {source_url[:80]}...")
+
+        # Enhance search context with HTML content if available
+        enhanced_context = search_context
+        if html_content:
+            # Extract useful text from HTML (limit to avoid token overload)
+            # Strip HTML tags for a cleaner context
+            # Remove script and style elements
+            clean_html = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+            clean_html = re.sub(r'<style[^>]*>.*?</style>', '', clean_html, flags=re.DOTALL | re.IGNORECASE)
+            # Remove HTML tags
+            text_content = re.sub(r'<[^>]+>', ' ', clean_html)
+            # Clean up whitespace
+            text_content = re.sub(r'\s+', ' ', text_content).strip()
+            # Limit to first 2000 chars of meaningful content
+            if len(text_content) > 2000:
+                text_content = text_content[:2000] + "..."
+            if text_content:
+                enhanced_context = f"{search_context}\n\nADDITIONAL CONTEXT FROM SOURCE:\n{text_content}"
+                logger.info(f"Enhanced search context with {len(text_content)} chars from HTML")
 
         # Check which platforms are connected
         twitter_tokens = get_oauth_tokens(user_id, "twitter")
@@ -1124,7 +1252,7 @@ def run_agent_cycle(user_id: int):
         if twitter_tokens:
             try:
                 logger.info("[2/7] Generating X-specific post...")
-                x_post, x_url = generate_x_post(search_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
+                x_post, x_url = generate_x_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"X post: {x_post}")
 
                 # Validate X post matches user's creative vision
@@ -1134,7 +1262,7 @@ def run_agent_cycle(user_id: int):
                     # Continue anyway but log the issue
 
                 logger.info("[3/7] Generating X-optimized image...")
-                x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt, search_context)
+                x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt, enhanced_context)
 
                 if x_image:
                     logger.info(f"X image generated ({len(x_image)} bytes)")
@@ -1157,7 +1285,7 @@ def run_agent_cycle(user_id: int):
         if linkedin_tokens:
             try:
                 logger.info("[5/7] Generating LinkedIn-specific post...")
-                linkedin_post = generate_linkedin_post(search_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
+                linkedin_post = generate_linkedin_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
 
                 # Validate LinkedIn post matches user's creative vision
@@ -1167,7 +1295,7 @@ def run_agent_cycle(user_id: int):
                     # Continue anyway but log the issue
 
                 logger.info("[6/7] Generating LinkedIn-optimized image...")
-                linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt, search_context)
+                linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt, enhanced_context)
 
                 if linkedin_image:
                     logger.info(f"LinkedIn image generated ({len(linkedin_image)} bytes)")
