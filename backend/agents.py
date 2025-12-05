@@ -247,26 +247,23 @@ Look for new angles, different sub-topics, or emerging developments we haven't d
                 retry_context = f"\n\nNOTE: Previous search returned outdated/broken links. Please find DIFFERENT, more recent sources (attempt {search_attempt + 1})."
 
             search_prompt = f"""
-CRITICAL CONTEXT: The user has a specific creative format/vision described here: {user_prompt}
+USER'S FULL INSTRUCTIONS (READ CAREFULLY - includes source restrictions, topics, and format):
+{user_prompt}
 
-Your task is to find content, concepts, or technical information that can be PRESENTED in this creative format.
+YOUR TASK: Find content that FITS this creative format while STRICTLY RESPECTING any source restrictions above.
 
-For example:
-- If they want "anime girl teaching OTEL tutorials", find interesting OTEL concepts/features to teach
-- If they want "memes about kubernetes", find kubernetes pain points or funny scenarios
-- If they want "explained with diagrams", find architecture/technical concepts worth diagramming
-
-Search for:
-1. Recent technical developments, concepts, or discussions (last 48 hours preferred, but up to 1 week if needed)
-2. Content that FITS the user's creative presentation format
-3. Topics that would be interesting to explain/present in the user's style
+CRITICAL RULES:
+1. If the user specifies source restrictions (e.g., "only from X", "no competitors", "stick to X material"), you MUST only return content from those allowed sources
+2. If the user names specific topics/products, search for content about THOSE topics from the allowed sources
+3. Find recent developments, best practices, or educational content (preference: last 48 hours to 1 week)
+4. Content should be suitable for the user's creative presentation format
 
 Persona for context: {refined_persona}{avoidance_text}{retry_context}
 
 Provide:
-1. A summary of interesting content found that fits the creative format
-2. Key concepts, features, or topics that would work well in this format
-3. Source URLs for credibility
+1. A summary of content found that fits the creative format AND respects source restrictions
+2. Key concepts or topics that work well in this format
+3. Source URLs (ONLY from allowed sources if restrictions were specified)
 """
 
             # Use Google Search grounding with Gemini 3
@@ -952,34 +949,33 @@ def generate_x_post(search_context: str, refined_persona: str, user_prompt: str,
                 avoidance_text = f"\n- Explore a FRESH angle - we recently covered: {topics_str}"
 
             draft_prompt = f"""
-CONTEXT: The user's creative vision is: {user_prompt}
+USER'S CREATIVE VISION: {user_prompt}
 This describes the IMAGE/VISUAL FORMAT that will accompany the post.
 
-Your task: Write the SOCIAL MEDIA POST TEXT (not an image description) about this topic: {search_context}
+TOPIC CONTEXT (pick ONE specific concept to focus on):
+{search_context}
 
-CRITICAL INSTRUCTIONS:
-- DO NOT write an image generation prompt
-- DO NOT describe what's in the image
-- DO write a normal, engaging X/Twitter post ABOUT the technical topic
+YOUR TASK: Write ONE cohesive X/Twitter post about a SINGLE topic from the context above.
+
+STRUCTURE YOUR POST:
+1. Start with a hook that introduces the topic (what problem/concept?)
+2. Add the insight/lesson (what's the takeaway?)
+3. End with engagement (question, call-to-action, or hashtags)
+
+CRITICAL RULES:
+- Pick ONE specific topic/concept - do NOT list multiple options
+- Write a SINGLE cohesive post, not bullet points or fragments
 - Write FROM the persona's voice/tone: {refined_persona}
-- You can reference that there's a cool visual/tutorial, but focus on the TOPIC itself
-
-EXAMPLES OF WHAT TO DO:
-✓ "When your traces get ugly and the collector starts smoking 😱 Pay attention or face detention! #OpenTelemetry #Observability"
-✓ "KYAAA! Someone's sending bad traces to the collector again! Time for a lesson in proper instrumentation 📊 #OTEL"
-
-EXAMPLES OF WHAT NOT TO DO:
-✗ "(Anime sketch) Girl points at whiteboard with diagram showing..."
-✗ "Drawing of anime character teaching about..."
+- DO NOT describe the image - the image will accompany this text
+- DO NOT write an image generation prompt
 
 X/TWITTER REQUIREMENTS:
 - MAXIMUM {max_text_length} characters - this is STRICT
-- Engaging, conversational tone
-- Hook readers immediately
+- Engaging, conversational tone with a clear hook
 - Can use 1-2 relevant hashtags or emojis
 - DO NOT include URLs - we'll add that separately{avoidance_text}
 
-Write only the post text, nothing else.
+Write ONLY the post text (one cohesive post), nothing else.
 """
 
             response = client.models.generate_content(
@@ -1003,16 +999,20 @@ Review this X/Twitter post:
 Context: This post will be paired with an image that shows: {user_prompt}
 Persona: {refined_persona}
 
-Critique for:
-1. Is this a SOCIAL MEDIA POST (not an image description)? If it describes the image instead of discussing the topic, REWRITE IT.
-2. Character count (must be under {max_text_length} chars)
-3. Does it match the persona's voice/tone?
-4. Engagement potential on X/Twitter
+REJECT AND REWRITE if ANY of these issues:
+1. Is it FRAGMENTED? (multiple "Option 1/2/3" or bullet points instead of one cohesive post) → REWRITE as ONE flowing post
+2. Is it an image description? (e.g., "Anime sketch of...", "Drawing showing...") → REWRITE as a social media post about the topic
+3. Does it lack a clear hook/intro? → ADD a hook that introduces the topic
+4. Is it over {max_text_length} chars? → SHORTEN it
+5. Does it NOT match the persona's voice? → ADJUST tone
 
-CRITICAL: If the post reads like an image generation prompt (e.g., "Anime sketch of..." or "Drawing showing..."), you MUST rewrite it as a normal social media post about the technical topic.
+A GOOD X post has:
+- A clear hook/intro (what's the topic/problem?)
+- An insight or lesson
+- A call-to-action or hashtags
+- All in ONE cohesive flowing post
 
-If issues found, rewrite. Otherwise return unchanged.
-Return only the final post text.
+Return ONLY the final post text (one cohesive post).
 """
 
             critique_response = client.models.generate_content(
