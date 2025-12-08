@@ -68,9 +68,78 @@ def resolve_redirect_url(url: str) -> str:
         return url  # Return original URL if resolution fails
 
 
+def is_soft_404(html_content: str, url: str) -> bool:
+    """
+    Detect "soft 404" pages - pages that return HTTP 200 but display 404/error content.
+    Many sites (including Elastic) handle 404s at the application layer, not web server.
+
+    Args:
+        html_content: The HTML content of the page
+        url: The URL (for logging)
+
+    Returns:
+        True if this appears to be a soft 404 page
+    """
+    if not html_content:
+        return False
+
+    # Lowercase for case-insensitive matching
+    content_lower = html_content.lower()
+
+    # Common soft 404 indicators in page content
+    soft_404_patterns = [
+        # Generic 404 phrases
+        'page not found',
+        'page could not be found',
+        'page doesn\'t exist',
+        'page does not exist',
+        'not found</title>',
+        '404</title>',
+        'error 404',
+        '404 error',
+        # Elastic-specific patterns
+        'this page doesn\'t exist',
+        'we couldn\'t find',
+        'the page you\'re looking for',
+        'this content has moved',
+        'content not available',
+        'something\'s amiss',
+        'hmmm… something\'s amiss',
+        'we\'re really good at search but can\'t seem to find',
+        # Common CMS 404 patterns
+        'oops! that page',
+        'sorry, we can\'t find',
+        'nothing found',
+        'no results found',
+        # Meta indicators
+        '<meta name="robots" content="noindex',
+    ]
+
+    for pattern in soft_404_patterns:
+        if pattern in content_lower:
+            logger.warning(f"Soft 404 detected for {url[:60]}... (matched: '{pattern}')")
+            return True
+
+    # Check for very short content (often a sign of error pages)
+    # But only if it also lacks typical article indicators
+    content_length = len(html_content)
+    has_article_content = any(indicator in content_lower for indicator in [
+        '<article', 'class="article', 'class="post', 'class="content',
+        'class="blog', '<main', 'class="documentation'
+    ])
+
+    if content_length < 5000 and not has_article_content:
+        # Very short page without article markers - suspicious
+        logger.warning(f"Suspicious short page ({content_length} chars) without article content: {url[:60]}...")
+        return True
+
+    return False
+
+
 def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[str], Optional[int]]:
     """
     Validate a URL by fetching it and checking for 404 or other errors.
+    Also detects "soft 404s" - pages that return 200 but show error content.
     Optionally returns raw HTML content for additional context.
 
     Args:
@@ -79,7 +148,7 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
 
     Returns:
         Tuple of (is_valid, html_content, status_code)
-        - is_valid: True if URL returns 2xx status
+        - is_valid: True if URL returns 2xx status AND is not a soft 404
         - html_content: Raw HTML if fetch_content=True and URL is valid, else None
         - status_code: HTTP status code or None if request failed
     """
@@ -97,10 +166,18 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
         status_code = response.status_code
         is_valid = 200 <= status_code < 300
 
-        if is_valid:
+        if is_valid and fetch_content:
+            html_content = response.text
+            # Check for soft 404 (200 status but 404-like content)
+            if is_soft_404(html_content, url):
+                logger.warning(f"URL is soft 404: {url[:60]}... (status: {status_code})")
+                return False, None, 404  # Treat as 404
             logger.info(f"URL validated successfully: {url[:60]}... (status: {status_code})")
-            html_content = response.text if fetch_content else None
             return True, html_content, status_code
+        elif is_valid:
+            # HEAD request - can't check for soft 404
+            logger.info(f"URL validated successfully (HEAD): {url[:60]}... (status: {status_code})")
+            return True, None, status_code
         else:
             logger.warning(f"URL validation failed: {url[:60]}... (status: {status_code})")
             return False, None, status_code
@@ -320,6 +397,139 @@ Provide:
                 return f"General discussion about {user_prompt}", [], None
 
     return f"General discussion about {user_prompt}", [], None
+
+
+def select_single_topic(search_context: str, source_urls: list, user_prompt: str, recent_topics: list = None, max_selection_attempts: int = 3) -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    Select ONE specific topic from search results to focus the post on.
+    This prevents the post from mixing multiple concepts together.
+
+    IMPORTANT: Validates the selected URL before returning. If the URL is invalid
+    (404, soft 404, etc.), will attempt to select a different topic.
+
+    Args:
+        search_context: Raw search results (may contain multiple topics)
+        source_urls: List of URLs from search results
+        user_prompt: User's campaign prompt for context
+        recent_topics: Topics to avoid (recently covered)
+        max_selection_attempts: Number of times to retry with different topics if URL is bad
+
+    Returns:
+        Tuple of (focused_context, selected_url, html_content) where:
+        - focused_context: Context about ONE specific topic only
+        - selected_url: The VALIDATED URL most relevant to that topic
+        - html_content: The HTML content from the validated URL (for additional context)
+    """
+    excluded_urls = []  # Track URLs we've already tried and failed
+
+    for attempt in range(max_selection_attempts):
+        try:
+            if attempt > 0:
+                logger.info(f"Topic selection retry {attempt + 1}/{max_selection_attempts} - previous URL was invalid")
+
+            avoidance_text = ""
+            if recent_topics:
+                topics_str = ", ".join(recent_topics[:5])
+                avoidance_text = f"""
+
+AVOID these recently covered topics - pick something DIFFERENT:
+- {topics_str}
+"""
+
+            # Filter out URLs we've already tried and failed
+            available_urls = [url for url in source_urls if url not in excluded_urls]
+            if not available_urls:
+                logger.warning("No more URLs available to try")
+                return search_context, None, None
+
+            urls_text = "\n".join([f"- {url}" for url in available_urls[:5]])
+
+            # Add context about excluded URLs if we're retrying
+            excluded_text = ""
+            if excluded_urls:
+                excluded_text = f"""
+
+DO NOT select these URLs (they are broken/unavailable):
+{chr(10).join([f'- {url}' for url in excluded_urls])}
+"""
+
+            selection_prompt = f"""
+You are a content curator. Your task is to select ONE specific topic from these search results.
+
+USER'S CREATIVE VISION: {user_prompt}
+
+SEARCH RESULTS (contains multiple topics/articles):
+{search_context}
+
+AVAILABLE SOURCE URLs:
+{urls_text}
+{avoidance_text}{excluded_text}
+
+YOUR TASK:
+1. Identify all the distinct topics/concepts in the search results
+2. Select the SINGLE most compelling, recent, or interesting one
+3. Extract ONLY the information about that one topic
+4. Match it with the most relevant URL from the AVAILABLE list
+
+RESPOND IN THIS EXACT JSON FORMAT:
+{{
+    "selected_topic": "Brief name of the topic (e.g., 'OpenTelemetry Collector filtering')",
+    "focused_context": "All relevant details about THIS ONE topic only. Include specific facts, features, benefits, or insights. 2-4 sentences.",
+    "selected_url": "The URL most relevant to this topic (MUST be from the available list, or null if none match)",
+    "reasoning": "Why this topic is the best choice for a social media post"
+}}
+"""
+
+            response = client.models.generate_content(
+                model=LLM_MODEL,
+                contents=selection_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.5 + (attempt * 0.1),  # Slightly increase temp on retries
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level="HIGH"
+                    )
+                )
+            )
+
+            import json
+            result = json.loads(response.text)
+
+            selected_topic = result.get("selected_topic", "")
+            focused_context = result.get("focused_context", search_context)
+            selected_url = result.get("selected_url")
+            reasoning = result.get("reasoning", "")
+
+            logger.info(f"🎯 Selected single topic: {selected_topic}")
+            logger.info(f"📝 Reasoning: {reasoning}")
+            logger.info(f"🔗 Selected URL: {selected_url}")
+
+            # VALIDATE the selected URL before returning
+            if selected_url:
+                logger.info(f"🔍 Validating selected URL: {selected_url[:60]}...")
+                is_valid, html_content, status_code = validate_url(selected_url, fetch_content=True)
+
+                if is_valid:
+                    logger.info(f"✅ URL validated successfully")
+                    return focused_context, selected_url, html_content
+                else:
+                    logger.warning(f"❌ Selected URL failed validation (status: {status_code})")
+                    excluded_urls.append(selected_url)
+                    # Continue to next attempt
+            else:
+                # No URL selected - return context without URL
+                logger.info("No URL selected for this topic")
+                return focused_context, None, None
+
+        except Exception as e:
+            logger.error(f"Error in topic selection attempt {attempt + 1}: {e}", exc_info=True)
+            if attempt == max_selection_attempts - 1:
+                # Final attempt failed
+                break
+
+    # All attempts exhausted - return context without URL
+    logger.warning(f"All {max_selection_attempts} topic selection attempts failed to find valid URL")
+    return search_context, None, None
 
 
 def generate_post_draft(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str] = None, recent_topics: list = None) -> str:
@@ -561,7 +771,7 @@ Respond in this exact JSON format:
         return []
 
 
-def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str, search_context: str = "") -> str:
+def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str, topic_context: str = "") -> str:
     """
     STEP 1 (The Brain): Use the text reasoning model to deeply think about
     the best way to visualize the content and generate a refined, detailed prompt.
@@ -573,18 +783,19 @@ def refine_image_prompt(post_text: str, visual_style: str, user_prompt: str, sea
         post_text: The generated social media post content
         visual_style: The extracted visual style specification
         user_prompt: The original user prompt - provides crucial context about intent and purpose
-        search_context: The detailed topic/content from search - provides specific technical details to visualize
+        topic_context: The focused single-topic context - provides specific technical details to visualize
+                      (This is the OUTPUT of select_single_topic, NOT raw search results)
 
     Returns:
         A refined, detailed image generation prompt
     """
     try:
-        # Build search context section if available
-        search_context_section = ""
-        if search_context:
-            search_context_section = f"""
+        # Build topic context section if available
+        topic_context_section = ""
+        if topic_context:
+            topic_context_section = f"""
 TOPIC DETAILS (use this to understand WHAT specific concept/feature to visualize):
-{search_context[:1500]}
+{topic_context[:1500]}
 
 """
 
@@ -594,7 +805,7 @@ You are an expert art director specializing in social media visuals.
 ORIGINAL USER INTENT (important context for understanding the purpose): {user_prompt}
 
 VISUAL STYLE SPECIFICATION (MUST FOLLOW EXACTLY): {visual_style}
-{search_context_section}
+{topic_context_section}
 SOCIAL MEDIA POST CONTENT: "{post_text}"
 
 Your task:
@@ -638,7 +849,7 @@ OUTPUT: Write ONLY the final, detailed prompt for the image generator.
         return f"Create an image in this style: {visual_style}. Content: {post_text}"
 
 
-def generate_image(post_text: str, visual_style: str, user_prompt: str, search_context: str = "") -> Optional[bytes]:
+def generate_image(post_text: str, visual_style: str, user_prompt: str, topic_context: str = "") -> Optional[bytes]:
     """
     Generate an image using a two-step "Think then Draw" workflow:
 
@@ -652,7 +863,8 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str, search_c
         post_text: The generated social media post content
         visual_style: The extracted visual style specification
         user_prompt: The original user prompt - provides crucial context about intent and purpose
-        search_context: The detailed topic/content from search - provides specific technical details to visualize
+        topic_context: The focused single-topic context - provides specific technical details to visualize
+                      (This is the OUTPUT of select_single_topic, NOT raw search results)
 
     Returns:
         Image bytes or None if generation fails
@@ -660,7 +872,7 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str, search_c
     try:
         # STEP 1: The Brain (Reasoning Phase)
         # Use text model with thinking to create a refined, detailed prompt
-        refined_prompt = refine_image_prompt(post_text, visual_style, user_prompt, search_context)
+        refined_prompt = refine_image_prompt(post_text, visual_style, user_prompt, topic_context)
 
         # STEP 2: The Artist (Generation Phase)
         # Pass the refined prompt to the image model WITHOUT thinking_config
@@ -1179,11 +1391,16 @@ def run_agent_cycle(user_id: int):
     Main agent cycle with PLATFORM-SPECIFIC content generation:
     1. Fetch campaign configuration
     2. Get recent topics to avoid repetition
-    3. Search for trending topics
-    4. Generate SEPARATE posts for X and LinkedIn (different lengths, tones)
-    5. Generate platform-specific images
-    6. Post to connected platforms
-    7. Extract and save topics for future avoidance
+    3. Search for trending topics (returns multiple results, no URL validation yet)
+    4. SELECT ONE TOPIC to focus on + VALIDATE its URL (prevents mixing concepts & dead links)
+    5. Generate SEPARATE posts for X and LinkedIn (different lengths, tones)
+    6. Generate platform-specific images
+    7. Post to connected platforms
+    8. Extract and save topics for future avoidance
+
+    URL validation (including soft 404 detection) happens in step 4, ensuring we only
+    include links that actually work. If a selected URL fails validation, we try
+    selecting a different topic up to 3 times.
     """
     try:
         logger.info("=" * 60)
@@ -1212,17 +1429,25 @@ def run_agent_cycle(user_id: int):
             logger.info(f"Recent topics: {recent_topics[:3]}...")
 
         # Step 1: Search for trending topics (shared between platforms)
-        # Now includes URL validation - will retry if all URLs are 404
-        logger.info("[1/7] Searching for trending topics (with URL validation)...")
-        search_context, source_urls, html_content = search_trending_topics(user_prompt, refined_persona, recent_topics)
+        # Returns raw search results - URL validation happens in topic selection
+        logger.info("[1/8] Searching for trending topics...")
+        search_context, source_urls, _ = search_trending_topics(user_prompt, refined_persona, recent_topics, validate_urls=False)
         logger.info(f"Found context: {search_context[:200]}...")
+        logger.info(f"Found {len(source_urls)} source URLs")
 
-        source_url = source_urls[0] if source_urls else None
+        # Step 2: Select ONE topic from search results to focus on
+        # This prevents mixing multiple concepts in a single post
+        # IMPORTANT: Also validates the selected URL (including soft 404 detection)
+        logger.info("[2/8] Selecting single topic to focus on (with URL validation)...")
+        focused_context, source_url, html_content = select_single_topic(search_context, source_urls, user_prompt, recent_topics)
+        logger.info(f"Focused context: {focused_context[:200]}...")
         if source_url:
-            logger.info(f"Using validated source URL: {source_url[:80]}...")
+            logger.info(f"✅ Selected & validated source URL: {source_url[:80]}...")
+        else:
+            logger.warning("⚠️ No valid URL found - post will not include a link")
 
-        # Enhance search context with HTML content if available
-        enhanced_context = search_context
+        # Enhance focused context with HTML content if available (from validated URL)
+        enhanced_context = focused_context
         if html_content:
             # Extract useful text from HTML (limit to avoid token overload)
             # Strip HTML tags for a cleaner context
@@ -1237,8 +1462,8 @@ def run_agent_cycle(user_id: int):
             if len(text_content) > 2000:
                 text_content = text_content[:2000] + "..."
             if text_content:
-                enhanced_context = f"{search_context}\n\nADDITIONAL CONTEXT FROM SOURCE:\n{text_content}"
-                logger.info(f"Enhanced search context with {len(text_content)} chars from HTML")
+                enhanced_context = f"{focused_context}\n\nADDITIONAL CONTEXT FROM SOURCE:\n{text_content}"
+                logger.info(f"Enhanced focused context with {len(text_content)} chars from HTML")
 
         # Check which platforms are connected
         twitter_tokens = get_oauth_tokens(user_id, "twitter")
@@ -1248,10 +1473,10 @@ def run_agent_cycle(user_id: int):
         linkedin_success = False
         posted_platforms = []
 
-        # Step 2: Generate and post to X/Twitter if connected
+        # Step 3: Generate and post to X/Twitter if connected
         if twitter_tokens:
             try:
-                logger.info("[2/7] Generating X-specific post...")
+                logger.info("[3/8] Generating X-specific post...")
                 x_post, x_url = generate_x_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"X post: {x_post}")
 
@@ -1261,12 +1486,12 @@ def run_agent_cycle(user_id: int):
                     logger.warning(f"X post validation failed: {validation_feedback}")
                     # Continue anyway but log the issue
 
-                logger.info("[3/7] Generating X-optimized image...")
+                logger.info("[4/8] Generating X-optimized image...")
                 x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt, enhanced_context)
 
                 if x_image:
                     logger.info(f"X image generated ({len(x_image)} bytes)")
-                    logger.info("[4/7] Posting to X...")
+                    logger.info("[5/8] Posting to X...")
                     twitter_success = post_to_twitter(user_id, x_post, x_image)
                     if twitter_success:
                         posted_platforms.append("twitter")
@@ -1279,12 +1504,12 @@ def run_agent_cycle(user_id: int):
                 logger.error(f"Failed to generate/post X content after retries: {e}")
                 logger.info("Skipping X for this cycle - no fallback post will be created")
         else:
-            logger.info("[2-4/7] Skipping X (not connected)")
+            logger.info("[3-5/8] Skipping X (not connected)")
 
-        # Step 3: Generate and post to LinkedIn if connected
+        # Step 4: Generate and post to LinkedIn if connected
         if linkedin_tokens:
             try:
-                logger.info("[5/7] Generating LinkedIn-specific post...")
+                logger.info("[6/8] Generating LinkedIn-specific post...")
                 linkedin_post = generate_linkedin_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
 
@@ -1294,12 +1519,12 @@ def run_agent_cycle(user_id: int):
                     logger.warning(f"LinkedIn post validation failed: {validation_feedback}")
                     # Continue anyway but log the issue
 
-                logger.info("[6/7] Generating LinkedIn-optimized image...")
+                logger.info("[7/8] Generating LinkedIn-optimized image...")
                 linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt, enhanced_context)
 
                 if linkedin_image:
                     logger.info(f"LinkedIn image generated ({len(linkedin_image)} bytes)")
-                    logger.info("[7/7] Posting to LinkedIn...")
+                    logger.info("[8/8] Posting to LinkedIn...")
                     linkedin_success = post_to_linkedin(user_id, linkedin_post, linkedin_image)
                     if linkedin_success:
                         posted_platforms.append("linkedin")
@@ -1312,7 +1537,7 @@ def run_agent_cycle(user_id: int):
                 logger.error(f"Failed to generate/post LinkedIn content after retries: {e}")
                 logger.info("Skipping LinkedIn for this cycle - no fallback post will be created")
         else:
-            logger.info("[5-7/7] Skipping LinkedIn (not connected)")
+            logger.info("[6-8/8] Skipping LinkedIn (not connected)")
 
         # Update last run timestamp
         if posted_platforms:
