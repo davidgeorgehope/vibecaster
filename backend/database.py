@@ -88,6 +88,18 @@ def init_database():
             cursor.execute("ALTER TABLE campaign ADD COLUMN include_links INTEGER DEFAULT 0")
             print("Migration: Added include_links column to campaign table")
 
+        # Migration: Add is_admin column to users table
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'is_admin' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+            print("Migration: Added is_admin column to users table")
+
+        # Set admin flag for the admin email
+        cursor.execute("""
+            UPDATE users SET is_admin = 1 WHERE email = 'email.djhope@gmail.com'
+        """)
+
         conn.commit()
 
 
@@ -260,3 +272,101 @@ def get_recent_topics(user_id: int, days: int = 14) -> list:
                 all_topics.extend(topics)
 
         return all_topics
+
+
+# ===== ADMIN FUNCTIONS =====
+
+def is_user_admin(user_id: int) -> bool:
+    """Check if a user has admin privileges."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT is_admin FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        return bool(row and row[0])
+
+
+def get_all_users() -> list:
+    """Get all users for admin view."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, email, created_at, is_active, is_admin
+            FROM users
+            ORDER BY created_at DESC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_all_campaigns() -> list:
+    """Get all campaigns with user info for admin view."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT c.*, u.email
+            FROM campaign c
+            JOIN users u ON c.user_id = u.id
+            ORDER BY c.id DESC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_all_posts(limit: int = 50) -> list:
+    """Get recent posts across all users for admin view."""
+    import json
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.*, u.email
+            FROM post_history p
+            JOIN users u ON p.user_id = u.id
+            ORDER BY p.created_at DESC
+            LIMIT ?
+        """, (limit,))
+        posts = []
+        for row in cursor.fetchall():
+            post = dict(row)
+            # Parse JSON fields
+            if post.get('topics_json'):
+                post['topics'] = json.loads(post['topics_json'])
+            if post.get('platforms'):
+                post['platforms'] = json.loads(post['platforms'])
+            posts.append(post)
+        return posts
+
+
+def get_admin_stats() -> dict:
+    """Get admin dashboard statistics."""
+    import time
+    today_start = int(time.time()) - (int(time.time()) % 86400)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Total users
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        # Active users (with campaigns)
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM campaign WHERE user_prompt IS NOT NULL AND user_prompt != ''")
+        active_campaigns = cursor.fetchone()[0]
+
+        # Posts today
+        cursor.execute("SELECT COUNT(*) FROM post_history WHERE created_at >= ?", (today_start,))
+        posts_today = cursor.fetchone()[0]
+
+        # Total posts
+        cursor.execute("SELECT COUNT(*) FROM post_history")
+        total_posts = cursor.fetchone()[0]
+
+        # Connected platforms
+        cursor.execute("SELECT service, COUNT(*) FROM secrets GROUP BY service")
+        connections = {row[0]: row[1] for row in cursor.fetchall()}
+
+        return {
+            "total_users": total_users,
+            "active_campaigns": active_campaigns,
+            "posts_today": posts_today,
+            "total_posts": total_posts,
+            "twitter_connections": connections.get("twitter", 0),
+            "linkedin_connections": connections.get("linkedin", 0)
+        }

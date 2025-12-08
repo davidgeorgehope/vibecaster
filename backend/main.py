@@ -12,6 +12,7 @@ from database import init_database, get_campaign, update_campaign, get_connectio
 from agents import analyze_user_prompt, run_agent_cycle
 from auth import router as auth_router
 from user_auth import router as user_auth_router
+from admin import router as admin_router
 from auth_utils import get_current_user_id
 from logger_config import app_logger as logger
 
@@ -51,6 +52,7 @@ app.add_middleware(
 # Include routers
 app.include_router(user_auth_router)
 app.include_router(auth_router)
+app.include_router(admin_router)
 
 # Initialize scheduler
 scheduler = BackgroundScheduler()

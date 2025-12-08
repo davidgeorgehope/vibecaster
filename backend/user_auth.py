@@ -8,6 +8,7 @@ from auth_utils import (
     get_current_user_id
 )
 from database import create_user, get_user_by_email, get_user_by_id, get_connection_status
+from notifications import send_signup_notification
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
@@ -56,6 +57,10 @@ async def signup(request: SignupRequest):
     # Create user
     hashed_password = get_password_hash(request.password)
     user_id = create_user(request.email, hashed_password)
+
+    # Send notification to admin (non-blocking)
+    import threading
+    threading.Thread(target=send_signup_notification, args=(request.email, user_id)).start()
 
     # Create access token (sub must be a string)
     access_token = create_access_token(data={"sub": str(user_id)})
