@@ -1160,14 +1160,14 @@ def generate_x_post(search_context: str, refined_persona: str, user_prompt: str,
                 topics_str = ", ".join(recent_topics[:5])
                 avoidance_text = f"\n- Explore a FRESH angle - we recently covered: {topics_str}"
 
-            draft_prompt = f"""
+            prompt = f"""
 USER'S CREATIVE VISION: {user_prompt}
 This describes the IMAGE/VISUAL FORMAT that will accompany the post.
 
 TOPIC CONTEXT (pick ONE specific concept to focus on):
 {search_context}
 
-YOUR TASK: Write ONE cohesive X/Twitter post about a SINGLE topic from the context above.
+YOUR TASK: Write ONE polished, publication-ready X/Twitter post about a SINGLE topic from the context above.
 
 STRUCTURE YOUR POST:
 1. Start with a hook that introduces the topic (what problem/concept?)
@@ -1180,6 +1180,13 @@ CRITICAL RULES:
 - Write FROM the persona's voice/tone: {refined_persona}
 - DO NOT describe the image - the image will accompany this text
 - DO NOT write an image generation prompt
+- DO NOT write "Option 1/2/3" or multiple alternatives
+
+QUALITY CHECK (self-review before outputting):
+- Is it ONE flowing post (not fragmented/bullet points)?
+- Does it have a clear hook that introduces the topic?
+- Is it under {max_text_length} characters?
+- Does it match the persona's voice?
 
 X/TWITTER REQUIREMENTS:
 - MAXIMUM {max_text_length} characters - this is STRICT
@@ -1187,61 +1194,24 @@ X/TWITTER REQUIREMENTS:
 - Can use 1-2 relevant hashtags or emojis
 - DO NOT include URLs - we'll add that separately{avoidance_text}
 
-Write ONLY the post text (one cohesive post), nothing else.
+Write ONLY the final post text, nothing else.
 """
 
             response = client.models.generate_content(
                 model=LLM_MODEL,
-                contents=draft_prompt,
+                contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.8,  # Balanced for creativity + accuracy
+                    temperature=0.8,
                     thinking_config=types.ThinkingConfig(
                         thinking_level="HIGH"
                     )
                 )
             )
 
-            post_text = response.text.strip()
+            final_post = response.text.strip()
 
-            # Critique specifically for X
-            critique_prompt = f"""
-Review this X/Twitter post:
-"{post_text}"
-
-Context: This post will be paired with an image that shows: {user_prompt}
-Persona: {refined_persona}
-
-REJECT AND REWRITE if ANY of these issues:
-1. Is it FRAGMENTED? (multiple "Option 1/2/3" or bullet points instead of one cohesive post) → REWRITE as ONE flowing post
-2. Is it an image description? (e.g., "Anime sketch of...", "Drawing showing...") → REWRITE as a social media post about the topic
-3. Does it lack a clear hook/intro? → ADD a hook that introduces the topic
-4. Is it over {max_text_length} chars? → SHORTEN it
-5. Does it NOT match the persona's voice? → ADJUST tone
-
-A GOOD X post has:
-- A clear hook/intro (what's the topic/problem?)
-- An insight or lesson
-- A call-to-action or hashtags
-- All in ONE cohesive flowing post
-
-Return ONLY the final post text (one cohesive post).
-"""
-
-            critique_response = client.models.generate_content(
-                model=LLM_MODEL,
-                contents=critique_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level="HIGH"
-                    )
-                )
-            )
-
-            final_post = critique_response.text.strip()
-
-            # Add URL if provided and user wants links included (X will auto-shorten)
-            if source_url and include_links:
+            # Add URL if provided, user wants links included, and not already in post
+            if source_url and include_links and source_url not in final_post:
                 final_post = f"{final_post}\n\n{source_url}"
                 logger.info(f"X post with URL (total: {len(final_post)} chars)")
 
@@ -1282,11 +1252,11 @@ def generate_linkedin_post(search_context: str, refined_persona: str, user_promp
                 topics_str = ", ".join(recent_topics[:5])
                 avoidance_text = f"\n- Explore a FRESH angle - we recently covered: {topics_str}"
 
-            draft_prompt = f"""
+            prompt = f"""
 CONTEXT: The user's creative vision is: {user_prompt}
 This describes the IMAGE/VISUAL FORMAT that will accompany the post.
 
-Your task: Write a PROFESSIONAL LINKEDIN POST about this topic: {search_context}
+Your task: Write a polished, publication-ready PROFESSIONAL LINKEDIN POST about this topic: {search_context}
 
 CRITICAL INSTRUCTIONS:
 - DO NOT write an image generation prompt or detailed description of the visual
@@ -1302,68 +1272,36 @@ EXAMPLES OF WHAT NOT TO DO:
 ✗ "Check out this anime sketch showing a girl pointing at a whiteboard..."
 ✗ "New diagram series featuring a character teaching..."
 
+QUALITY CHECK (self-review before outputting):
+- Is this a professional post about the TOPIC (not an image description)?
+- Does it provide real value/insights to readers?
+- Is the tone professional and appropriate for LinkedIn?
+- Is it free of markdown formatting (no **bold**, __italics__, etc.)?
+
 LINKEDIN REQUIREMENTS:
 - 1-3 paragraphs (no strict character limit)
 - Professional, insightful tone
 - Provide VALUE to readers - what will they learn?
 - Engage the professional community
 - Can use relevant hashtags (2-3 max)
-- DO NOT use markdown formatting (no **bold**, __italics__, etc.) - LinkedIn doesn't support it
-- Use plain text only with emojis if appropriate
-- IMPORTANT: If there's a source URL, include it at the end on a new line: {source_url if source_url else ''}{avoidance_text}
+- Use plain text only with emojis if appropriate - NO markdown formatting
+- DO NOT include URLs - we'll add that separately{avoidance_text}
 
-Write the complete post in plain text format.
+Write ONLY the final post text in plain text format, nothing else.
 """
 
             response = client.models.generate_content(
                 model=LLM_MODEL,
-                contents=draft_prompt,
+                contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.7,  # Moderate temp for professionalism
+                    temperature=0.7,
                     thinking_config=types.ThinkingConfig(
                         thinking_level="HIGH"
                     )
                 )
             )
 
-            post_text = response.text.strip()
-
-            # Critique specifically for LinkedIn
-            critique_prompt = f"""
-Review this LinkedIn post:
-"{post_text}"
-
-Context: This post will be paired with an image that shows: {user_prompt}
-Persona: {refined_persona}
-
-Critique for:
-1. Is this a PROFESSIONAL LINKEDIN POST (not an image description)? If it describes the image instead of discussing the topic's value, REWRITE IT.
-2. Does it use markdown formatting (**bold**, __italics__, etc.)? LinkedIn doesn't support markdown - remove all markdown syntax and use plain text.
-3. Professional tone appropriate for LinkedIn
-4. Does it provide value/insights to readers?
-5. Engagement potential and thought leadership
-
-CRITICAL FIXES NEEDED:
-- If the post reads like an image generation prompt (e.g., "Sketch showing..."), rewrite as a professional post
-- If it contains markdown syntax like **text** or __text__, remove the formatting symbols
-- Source URL should be at the end if present: {source_url if source_url else ''}
-
-If issues found, rewrite. Otherwise return unchanged.
-Return only the final post text in plain text format (no markdown).
-"""
-
-            critique_response = client.models.generate_content(
-                model=LLM_MODEL,
-                contents=critique_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.6,  # Lower temp for consistency
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level="HIGH"
-                    )
-                )
-            )
-
-            final_post = critique_response.text.strip()
+            final_post = response.text.strip()
 
             # Strip any markdown formatting (LinkedIn doesn't support it)
             final_post = strip_markdown_formatting(final_post)
@@ -1446,6 +1384,11 @@ def run_agent_cycle(user_id: int):
         else:
             logger.warning("⚠️ No valid URL found - post will not include a link")
 
+        # Extract topics ONCE from the focused context (used for both platforms)
+        # This is more accurate than extracting from posts, and avoids duplicate LLM calls
+        topics = extract_topics_from_post(focused_context, user_prompt)
+        logger.info(f"Extracted topics for history: {topics}")
+
         # Enhance focused context with HTML content if available (from validated URL)
         enhanced_context = focused_context
         if html_content:
@@ -1473,71 +1416,64 @@ def run_agent_cycle(user_id: int):
         linkedin_success = False
         posted_platforms = []
 
-        # Step 3: Generate and post to X/Twitter if connected
+        # Step 3: Generate platform-specific posts
+        x_post = None
+        linkedin_post = None
+
         if twitter_tokens:
             try:
-                logger.info("[3/8] Generating X-specific post...")
+                logger.info("[3/6] Generating X-specific post...")
                 x_post, x_url = generate_x_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"X post: {x_post}")
-
-                # Validate X post matches user's creative vision
-                is_valid, validation_feedback = validate_content_matches_vision(x_post, user_prompt, refined_persona)
-                if not is_valid:
-                    logger.warning(f"X post validation failed: {validation_feedback}")
-                    # Continue anyway but log the issue
-
-                logger.info("[4/8] Generating X-optimized image...")
-                x_image = generate_image(x_post, f"{visual_style} - optimized for social media, eye-catching, viral potential", user_prompt, enhanced_context)
-
-                if x_image:
-                    logger.info(f"X image generated ({len(x_image)} bytes)")
-                    logger.info("[5/8] Posting to X...")
-                    twitter_success = post_to_twitter(user_id, x_post, x_image)
-                    if twitter_success:
-                        posted_platforms.append("twitter")
-                        # Extract topics from X post with user prompt context
-                        x_topics = extract_topics_from_post(x_post, user_prompt)
-                        save_post_history(user_id, x_post, x_topics, ["twitter"])
-                else:
-                    logger.warning("No X image generated")
             except Exception as e:
-                logger.error(f"Failed to generate/post X content after retries: {e}")
-                logger.info("Skipping X for this cycle - no fallback post will be created")
+                logger.error(f"Failed to generate X post: {e}")
+                logger.info("Skipping X for this cycle")
         else:
-            logger.info("[3-5/8] Skipping X (not connected)")
+            logger.info("[3/6] Skipping X post generation (not connected)")
 
-        # Step 4: Generate and post to LinkedIn if connected
         if linkedin_tokens:
             try:
-                logger.info("[6/8] Generating LinkedIn-specific post...")
+                logger.info("[4/6] Generating LinkedIn-specific post...")
                 linkedin_post = generate_linkedin_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
                 logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
-
-                # Validate LinkedIn post matches user's creative vision
-                is_valid, validation_feedback = validate_content_matches_vision(linkedin_post, user_prompt, refined_persona)
-                if not is_valid:
-                    logger.warning(f"LinkedIn post validation failed: {validation_feedback}")
-                    # Continue anyway but log the issue
-
-                logger.info("[7/8] Generating LinkedIn-optimized image...")
-                linkedin_image = generate_image(linkedin_post, f"{visual_style} - professional, polished, suitable for business context", user_prompt, enhanced_context)
-
-                if linkedin_image:
-                    logger.info(f"LinkedIn image generated ({len(linkedin_image)} bytes)")
-                    logger.info("[8/8] Posting to LinkedIn...")
-                    linkedin_success = post_to_linkedin(user_id, linkedin_post, linkedin_image)
-                    if linkedin_success:
-                        posted_platforms.append("linkedin")
-                        # Extract topics from LinkedIn post with user prompt context
-                        linkedin_topics = extract_topics_from_post(linkedin_post, user_prompt)
-                        save_post_history(user_id, linkedin_post, linkedin_topics, ["linkedin"])
-                else:
-                    logger.warning("No LinkedIn image generated")
             except Exception as e:
-                logger.error(f"Failed to generate/post LinkedIn content after retries: {e}")
-                logger.info("Skipping LinkedIn for this cycle - no fallback post will be created")
+                logger.error(f"Failed to generate LinkedIn post: {e}")
+                logger.info("Skipping LinkedIn for this cycle")
         else:
-            logger.info("[6-8/8] Skipping LinkedIn (not connected)")
+            logger.info("[4/6] Skipping LinkedIn post generation (not connected)")
+
+        # Step 4: Generate ONE shared image (used for both platforms)
+        shared_image = None
+        if x_post or linkedin_post:
+            # Use whichever post is available for image context (prefer X as it's more concise)
+            image_context_post = x_post or linkedin_post
+            logger.info("[5/6] Generating shared image for all platforms...")
+            shared_image = generate_image(image_context_post, visual_style, user_prompt, enhanced_context)
+            if shared_image:
+                logger.info(f"Shared image generated ({len(shared_image)} bytes)")
+            else:
+                logger.warning("No image generated")
+
+        # Step 5: Post to platforms (using shared topics extracted earlier)
+        if twitter_tokens and x_post and shared_image:
+            try:
+                logger.info("[6/6] Posting to X...")
+                twitter_success = post_to_twitter(user_id, x_post, shared_image)
+                if twitter_success:
+                    posted_platforms.append("twitter")
+                    save_post_history(user_id, x_post, topics, ["twitter"])
+            except Exception as e:
+                logger.error(f"Failed to post to X: {e}")
+
+        if linkedin_tokens and linkedin_post and shared_image:
+            try:
+                logger.info("[6/6] Posting to LinkedIn...")
+                linkedin_success = post_to_linkedin(user_id, linkedin_post, shared_image)
+                if linkedin_success:
+                    posted_platforms.append("linkedin")
+                    save_post_history(user_id, linkedin_post, topics, ["linkedin"])
+            except Exception as e:
+                logger.error(f"Failed to post to LinkedIn: {e}")
 
         # Update last run timestamp
         if posted_platforms:
