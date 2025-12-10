@@ -58,7 +58,11 @@ if [ -f "$PIDS_DIR/frontend.pid" ]; then
     FRONTEND_PID=$(cat "$PIDS_DIR/frontend.pid")
     if kill -0 $FRONTEND_PID 2>/dev/null; then
         echo -e "${GREEN}Stopping Frontend (PID: $FRONTEND_PID)...${NC}"
-        kill $FRONTEND_PID
+
+        # Kill the entire process group to catch all child processes (Next.js spawns children)
+        # Using pkill with parent PID to kill all descendants
+        pkill -TERM -P $FRONTEND_PID 2>/dev/null || true
+        kill $FRONTEND_PID 2>/dev/null || true
 
         # Wait for graceful shutdown (max 10 seconds)
         for i in {1..10}; do
@@ -69,9 +73,10 @@ if [ -f "$PIDS_DIR/frontend.pid" ]; then
             sleep 1
         done
 
-        # Force kill if still running
+        # Force kill if still running (including all descendants)
         if kill -0 $FRONTEND_PID 2>/dev/null; then
-            echo -e "${YELLOW}   ⚠️  Force killing frontend...${NC}"
+            echo -e "${YELLOW}   ⚠️  Force killing frontend and children...${NC}"
+            pkill -9 -P $FRONTEND_PID 2>/dev/null || true
             kill -9 $FRONTEND_PID 2>/dev/null || true
         fi
 
@@ -130,23 +135,26 @@ kill_port_processes() {
 
 # Kill any process on common frontend ports (starting with default 3000)
 for port in 3000 3001 3002 3003; do
-    kill_port_processes $port
+    kill_port_processes $port || true
 done
 
 # Kill any process on common backend ports (starting with new defaults)
 for port in 8001 8002 8003 8000; do
-    kill_port_processes $port
+    kill_port_processes $port || true
 done
 
 # Also kill any lingering Next.js or uvicorn processes related to vibecaster
 echo -e "${GREEN}Checking for lingering Node/Python processes...${NC}"
 VIBECASTER_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Find and kill any Next.js processes in the vibecaster frontend directory
-NEXTJS_PIDS=$(ps aux | grep "next start" | grep "$VIBECASTER_DIR" | grep -v grep | awk '{print $2}')
+# Find and kill any Next.js processes (including next-server which is the actual running process)
+# Check for both "next start" and "next-server" patterns
+NEXTJS_PIDS=$(ps aux | grep -E "(next start|next-server)" | grep -v grep | awk '{print $2}')
 if [ ! -z "$NEXTJS_PIDS" ]; then
     echo -e "${YELLOW}Found lingering Next.js processes: $NEXTJS_PIDS${NC}"
     for pid in $NEXTJS_PIDS; do
+        # Kill process and any children
+        pkill -9 -P $pid 2>/dev/null || true
         kill -9 $pid 2>/dev/null || true
     done
     STOPPED=1
