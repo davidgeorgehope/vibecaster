@@ -34,22 +34,22 @@ async def admin_stats(user_id: int = Depends(require_admin)):
 
 
 @router.get("/users")
-async def admin_users(user_id: int = Depends(require_admin)):
-    """Get all users."""
-    users = get_all_users()
+async def admin_users(page: int = 1, per_page: int = 20, user_id: int = Depends(require_admin)):
+    """Get paginated users."""
+    result = get_all_users(page, per_page)
     # Add connection status for each user
-    for user in users:
+    for user in result["items"]:
         user["connections"] = get_connection_status(user["id"])
-    return {"users": users}
+    return result
 
 
 @router.get("/campaigns")
-async def admin_campaigns(user_id: int = Depends(require_admin)):
-    """Get all campaigns."""
-    return {"campaigns": get_all_campaigns()}
+async def admin_campaigns(page: int = 1, per_page: int = 20, user_id: int = Depends(require_admin)):
+    """Get paginated campaigns."""
+    return get_all_campaigns(page, per_page)
 
 
 @router.get("/posts")
-async def admin_posts(limit: int = 50, user_id: int = Depends(require_admin)):
-    """Get recent posts across all users."""
-    return {"posts": get_all_posts(limit)}
+async def admin_posts(page: int = 1, per_page: int = 20, user_id: int = Depends(require_admin)):
+    """Get paginated posts across all users."""
+    return get_all_posts(page, per_page)

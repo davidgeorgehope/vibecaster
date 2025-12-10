@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { Zap, Users, FileText, BarChart3, ArrowLeft, RefreshCw, Twitter, Linkedin, Check, X } from 'lucide-react';
+import { Zap, Users, FileText, BarChart3, ArrowLeft, RefreshCw, Twitter, Linkedin, Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Stats {
   total_users: number;
@@ -48,6 +48,20 @@ interface Post {
   created_at: number;
 }
 
+interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
+}
+
+interface PaginationState {
+  page: number;
+  pages: number;
+  total: number;
+}
+
 type Tab = 'stats' | 'users' | 'campaigns' | 'posts';
 
 export default function AdminPage() {
@@ -60,6 +74,42 @@ export default function AdminPage() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [usersPagination, setUsersPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
+  const [campaignsPagination, setCampaignsPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
+  const [postsPagination, setPostsPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
+
+  const fetchUsers = useCallback(async (page: number = 1) => {
+    if (!token) return;
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const res = await fetch(`/api/admin/users?page=${page}`, { headers });
+    if (res.ok) {
+      const data: PaginatedResponse<User> = await res.json();
+      setUsers(data.items);
+      setUsersPagination({ page: data.page, pages: data.pages, total: data.total });
+    }
+  }, [token]);
+
+  const fetchCampaigns = useCallback(async (page: number = 1) => {
+    if (!token) return;
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const res = await fetch(`/api/admin/campaigns?page=${page}`, { headers });
+    if (res.ok) {
+      const data: PaginatedResponse<Campaign> = await res.json();
+      setCampaigns(data.items);
+      setCampaignsPagination({ page: data.page, pages: data.pages, total: data.total });
+    }
+  }, [token]);
+
+  const fetchPosts = useCallback(async (page: number = 1) => {
+    if (!token) return;
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const res = await fetch(`/api/admin/posts?page=${page}`, { headers });
+    if (res.ok) {
+      const data: PaginatedResponse<Post> = await res.json();
+      setPosts(data.items);
+      setPostsPagination({ page: data.page, pages: data.pages, total: data.total });
+    }
+  }, [token]);
 
   const fetchData = useCallback(async () => {
     if (!token) return;
@@ -69,42 +119,31 @@ export default function AdminPage() {
     try {
       const headers = { 'Authorization': `Bearer ${token}` };
 
-      // Fetch all data in parallel
-      const [statsRes, usersRes, campaignsRes, postsRes] = await Promise.all([
-        fetch('/api/admin/stats', { headers }),
-        fetch('/api/admin/users', { headers }),
-        fetch('/api/admin/campaigns', { headers }),
-        fetch('/api/admin/posts', { headers })
-      ]);
-
-      // Check if we have admin access
+      // Fetch stats first to check admin access
+      const statsRes = await fetch('/api/admin/stats', { headers });
       if (statsRes.status === 403) {
         setError('You do not have admin access');
         setLoading(false);
         return;
       }
-
-      if (!statsRes.ok || !usersRes.ok || !campaignsRes.ok || !postsRes.ok) {
+      if (!statsRes.ok) {
         throw new Error('Failed to fetch admin data');
       }
-
-      const [statsData, usersData, campaignsData, postsData] = await Promise.all([
-        statsRes.json(),
-        usersRes.json(),
-        campaignsRes.json(),
-        postsRes.json()
-      ]);
-
+      const statsData = await statsRes.json();
       setStats(statsData);
-      setUsers(usersData.users);
-      setCampaigns(campaignsData.campaigns);
-      setPosts(postsData.posts);
+
+      // Fetch paginated data in parallel
+      await Promise.all([
+        fetchUsers(1),
+        fetchCampaigns(1),
+        fetchPosts(1)
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, fetchUsers, fetchCampaigns, fetchPosts]);
 
   useEffect(() => {
     if (!authLoading && !token) {
@@ -249,54 +288,60 @@ export default function AdminPage() {
 
             {/* Users Tab */}
             {activeTab === 'users' && (
-              <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-gray-800">
-                      <th className="text-left px-4 py-3 text-gray-400 font-medium">ID</th>
-                      <th className="text-left px-4 py-3 text-gray-400 font-medium">Email</th>
-                      <th className="text-left px-4 py-3 text-gray-400 font-medium">Signed Up</th>
-                      <th className="text-left px-4 py-3 text-gray-400 font-medium">Connections</th>
-                      <th className="text-left px-4 py-3 text-gray-400 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map(user => (
-                      <tr key={user.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                        <td className="px-4 py-3 text-gray-300">{user.id}</td>
-                        <td className="px-4 py-3">
-                          <span className="text-white">{user.email}</span>
-                          {user.is_admin ? (
-                            <span className="ml-2 px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 rounded">Admin</span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-3 text-gray-400">{formatDate(user.created_at)}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-2">
-                            <span className={`flex items-center gap-1 ${user.connections.twitter ? 'text-blue-400' : 'text-gray-600'}`}>
-                              <Twitter className="w-4 h-4" />
-                              {user.connections.twitter ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                            </span>
-                            <span className={`flex items-center gap-1 ${user.connections.linkedin ? 'text-blue-400' : 'text-gray-600'}`}>
-                              <Linkedin className="w-4 h-4" />
-                              {user.connections.linkedin ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`px-2 py-1 text-xs rounded ${
-                            user.is_active ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
-                          }`}>
-                            {user.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
+              <div className="space-y-4">
+                <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-800">
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">ID</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Email</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Signed Up</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Connections</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {users.length === 0 && (
-                  <div className="text-center py-8 text-gray-500">No users found</div>
-                )}
+                    </thead>
+                    <tbody>
+                      {users.map(user => (
+                        <tr key={user.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                          <td className="px-4 py-3 text-gray-300">{user.id}</td>
+                          <td className="px-4 py-3">
+                            <span className="text-white">{user.email}</span>
+                            {user.is_admin ? (
+                              <span className="ml-2 px-2 py-0.5 text-xs bg-purple-900/50 text-purple-300 rounded">Admin</span>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-3 text-gray-400">{formatDate(user.created_at)}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-2">
+                              <span className={`flex items-center gap-1 ${user.connections.twitter ? 'text-blue-400' : 'text-gray-600'}`}>
+                                <Twitter className="w-4 h-4" />
+                                {user.connections.twitter ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                              </span>
+                              <span className={`flex items-center gap-1 ${user.connections.linkedin ? 'text-blue-400' : 'text-gray-600'}`}>
+                                <Linkedin className="w-4 h-4" />
+                                {user.connections.linkedin ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-1 text-xs rounded ${
+                              user.is_active ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+                            }`}>
+                              {user.is_active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {users.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">No users found</div>
+                  )}
+                </div>
+                <Pagination
+                  pagination={usersPagination}
+                  onPageChange={fetchUsers}
+                />
               </div>
             )}
 
@@ -334,6 +379,10 @@ export default function AdminPage() {
                 {campaigns.length === 0 && (
                   <div className="text-center py-8 text-gray-500">No campaigns configured</div>
                 )}
+                <Pagination
+                  pagination={campaignsPagination}
+                  onPageChange={fetchCampaigns}
+                />
               </div>
             )}
 
@@ -375,6 +424,10 @@ export default function AdminPage() {
                 {posts.length === 0 && (
                   <div className="text-center py-8 text-gray-500">No posts yet</div>
                 )}
+                <Pagination
+                  pagination={postsPagination}
+                  onPageChange={fetchPosts}
+                />
               </div>
             )}
           </>
@@ -392,6 +445,37 @@ function StatCard({ label, value, icon }: { label: string; value: number; icon?:
         {label}
       </div>
       <div className="text-2xl font-bold text-white">{value}</div>
+    </div>
+  );
+}
+
+function Pagination({ pagination, onPageChange }: { pagination: PaginationState; onPageChange: (page: number) => void }) {
+  if (pagination.pages <= 1) return null;
+
+  return (
+    <div className="flex items-center justify-between">
+      <div className="text-sm text-gray-400">
+        {pagination.total} total
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPageChange(pagination.page - 1)}
+          disabled={pagination.page <= 1}
+          className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <span className="text-gray-300 text-sm">
+          Page {pagination.page} of {pagination.pages}
+        </span>
+        <button
+          onClick={() => onPageChange(pagination.page + 1)}
+          disabled={pagination.page >= pagination.pages}
+          className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
     </div>
   );
 }

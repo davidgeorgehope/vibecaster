@@ -285,43 +285,74 @@ def is_user_admin(user_id: int) -> bool:
         return bool(row and row[0])
 
 
-def get_all_users() -> list:
-    """Get all users for admin view."""
+def get_all_users(page: int = 1, per_page: int = 20) -> dict:
+    """Get paginated users for admin view."""
+    offset = (page - 1) * per_page
     with get_db() as conn:
         cursor = conn.cursor()
+        # Get total count
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total = cursor.fetchone()[0]
+        # Get paginated results
         cursor.execute("""
             SELECT id, email, created_at, is_active, is_admin
             FROM users
             ORDER BY created_at DESC
-        """)
-        return [dict(row) for row in cursor.fetchall()]
+            LIMIT ? OFFSET ?
+        """, (per_page, offset))
+        users = [dict(row) for row in cursor.fetchall()]
+        return {
+            "items": users,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page
+        }
 
 
-def get_all_campaigns() -> list:
-    """Get all campaigns with user info for admin view."""
+def get_all_campaigns(page: int = 1, per_page: int = 20) -> dict:
+    """Get paginated campaigns with user info for admin view."""
+    offset = (page - 1) * per_page
     with get_db() as conn:
         cursor = conn.cursor()
+        # Get total count
+        cursor.execute("SELECT COUNT(*) FROM campaign")
+        total = cursor.fetchone()[0]
+        # Get paginated results
         cursor.execute("""
             SELECT c.*, u.email
             FROM campaign c
             JOIN users u ON c.user_id = u.id
             ORDER BY c.id DESC
-        """)
-        return [dict(row) for row in cursor.fetchall()]
+            LIMIT ? OFFSET ?
+        """, (per_page, offset))
+        campaigns = [dict(row) for row in cursor.fetchall()]
+        return {
+            "items": campaigns,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page
+        }
 
 
-def get_all_posts(limit: int = 50) -> list:
-    """Get recent posts across all users for admin view."""
+def get_all_posts(page: int = 1, per_page: int = 20) -> dict:
+    """Get paginated posts across all users for admin view."""
     import json
+    offset = (page - 1) * per_page
     with get_db() as conn:
         cursor = conn.cursor()
+        # Get total count
+        cursor.execute("SELECT COUNT(*) FROM post_history")
+        total = cursor.fetchone()[0]
+        # Get paginated results
         cursor.execute("""
             SELECT p.*, u.email
             FROM post_history p
             JOIN users u ON p.user_id = u.id
             ORDER BY p.created_at DESC
-            LIMIT ?
-        """, (limit,))
+            LIMIT ? OFFSET ?
+        """, (per_page, offset))
         posts = []
         for row in cursor.fetchall():
             post = dict(row)
@@ -331,7 +362,13 @@ def get_all_posts(limit: int = 50) -> list:
             if post.get('platforms'):
                 post['platforms'] = json.loads(post['platforms'])
             posts.append(post)
-        return posts
+        return {
+            "items": posts,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page
+        }
 
 
 def get_admin_stats() -> dict:
