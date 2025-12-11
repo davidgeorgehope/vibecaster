@@ -487,6 +487,13 @@ YOUR TASK:
 3. Extract ONLY the information about that one topic
 4. Match it with the most relevant URL from the AVAILABLE list
 
+URL SELECTION RULES (IMPORTANT):
+- STRONGLY prefer specific, deep-linked URLs over generic ones
+- AVOID generic URLs like: /blog, /news, /articles, /resources (these are index pages)
+- PREFER URLs with specific paths like: /blog/specific-article-title, /docs/feature-name, /announcements/release-v2
+- The URL should link to the SPECIFIC article/page about your selected topic, not a landing page
+- Only use a generic URL as a last resort if no specific URLs are available
+
 RESPOND IN THIS EXACT JSON FORMAT:
 {{
     "selected_topic": "Brief name of the topic (e.g., 'OpenTelemetry Collector filtering')",
