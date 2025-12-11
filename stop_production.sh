@@ -22,12 +22,12 @@ echo ""
 
 STOPPED=0
 
-# Stop Backend
+# Stop Backend - first by PID file, then by port
 if [ -f "$PIDS_DIR/backend.pid" ]; then
     BACKEND_PID=$(cat "$PIDS_DIR/backend.pid")
     if kill -0 $BACKEND_PID 2>/dev/null; then
         echo -e "${GREEN}Stopping Backend (PID: $BACKEND_PID)...${NC}"
-        kill $BACKEND_PID
+        kill $BACKEND_PID 2>/dev/null || true
 
         # Wait for graceful shutdown (max 10 seconds)
         for i in {1..10}; do
@@ -51,6 +51,18 @@ if [ -f "$PIDS_DIR/backend.pid" ]; then
     rm -f "$PIDS_DIR/backend.pid"
 else
     echo -e "${YELLOW}Backend not running (no PID file)${NC}"
+fi
+
+# Also kill any process on port 8001 that might have been missed
+BACKEND_PORT_PID=$(lsof -ti :8001 2>/dev/null)
+if [ ! -z "$BACKEND_PORT_PID" ]; then
+    echo -e "${YELLOW}Found process on port 8001 (PID: $BACKEND_PORT_PID), killing...${NC}"
+    kill $BACKEND_PORT_PID 2>/dev/null || true
+    sleep 2
+    if kill -0 $BACKEND_PORT_PID 2>/dev/null; then
+        kill -9 $BACKEND_PORT_PID 2>/dev/null || true
+    fi
+    STOPPED=1
 fi
 
 # Stop Frontend
@@ -87,6 +99,15 @@ if [ -f "$PIDS_DIR/frontend.pid" ]; then
     rm -f "$PIDS_DIR/frontend.pid"
 else
     echo -e "${YELLOW}Frontend not running (no PID file)${NC}"
+fi
+
+# Also kill any process on port 3000 that might have been missed
+FRONTEND_PORT_PID=$(lsof -ti :3000 2>/dev/null)
+if [ ! -z "$FRONTEND_PORT_PID" ]; then
+    echo -e "${YELLOW}Found process on port 3000 (PID: $FRONTEND_PORT_PID), killing...${NC}"
+    pkill -9 -P $FRONTEND_PORT_PID 2>/dev/null || true
+    kill -9 $FRONTEND_PORT_PID 2>/dev/null || true
+    STOPPED=1
 fi
 
 # Also kill any orphaned processes by port
@@ -168,6 +189,33 @@ if [ ! -z "$UVICORN_PIDS" ]; then
         kill -9 $pid 2>/dev/null || true
     done
     STOPPED=1
+fi
+
+# Final verification - ensure ports are free
+echo -e "${GREEN}Final verification...${NC}"
+sleep 1
+
+STILL_ON_3000=$(lsof -ti :3000 2>/dev/null)
+STILL_ON_8001=$(lsof -ti :8001 2>/dev/null)
+
+if [ ! -z "$STILL_ON_3000" ]; then
+    echo -e "${RED}⚠️  Port 3000 still in use by PID: $STILL_ON_3000${NC}"
+    echo -e "${RED}   Force killing...${NC}"
+    kill -9 $STILL_ON_3000 2>/dev/null || true
+fi
+
+if [ ! -z "$STILL_ON_8001" ]; then
+    echo -e "${RED}⚠️  Port 8001 still in use by PID: $STILL_ON_8001${NC}"
+    echo -e "${RED}   Force killing...${NC}"
+    kill -9 $STILL_ON_8001 2>/dev/null || true
+fi
+
+# Confirm ports are now free
+sleep 1
+if lsof -ti :3000 >/dev/null 2>&1 || lsof -ti :8001 >/dev/null 2>&1; then
+    echo -e "${RED}❌ WARNING: Some ports may still be in use${NC}"
+else
+    echo -e "   ✅ Ports 3000 and 8001 are free"
 fi
 
 echo ""

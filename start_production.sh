@@ -215,8 +215,20 @@ echo -e "   ✅ Backend started (PID: $BACKEND_PID)"
 echo -e "      Logs: $LOGS_DIR/backend.log"
 echo -e "      URL: http://localhost:$BACKEND_PORT"
 
-# Give backend a moment to fully bind to its port
-sleep 2
+# Wait for backend to be ready (check port is listening)
+echo -e "   Waiting for backend to be ready..."
+for i in {1..30}; do
+    if lsof -Pi :$BACKEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo -e "   ✅ Backend is listening on port $BACKEND_PORT"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo -e "${RED}❌ Backend failed to start within 30 seconds${NC}"
+        cat "$LOGS_DIR/backend.log" | tail -20
+        exit 1
+    fi
+    sleep 1
+done
 
 # ===== START FRONTEND =====
 echo -e "${GREEN}[5/5] Starting Frontend (Production Mode)...${NC}"
@@ -252,6 +264,21 @@ echo -e "   ✅ Frontend started (PID: $FRONTEND_PID)"
 echo -e "      Logs: $LOGS_DIR/frontend.log"
 echo -e "      URL: http://localhost:$FRONTEND_PORT"
 
+# Wait for frontend to be ready (check port is listening)
+echo -e "   Waiting for frontend to be ready..."
+for i in {1..30}; do
+    if lsof -Pi :$FRONTEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo -e "   ✅ Frontend is listening on port $FRONTEND_PORT"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo -e "${RED}❌ Frontend failed to start within 30 seconds${NC}"
+        cat "$LOGS_DIR/frontend.log" | tail -20
+        exit 1
+    fi
+    sleep 1
+done
+
 # ===== UPDATE NGINX IF USING NON-STANDARD PORTS =====
 if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRONTEND_PORT" != "3000" ]; }; then
     echo -e "${GREEN}Updating Nginx configuration for ports $FRONTEND_PORT and $BACKEND_PORT...${NC}"
@@ -277,37 +304,38 @@ if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRON
     fi
 fi
 
-# Wait for services to fully initialize
-echo -e "${GREEN}Waiting for services to initialize...${NC}"
-sleep 5
+# Verify services are responding to HTTP requests
+echo -e "${GREEN}Verifying services with health checks...${NC}"
 
-# Verify processes are still running
-echo -e "${GREEN}Verifying services...${NC}"
-
-if ! kill -0 $BACKEND_PID 2>/dev/null; then
-    echo -e "${RED}❌ Backend failed to start! Check logs:${NC}"
-    echo "   tail -f $LOGS_DIR/backend.log"
+# Check backend responds
+BACKEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$BACKEND_PORT/docs 2>/dev/null || echo "000")
+if [ "$BACKEND_STATUS" = "200" ]; then
+    echo -e "   ✅ Backend is responding (HTTP $BACKEND_STATUS)"
+else
+    echo -e "${RED}❌ Backend not responding (HTTP $BACKEND_STATUS)${NC}"
+    echo "   Check logs: tail -f $LOGS_DIR/backend.log"
     exit 1
 fi
-echo -e "   ✅ Backend is running"
 
-if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-    echo -e "${RED}❌ Frontend failed to start!${NC}"
-    echo -e "   Checking why..."
-
-    # Check if port is now in use (frontend might have crashed)
-    if lsof -i :$FRONTEND_PORT >/dev/null 2>&1; then
-        echo -e "   ${YELLOW}Port $FRONTEND_PORT IS in use by:${NC}"
-        lsof -i :$FRONTEND_PORT
-    else
-        echo -e "   ${YELLOW}Port $FRONTEND_PORT is FREE${NC}"
-    fi
-
-    echo -e "   ${RED}Check logs:${NC}"
-    echo "   tail -f $LOGS_DIR/frontend.log"
+# Check frontend responds
+FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$FRONTEND_PORT/ 2>/dev/null || echo "000")
+if [ "$FRONTEND_STATUS" = "200" ]; then
+    echo -e "   ✅ Frontend is responding (HTTP $FRONTEND_STATUS)"
+else
+    echo -e "${RED}❌ Frontend not responding (HTTP $FRONTEND_STATUS)${NC}"
+    echo "   Check logs: tail -f $LOGS_DIR/frontend.log"
     exit 1
 fi
-echo -e "   ✅ Frontend is running"
+
+# Update PID files with actual process IDs (in case they differ from nohup PID)
+ACTUAL_BACKEND_PID=$(lsof -ti :$BACKEND_PORT 2>/dev/null | head -1)
+ACTUAL_FRONTEND_PID=$(lsof -ti :$FRONTEND_PORT 2>/dev/null | head -1)
+if [ ! -z "$ACTUAL_BACKEND_PID" ]; then
+    echo $ACTUAL_BACKEND_PID > "$PIDS_DIR/backend.pid"
+fi
+if [ ! -z "$ACTUAL_FRONTEND_PID" ]; then
+    echo $ACTUAL_FRONTEND_PID > "$PIDS_DIR/frontend.pid"
+fi
 
 # ===== SUCCESS =====
 echo ""
