@@ -3,7 +3,8 @@
 # Vibecaster Production Stop Script
 # Gracefully stops both frontend and backend services
 
-set -e  # Exit on error
+# Don't use set -e - we want to continue even if some kills fail
+# set -e
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -22,12 +23,53 @@ echo ""
 
 STOPPED=0
 
+# Read the ports we were using (saved by start script)
+FRONTEND_PORT=3000
+BACKEND_PORT=8001
+if [ -f "$PIDS_DIR/frontend.port" ]; then
+    FRONTEND_PORT=$(cat "$PIDS_DIR/frontend.port")
+fi
+if [ -f "$PIDS_DIR/backend.port" ]; then
+    BACKEND_PORT=$(cat "$PIDS_DIR/backend.port")
+fi
+echo -e "Looking for services on ports: frontend=$FRONTEND_PORT, backend=$BACKEND_PORT"
+echo ""
+
+# Helper function to check if a PID is a Docker process (which we should NOT kill)
+is_docker_process() {
+    local pid=$1
+    local cmdline=$(ps -p $pid -o comm= 2>/dev/null)
+    if [[ "$cmdline" == *"docker"* ]]; then
+        return 0  # true, is docker
+    fi
+    # Also check if it's a docker-proxy
+    local full_cmd=$(ps -p $pid -o args= 2>/dev/null)
+    if [[ "$full_cmd" == *"docker-proxy"* ]]; then
+        return 0  # true, is docker
+    fi
+    return 1  # false, not docker
+}
+
+# Helper function to safely kill a process (skips Docker)
+safe_kill() {
+    local pid=$1
+    local signal=${2:-TERM}
+
+    if is_docker_process $pid; then
+        echo -e "${YELLOW}   Skipping PID $pid (Docker process)${NC}"
+        return 1
+    fi
+
+    kill -$signal $pid 2>/dev/null
+    return $?
+}
+
 # Stop Backend - first by PID file, then by port
 if [ -f "$PIDS_DIR/backend.pid" ]; then
     BACKEND_PID=$(cat "$PIDS_DIR/backend.pid")
     if kill -0 $BACKEND_PID 2>/dev/null; then
         echo -e "${GREEN}Stopping Backend (PID: $BACKEND_PID)...${NC}"
-        kill $BACKEND_PID 2>/dev/null || true
+        safe_kill $BACKEND_PID TERM
 
         # Wait for graceful shutdown (max 10 seconds)
         for i in {1..10}; do
@@ -41,7 +83,7 @@ if [ -f "$PIDS_DIR/backend.pid" ]; then
         # Force kill if still running
         if kill -0 $BACKEND_PID 2>/dev/null; then
             echo -e "${YELLOW}   ⚠️  Force killing backend...${NC}"
-            kill -9 $BACKEND_PID 2>/dev/null || true
+            safe_kill $BACKEND_PID 9
         fi
 
         STOPPED=1
@@ -53,17 +95,19 @@ else
     echo -e "${YELLOW}Backend not running (no PID file)${NC}"
 fi
 
-# Also kill any process on port 8001 that might have been missed
-BACKEND_PORT_PID=$(lsof -ti :8001 2>/dev/null)
-if [ ! -z "$BACKEND_PORT_PID" ]; then
-    echo -e "${YELLOW}Found process on port 8001 (PID: $BACKEND_PORT_PID), killing...${NC}"
-    kill $BACKEND_PORT_PID 2>/dev/null || true
-    sleep 2
-    if kill -0 $BACKEND_PORT_PID 2>/dev/null; then
-        kill -9 $BACKEND_PORT_PID 2>/dev/null || true
+# Also kill any non-Docker process on the backend port that might have been missed
+BACKEND_PORT_PIDS=$(lsof -ti :$BACKEND_PORT 2>/dev/null)
+for pid in $BACKEND_PORT_PIDS; do
+    if ! is_docker_process $pid; then
+        echo -e "${YELLOW}Found process on port $BACKEND_PORT (PID: $pid), killing...${NC}"
+        safe_kill $pid TERM
+        sleep 2
+        if kill -0 $pid 2>/dev/null; then
+            safe_kill $pid 9
+        fi
+        STOPPED=1
     fi
-    STOPPED=1
-fi
+done
 
 # Stop Frontend
 if [ -f "$PIDS_DIR/frontend.pid" ]; then
@@ -72,9 +116,8 @@ if [ -f "$PIDS_DIR/frontend.pid" ]; then
         echo -e "${GREEN}Stopping Frontend (PID: $FRONTEND_PID)...${NC}"
 
         # Kill the entire process group to catch all child processes (Next.js spawns children)
-        # Using pkill with parent PID to kill all descendants
         pkill -TERM -P $FRONTEND_PID 2>/dev/null || true
-        kill $FRONTEND_PID 2>/dev/null || true
+        safe_kill $FRONTEND_PID TERM
 
         # Wait for graceful shutdown (max 10 seconds)
         for i in {1..10}; do
@@ -89,7 +132,7 @@ if [ -f "$PIDS_DIR/frontend.pid" ]; then
         if kill -0 $FRONTEND_PID 2>/dev/null; then
             echo -e "${YELLOW}   ⚠️  Force killing frontend and children...${NC}"
             pkill -9 -P $FRONTEND_PID 2>/dev/null || true
-            kill -9 $FRONTEND_PID 2>/dev/null || true
+            safe_kill $FRONTEND_PID 9
         fi
 
         STOPPED=1
@@ -101,127 +144,81 @@ else
     echo -e "${YELLOW}Frontend not running (no PID file)${NC}"
 fi
 
-# Also kill any process on port 3000 that might have been missed
-FRONTEND_PORT_PID=$(lsof -ti :3000 2>/dev/null)
-if [ ! -z "$FRONTEND_PORT_PID" ]; then
-    echo -e "${YELLOW}Found process on port 3000 (PID: $FRONTEND_PORT_PID), killing...${NC}"
-    pkill -9 -P $FRONTEND_PORT_PID 2>/dev/null || true
-    kill -9 $FRONTEND_PORT_PID 2>/dev/null || true
-    STOPPED=1
-fi
-
-# Also kill any orphaned processes by port
-echo -e "${GREEN}Checking for orphaned processes...${NC}"
-
-# Function to kill all processes on a port (including children)
-kill_port_processes() {
-    local port=$1
-    local pids=$(lsof -ti :$port 2>/dev/null)
-
-    if [ ! -z "$pids" ]; then
-        echo -e "${YELLOW}Found process(es) on port $port (PIDs: $pids)${NC}"
-
-        # Kill each PID
-        for pid in $pids; do
-            # First try graceful kill
-            kill $pid 2>/dev/null || true
-        done
-
-        # Wait a moment for graceful shutdown
-        sleep 2
-
-        # Force kill any remaining processes
-        for pid in $pids; do
-            if kill -0 $pid 2>/dev/null; then
-                echo -e "${YELLOW}   Force killing PID $pid...${NC}"
-                kill -9 $pid 2>/dev/null || true
-            fi
-        done
-
-        # Double-check the port is free
-        local remaining=$(lsof -ti :$port 2>/dev/null)
-        if [ ! -z "$remaining" ]; then
-            echo -e "${RED}   Still found processes on port $port: $remaining${NC}"
-            echo -e "${RED}   Force killing all...${NC}"
-            for pid in $remaining; do
-                kill -9 $pid 2>/dev/null || true
-            done
-        fi
-
+# Also kill any non-Docker process on the frontend port that might have been missed
+FRONTEND_PORT_PIDS=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
+for pid in $FRONTEND_PORT_PIDS; do
+    if ! is_docker_process $pid; then
+        echo -e "${YELLOW}Found process on port $FRONTEND_PORT (PID: $pid), killing...${NC}"
+        pkill -9 -P $pid 2>/dev/null || true
+        safe_kill $pid 9
         STOPPED=1
-        return 0
     fi
-    return 1
-}
-
-# Kill any process on common frontend ports (starting with default 3000)
-for port in 3000 3001 3002 3003; do
-    kill_port_processes $port || true
-done
-
-# Kill any process on common backend ports (starting with new defaults)
-for port in 8001 8002 8003 8000; do
-    kill_port_processes $port || true
 done
 
 # Also kill any lingering Next.js or uvicorn processes related to vibecaster
 echo -e "${GREEN}Checking for lingering Node/Python processes...${NC}"
-VIBECASTER_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Find and kill any Next.js processes (including next-server which is the actual running process)
+# Find and kill any Next.js processes in the vibecaster directory
 # Check for both "next start" and "next-server" patterns
-NEXTJS_PIDS=$(ps aux | grep -E "(next start|next-server)" | grep -v grep | awk '{print $2}')
+NEXTJS_PIDS=$(ps aux | grep -E "(next start|next-server)" | grep "$BASE_DIR" | grep -v grep | awk '{print $2}')
 if [ ! -z "$NEXTJS_PIDS" ]; then
     echo -e "${YELLOW}Found lingering Next.js processes: $NEXTJS_PIDS${NC}"
     for pid in $NEXTJS_PIDS; do
-        # Kill process and any children
-        pkill -9 -P $pid 2>/dev/null || true
-        kill -9 $pid 2>/dev/null || true
+        if ! is_docker_process $pid; then
+            pkill -9 -P $pid 2>/dev/null || true
+            safe_kill $pid 9
+        fi
     done
     STOPPED=1
 fi
 
 # Find and kill any uvicorn processes in the vibecaster backend directory
-UVICORN_PIDS=$(ps aux | grep "uvicorn main:app" | grep "$VIBECASTER_DIR" | grep -v grep | awk '{print $2}')
+UVICORN_PIDS=$(ps aux | grep "uvicorn main:app" | grep "$BASE_DIR" | grep -v grep | awk '{print $2}')
 if [ ! -z "$UVICORN_PIDS" ]; then
     echo -e "${YELLOW}Found lingering uvicorn processes: $UVICORN_PIDS${NC}"
     for pid in $UVICORN_PIDS; do
-        kill -9 $pid 2>/dev/null || true
+        if ! is_docker_process $pid; then
+            safe_kill $pid 9
+        fi
     done
     STOPPED=1
 fi
 
-# Final verification - ensure ports are free
+# Final verification - check our specific ports (not hardcoded 3000/8001)
 echo -e "${GREEN}Final verification...${NC}"
 sleep 1
 
-STILL_ON_3000=$(lsof -ti :3000 2>/dev/null)
-STILL_ON_8001=$(lsof -ti :8001 2>/dev/null)
+# Check frontend port
+STILL_ON_FRONTEND=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
+for pid in $STILL_ON_FRONTEND; do
+    if ! is_docker_process $pid; then
+        echo -e "${RED}⚠️  Port $FRONTEND_PORT still in use by PID: $pid${NC}"
+        echo -e "${RED}   Force killing...${NC}"
+        safe_kill $pid 9
+    else
+        echo -e "${YELLOW}   Port $FRONTEND_PORT in use by Docker (ignoring)${NC}"
+    fi
+done
 
-if [ ! -z "$STILL_ON_3000" ]; then
-    echo -e "${RED}⚠️  Port 3000 still in use by PID: $STILL_ON_3000${NC}"
-    echo -e "${RED}   Force killing...${NC}"
-    kill -9 $STILL_ON_3000 2>/dev/null || true
-fi
+# Check backend port
+STILL_ON_BACKEND=$(lsof -ti :$BACKEND_PORT 2>/dev/null)
+for pid in $STILL_ON_BACKEND; do
+    if ! is_docker_process $pid; then
+        echo -e "${RED}⚠️  Port $BACKEND_PORT still in use by PID: $pid${NC}"
+        echo -e "${RED}   Force killing...${NC}"
+        safe_kill $pid 9
+    else
+        echo -e "${YELLOW}   Port $BACKEND_PORT in use by Docker (ignoring)${NC}"
+    fi
+done
 
-if [ ! -z "$STILL_ON_8001" ]; then
-    echo -e "${RED}⚠️  Port 8001 still in use by PID: $STILL_ON_8001${NC}"
-    echo -e "${RED}   Force killing...${NC}"
-    kill -9 $STILL_ON_8001 2>/dev/null || true
-fi
-
-# Confirm ports are now free
-sleep 1
-if lsof -ti :3000 >/dev/null 2>&1 || lsof -ti :8001 >/dev/null 2>&1; then
-    echo -e "${RED}❌ WARNING: Some ports may still be in use${NC}"
-else
-    echo -e "   ✅ Ports 3000 and 8001 are free"
-fi
+# Clean up port files
+rm -f "$PIDS_DIR/frontend.port" "$PIDS_DIR/backend.port"
 
 echo ""
 if [ $STOPPED -eq 1 ]; then
-    echo -e "${GREEN}✅ All services stopped successfully${NC}"
+    echo -e "${GREEN}✅ Vibecaster services stopped${NC}"
 else
-    echo -e "${YELLOW}No running services found${NC}"
+    echo -e "${YELLOW}No Vibecaster services were running${NC}"
 fi
 echo ""

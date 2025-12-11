@@ -279,30 +279,56 @@ for i in {1..30}; do
     sleep 1
 done
 
-# ===== UPDATE NGINX IF USING NON-STANDARD PORTS =====
-if [ "$NGINX_CONFIGURED" = true ] && { [ "$BACKEND_PORT" != "8001" ] || [ "$FRONTEND_PORT" != "3000" ]; }; then
+# ===== UPDATE NGINX TO MATCH ACTUAL PORTS =====
+if [ "$NGINX_CONFIGURED" = true ]; then
     echo -e "${GREEN}Updating Nginx configuration for ports $FRONTEND_PORT and $BACKEND_PORT...${NC}"
 
     if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
-        # We have sudo access, update nginx config
-        sudo sed -i "s|http://localhost:3000|http://localhost:$FRONTEND_PORT|g" /etc/nginx/sites-available/vibecaster
-        sudo sed -i "s|http://localhost:8001|http://localhost:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        # Update nginx config - handle both localhost and 127.0.0.1 formats
+        # Use regex to match any port number after the host
+        sudo sed -i -E "s|http://127\.0\.0\.1:[0-9]+(/\|;)|http://127.0.0.1:$FRONTEND_PORT\1|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i -E "s|http://localhost:[0-9]+(/\|;)|http://localhost:$FRONTEND_PORT\1|g" /etc/nginx/sites-available/vibecaster
 
-        # Test and reload nginx
-        if sudo nginx -t >/dev/null 2>&1; then
-            sudo systemctl reload nginx
-            echo -e "   ✅ Nginx configuration updated and reloaded"
+        # Now update backend-specific locations (api, auth, docs, openapi)
+        # These need to point to backend port, so we fix them after the blanket frontend update
+        sudo sed -i "/location \/api/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i "/location \/auth/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i "/location \/docs/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+        sudo sed -i "/location \/openapi/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
+
+        # Verify the changes were applied
+        NGINX_FRONTEND_PORT=$(grep -E "location / " -A5 /etc/nginx/sites-available/vibecaster | grep proxy_pass | grep -oE '[0-9]+' | tail -1)
+        NGINX_BACKEND_PORT=$(grep -E "location /api" -A5 /etc/nginx/sites-available/vibecaster | grep proxy_pass | grep -oE '[0-9]+' | tail -1)
+
+        if [ "$NGINX_FRONTEND_PORT" != "$FRONTEND_PORT" ] || [ "$NGINX_BACKEND_PORT" != "$BACKEND_PORT" ]; then
+            echo -e "${RED}   ❌ Nginx config update failed!${NC}"
+            echo -e "   Expected frontend:$FRONTEND_PORT backend:$BACKEND_PORT"
+            echo -e "   Got frontend:$NGINX_FRONTEND_PORT backend:$NGINX_BACKEND_PORT"
+            echo -e "   Please manually update /etc/nginx/sites-available/vibecaster"
         else
-            echo -e "${YELLOW}   ⚠️  Nginx config test failed, manual update may be needed${NC}"
+            # Test and reload nginx
+            if sudo nginx -t >/dev/null 2>&1; then
+                sudo systemctl reload nginx
+                echo -e "   ✅ Nginx configuration updated and reloaded"
+                echo -e "   Frontend -> 127.0.0.1:$FRONTEND_PORT"
+                echo -e "   Backend  -> 127.0.0.1:$BACKEND_PORT"
+            else
+                echo -e "${YELLOW}   ⚠️  Nginx config test failed${NC}"
+                sudo nginx -t
+            fi
         fi
     else
         echo -e "${YELLOW}   ⚠️  Cannot update nginx (no sudo access)${NC}"
         echo -e "   Manually update /etc/nginx/sites-available/vibecaster:"
-        echo -e "   - Change port 3000 to $FRONTEND_PORT"
-        echo -e "   - Change port 8001 to $BACKEND_PORT"
+        echo -e "   - Change frontend port to $FRONTEND_PORT"
+        echo -e "   - Change backend port to $BACKEND_PORT"
         echo -e "   Then: sudo nginx -t && sudo systemctl reload nginx"
     fi
 fi
+
+# Save the ports we used so stop script knows what to kill
+echo "$FRONTEND_PORT" > "$PIDS_DIR/frontend.port"
+echo "$BACKEND_PORT" > "$PIDS_DIR/backend.port"
 
 # Verify services are responding to HTTP requests
 echo -e "${GREEN}Verifying services with health checks...${NC}"
