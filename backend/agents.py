@@ -356,6 +356,19 @@ Provide:
                 )
             )
 
+            # Debug: Log the full response structure when text is None
+            if not response.text:
+                logger.warning(f"Response text is None/empty. Full response: {response}")
+                if hasattr(response, 'candidates') and response.candidates:
+                    for i, candidate in enumerate(response.candidates):
+                        logger.warning(f"Candidate {i}: finish_reason={getattr(candidate, 'finish_reason', 'N/A')}")
+                        if hasattr(candidate, 'safety_ratings'):
+                            logger.warning(f"Safety ratings: {candidate.safety_ratings}")
+                        if hasattr(candidate, 'content'):
+                            logger.warning(f"Content: {candidate.content}")
+                else:
+                    logger.warning("No candidates in response")
+
             # Extract URLs from grounding metadata and resolve redirects
             urls = []
             if hasattr(response, 'candidates') and len(response.candidates) > 0:
@@ -371,6 +384,9 @@ Provide:
                                 urls.append(actual_url)
                         logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
 
+            # Get response text, handling None case
+            response_text = response.text if response.text else f"General discussion about {user_prompt}"
+
             # Validate URLs if enabled
             if validate_urls and urls:
                 valid_url, html_content = validate_and_select_url(urls, fetch_content=True)
@@ -378,7 +394,7 @@ Provide:
                     logger.info(f"Found valid URL: {valid_url[:60]}...")
                     if html_content:
                         logger.info(f"Fetched {len(html_content)} bytes of HTML content for additional context")
-                    return response.text, [valid_url] + [u for u in urls if u != valid_url], html_content
+                    return response_text, [valid_url] + [u for u in urls if u != valid_url], html_content
                 else:
                     # All URLs failed validation - retry search
                     logger.warning(f"All {len(urls)} URLs failed validation on search attempt {search_attempt + 1}")
@@ -386,10 +402,10 @@ Provide:
                         continue  # Retry the search
                     else:
                         logger.error("All search retries exhausted with no valid URLs")
-                        return response.text, urls, None  # Return anyway with unvalidated URLs
+                        return response_text, urls, None  # Return anyway with unvalidated URLs
             else:
                 # No validation requested or no URLs found
-                return response.text, urls, None
+                return response_text, urls, None
 
         except Exception as e:
             logger.error(f"Error in search attempt {search_attempt + 1}: {e}", exc_info=True)
@@ -1370,7 +1386,11 @@ def run_agent_cycle(user_id: int):
         # Returns raw search results - URL validation happens in topic selection
         logger.info("[1/8] Searching for trending topics...")
         search_context, source_urls, _ = search_trending_topics(user_prompt, refined_persona, recent_topics, validate_urls=False)
-        logger.info(f"Found context: {search_context[:200]}...")
+        if search_context:
+            logger.info(f"Found context: {search_context[:200]}...")
+        else:
+            logger.warning("No search context found - search may have failed")
+            return []  # Can't continue without search context
         logger.info(f"Found {len(source_urls)} source URLs")
 
         # Step 2: Select ONE topic from search results to focus on
@@ -1378,7 +1398,11 @@ def run_agent_cycle(user_id: int):
         # IMPORTANT: Also validates the selected URL (including soft 404 detection)
         logger.info("[2/8] Selecting single topic to focus on (with URL validation)...")
         focused_context, source_url, html_content = select_single_topic(search_context, source_urls, user_prompt, recent_topics)
-        logger.info(f"Focused context: {focused_context[:200]}...")
+        if focused_context:
+            logger.info(f"Focused context: {focused_context[:200]}...")
+        else:
+            logger.warning("No focused context returned - topic selection may have failed")
+            return []  # Can't continue without focused context
         if source_url:
             logger.info(f"✅ Selected & validated source URL: {source_url[:80]}...")
         else:
