@@ -2,7 +2,9 @@ import os
 import sys
 import time
 import re
+import html
 from typing import Optional, Dict, Any, Tuple
+from urllib.parse import urlparse
 from google import genai
 from google.genai import types
 import tweepy
@@ -58,14 +60,87 @@ def resolve_redirect_url(url: str) -> str:
     Returns:
         The final destination URL after following all redirects
     """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; Vibecaster/1.0; +https://vibecaster.app)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    }
+
+    # HEAD is cheapest, but some redirectors (and some CDNs) don't support it well.
     try:
-        response = requests.head(url, allow_redirects=True, timeout=10)
-        final_url = response.url
-        logger.info(f"Resolved redirect: {url[:60]}... -> {final_url}")
+        response = requests.head(url, allow_redirects=True, timeout=10, headers=headers)
+        if response.url and response.url != url:
+            logger.info(f"Resolved redirect (HEAD): {url[:60]}... -> {response.url}")
+            return response.url
+    except Exception as e:
+        logger.debug(f"HEAD redirect resolution failed for {url[:60]}...: {e}")
+
+    # Fallback: GET with streaming (do not download full body).
+    try:
+        response = requests.get(url, allow_redirects=True, timeout=10, headers=headers, stream=True)
+        final_url = response.url or url
+        response.close()
+        if final_url != url:
+            logger.info(f"Resolved redirect (GET): {url[:60]}... -> {final_url}")
         return final_url
     except Exception as e:
         logger.warning(f"Could not resolve redirect for {url[:60]}...: {e}")
         return url  # Return original URL if resolution fails
+
+
+def _clean_url_text(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    cleaned = str(url).strip().strip('"\'' ).strip()
+    cleaned = cleaned.rstrip(").,;")
+    if not cleaned:
+        return None
+    if cleaned.lower() in {"null", "none"}:
+        return None
+    return cleaned
+
+
+def _is_youtube_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+
+
+def _extract_html_title(html_content: Optional[str]) -> str:
+    if not html_content:
+        return ""
+    match = re.search(r"<title[^>]*>(.*?)</title>", html_content, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    title = re.sub(r"\s+", " ", match.group(1)).strip()
+    return html.unescape(title)
+
+
+_TOPIC_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "into",
+    "is", "it", "its", "of", "on", "or", "our", "that", "the", "this", "to", "via", "we", "with",
+}
+
+
+def _url_seems_relevant_to_topic(selected_topic: str, final_url: str, html_content: Optional[str]) -> bool:
+    """
+    Lightweight sanity check to prevent obviously mismatched links being posted.
+    """
+    if not selected_topic:
+        return True
+
+    tokens = [
+        t for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9\\-]{2,}", selected_topic.lower())
+        if t not in _TOPIC_STOPWORDS
+    ]
+    if not tokens:
+        return True
+
+    title = _extract_html_title(html_content).lower()
+    haystack = f"{final_url.lower()} {title}"
+    # If NONE of the meaningful topic tokens appear in the URL or <title>, it's very likely unrelated.
+    return any(token in haystack for token in tokens[:8])
 
 
 def is_soft_404(html_content: str, url: str) -> bool:
@@ -136,7 +211,7 @@ def is_soft_404(html_content: str, url: str) -> bool:
     return False
 
 
-def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[str], Optional[int]]:
+def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[str], Optional[int], str]:
     """
     Validate a URL by fetching it and checking for 404 or other errors.
     Also detects "soft 404s" - pages that return 200 but show error content.
@@ -147,10 +222,11 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
         fetch_content: If True, fetches and returns raw HTML content
 
     Returns:
-        Tuple of (is_valid, html_content, status_code)
+        Tuple of (is_valid, html_content, status_code, final_url)
         - is_valid: True if URL returns 2xx status AND is not a soft 404
         - html_content: Raw HTML if fetch_content=True and URL is valid, else None
         - status_code: HTTP status code or None if request failed
+        - final_url: Final URL after following redirects (best effort)
     """
     try:
         headers = {
@@ -164,6 +240,7 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
             response = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
 
         status_code = response.status_code
+        final_url = response.url or url
         is_valid = 200 <= status_code < 300
 
         if is_valid and fetch_content:
@@ -171,23 +248,23 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
             # Check for soft 404 (200 status but 404-like content)
             if is_soft_404(html_content, url):
                 logger.warning(f"URL is soft 404: {url[:60]}... (status: {status_code})")
-                return False, None, 404  # Treat as 404
+                return False, None, 404, final_url  # Treat as 404
             logger.info(f"URL validated successfully: {url[:60]}... (status: {status_code})")
-            return True, html_content, status_code
+            return True, html_content, status_code, final_url
         elif is_valid:
             # HEAD request - can't check for soft 404
             logger.info(f"URL validated successfully (HEAD): {url[:60]}... (status: {status_code})")
-            return True, None, status_code
+            return True, None, status_code, final_url
         else:
             logger.warning(f"URL validation failed: {url[:60]}... (status: {status_code})")
-            return False, None, status_code
+            return False, None, status_code, final_url
 
     except requests.exceptions.Timeout:
         logger.warning(f"URL validation timeout: {url[:60]}...")
-        return False, None, None
+        return False, None, None, url
     except requests.exceptions.RequestException as e:
         logger.warning(f"URL validation error for {url[:60]}...: {e}")
-        return False, None, None
+        return False, None, None, url
 
 
 def validate_and_select_url(urls: list, fetch_content: bool = True) -> Tuple[Optional[str], Optional[str]]:
@@ -202,9 +279,9 @@ def validate_and_select_url(urls: list, fetch_content: bool = True) -> Tuple[Opt
         Tuple of (valid_url, html_content) or (None, None) if all URLs are invalid
     """
     for url in urls:
-        is_valid, html_content, status_code = validate_url(url, fetch_content)
+        is_valid, html_content, status_code, final_url = validate_url(url, fetch_content)
         if is_valid:
-            return url, html_content
+            return final_url, html_content
         elif status_code == 404:
             logger.info(f"Skipping 404 URL, trying next: {url[:60]}...")
         else:
@@ -458,7 +535,25 @@ AVOID these recently covered topics - pick something DIFFERENT:
                 logger.warning("No more URLs available to try")
                 return search_context, None, None
 
-            urls_text = "\n".join([f"- {url}" for url in available_urls[:5]])
+            # Prefer non-video sources when we have them (prevents random YouTube links).
+            non_video_urls = [url for url in available_urls if not _is_youtube_url(url)]
+            urls_for_selection = non_video_urls or available_urls
+
+            # Keep the prompt compact but include enough URLs to find the right match.
+            max_urls_in_prompt = 20
+            max_chars_in_prompt = 2500
+            urls_in_prompt = []
+            current_chars = 0
+            for url in urls_for_selection:
+                if len(urls_in_prompt) >= max_urls_in_prompt:
+                    break
+                # +6 to account for numbering and formatting
+                if current_chars + len(url) + 6 > max_chars_in_prompt:
+                    break
+                urls_in_prompt.append(url)
+                current_chars += len(url) + 6
+
+            urls_text = "\n".join([f"{i}. {url}" for i, url in enumerate(urls_in_prompt, start=1)])
 
             # Add context about excluded URLs if we're retrying
             excluded_text = ""
@@ -498,7 +593,8 @@ RESPOND IN THIS EXACT JSON FORMAT:
 {{
     "selected_topic": "Brief name of the topic (e.g., 'OpenTelemetry Collector filtering')",
     "focused_context": "All relevant details about THIS ONE topic only. Include specific facts, features, benefits, or insights. 2-4 sentences.",
-    "selected_url": "The URL most relevant to this topic (MUST be from the available list, or null if none match)",
+    "selected_url_index": "The NUMBER of the URL above most relevant to this topic (1-based), or null if none match",
+    "selected_url": "OPTIONAL: the exact URL string from the list above, or null if none match",
     "reasoning": "Why this topic is the best choice for a social media post"
 }}
 """
@@ -520,21 +616,53 @@ RESPOND IN THIS EXACT JSON FORMAT:
 
             selected_topic = result.get("selected_topic", "")
             focused_context = result.get("focused_context", search_context)
-            selected_url = result.get("selected_url")
+            selected_url_index = result.get("selected_url_index")
+            selected_url_raw = result.get("selected_url")
             reasoning = result.get("reasoning", "")
 
             logger.info(f"🎯 Selected single topic: {selected_topic}")
             logger.info(f"📝 Reasoning: {reasoning}")
-            logger.info(f"🔗 Selected URL: {selected_url}")
+            logger.info(f"🔢 Selected URL index: {selected_url_index}")
+            logger.info(f"🔗 Selected URL (raw): {selected_url_raw}")
+
+            selected_url: Optional[str] = None
+            if isinstance(selected_url_index, int) and 1 <= selected_url_index <= len(urls_in_prompt):
+                selected_url = urls_in_prompt[selected_url_index - 1]
+            else:
+                selected_url = _clean_url_text(selected_url_raw)
+
+            if selected_url and selected_url not in available_urls:
+                logger.warning("❌ Model selected a URL that was not in the available list; retrying without link")
+                excluded_urls.append(selected_url)
+                continue
 
             # VALIDATE the selected URL before returning
             if selected_url:
                 logger.info(f"🔍 Validating selected URL: {selected_url[:60]}...")
-                is_valid, html_content, status_code = validate_url(selected_url, fetch_content=True)
+                is_valid, html_content, status_code, final_url = validate_url(selected_url, fetch_content=True)
 
                 if is_valid:
-                    logger.info(f"✅ URL validated successfully")
-                    return focused_context, selected_url, html_content
+                    # Prefer posting the final resolved URL (avoids Vertex grounding redirect links).
+                    chosen_url = final_url or selected_url
+
+                    # If we have non-video options, reject links that ultimately resolve to YouTube.
+                    if non_video_urls and _is_youtube_url(chosen_url):
+                        logger.warning("❌ Selected URL resolves to YouTube but non-video sources exist; retrying")
+                        excluded_urls.extend([selected_url, chosen_url])
+                        continue
+
+                    # Lightweight relevance sanity check (prevents obviously mismatched links).
+                    if not _url_seems_relevant_to_topic(selected_topic, chosen_url, html_content):
+                        page_title = _extract_html_title(html_content)
+                        logger.warning(
+                            "❌ Selected URL looks unrelated to selected topic; retrying "
+                            f"(topic={selected_topic!r}, title={page_title[:80]!r}, url={chosen_url[:80]}...)"
+                        )
+                        excluded_urls.extend([selected_url, chosen_url])
+                        continue
+
+                    logger.info(f"✅ URL validated successfully -> {chosen_url}")
+                    return focused_context, chosen_url, html_content
                 else:
                     logger.warning(f"❌ Selected URL failed validation (status: {status_code})")
                     excluded_urls.append(selected_url)

@@ -22,7 +22,7 @@ def test_url_integration():
     # Test 1: Search with URL extraction
     print("\n[Test 1] Searching for trending topics with URL extraction...")
     try:
-        search_context, source_urls = search_trending_topics(user_prompt, refined_persona)
+        search_context, source_urls, _html_content = search_trending_topics(user_prompt, refined_persona)
 
         print(f"✓ Search completed")
         print(f"✓ Found {len(source_urls)} URLs")
