@@ -497,28 +497,25 @@ def select_single_topic(search_context: str, source_urls: list, user_prompt: str
     Select ONE specific topic from search results to focus the post on.
     This prevents the post from mixing multiple concepts together.
 
-    IMPORTANT: Validates the selected URL before returning. If the URL is invalid
-    (404, soft 404, etc.), will attempt to select a different topic.
-
     Args:
         search_context: Raw search results (may contain multiple topics)
         source_urls: List of URLs from search results
         user_prompt: User's campaign prompt for context
         recent_topics: Topics to avoid (recently covered)
-        max_selection_attempts: Number of times to retry with different topics if URL is bad
+        max_selection_attempts: Number of times to retry if URL is truly broken (404)
 
     Returns:
         Tuple of (focused_context, selected_url, html_content) where:
         - focused_context: Context about ONE specific topic only
-        - selected_url: The VALIDATED URL most relevant to that topic
-        - html_content: The HTML content from the validated URL (for additional context)
+        - selected_url: The URL selected by the LLM (validated for 404s only)
+        - html_content: The HTML content from the URL (for additional context)
     """
-    excluded_urls = []  # Track URLs we've already tried and failed
+    broken_urls = []  # Only track URLs that are actually broken (404, etc.)
 
     for attempt in range(max_selection_attempts):
         try:
             if attempt > 0:
-                logger.info(f"Topic selection retry {attempt + 1}/{max_selection_attempts} - previous URL was invalid")
+                logger.info(f"Topic selection retry {attempt + 1}/{max_selection_attempts} - previous URL was broken")
 
             avoidance_text = ""
             if recent_topics:
@@ -529,8 +526,8 @@ AVOID these recently covered topics - pick something DIFFERENT:
 - {topics_str}
 """
 
-            # Filter out URLs we've already tried and failed
-            available_urls = [url for url in source_urls if url not in excluded_urls]
+            # Filter out URLs that are actually broken
+            available_urls = [url for url in source_urls if url not in broken_urls]
             if not available_urls:
                 logger.warning("No more URLs available to try")
                 return search_context, None, None
@@ -555,13 +552,13 @@ AVOID these recently covered topics - pick something DIFFERENT:
 
             urls_text = "\n".join([f"{i}. {url}" for i, url in enumerate(urls_in_prompt, start=1)])
 
-            # Add context about excluded URLs if we're retrying
-            excluded_text = ""
-            if excluded_urls:
-                excluded_text = f"""
+            # Add context about broken URLs if we're retrying
+            broken_text = ""
+            if broken_urls:
+                broken_text = f"""
 
 DO NOT select these URLs (they are broken/unavailable):
-{chr(10).join([f'- {url}' for url in excluded_urls])}
+{chr(10).join([f'- {url}' for url in broken_urls])}
 """
 
             selection_prompt = f"""
@@ -574,7 +571,7 @@ SEARCH RESULTS (contains multiple topics/articles):
 
 AVAILABLE SOURCE URLs:
 {urls_text}
-{avoidance_text}{excluded_text}
+{avoidance_text}{broken_text}
 
 YOUR TASK:
 1. Identify all the distinct topics/concepts in the search results
@@ -625,61 +622,42 @@ RESPOND IN THIS EXACT JSON FORMAT:
             logger.info(f"🔢 Selected URL index: {selected_url_index}")
             logger.info(f"🔗 Selected URL (raw): {selected_url_raw}")
 
+            # Get URL from index first (most reliable), fall back to raw URL
             selected_url: Optional[str] = None
             if isinstance(selected_url_index, int) and 1 <= selected_url_index <= len(urls_in_prompt):
                 selected_url = urls_in_prompt[selected_url_index - 1]
             else:
                 selected_url = _clean_url_text(selected_url_raw)
 
-            if selected_url and selected_url not in available_urls:
-                logger.warning("❌ Model selected a URL that was not in the available list; retrying without link")
-                excluded_urls.append(selected_url)
-                continue
-
-            # VALIDATE the selected URL before returning
-            if selected_url:
-                logger.info(f"🔍 Validating selected URL: {selected_url[:60]}...")
-                is_valid, html_content, status_code, final_url = validate_url(selected_url, fetch_content=True)
-
-                if is_valid:
-                    # Prefer posting the final resolved URL (avoids Vertex grounding redirect links).
-                    chosen_url = final_url or selected_url
-
-                    # If we have non-video options, reject links that ultimately resolve to YouTube.
-                    if non_video_urls and _is_youtube_url(chosen_url):
-                        logger.warning("❌ Selected URL resolves to YouTube but non-video sources exist; retrying")
-                        excluded_urls.extend([selected_url, chosen_url])
-                        continue
-
-                    # Lightweight relevance sanity check (prevents obviously mismatched links).
-                    if not _url_seems_relevant_to_topic(selected_topic, chosen_url, html_content):
-                        page_title = _extract_html_title(html_content)
-                        logger.warning(
-                            "❌ Selected URL looks unrelated to selected topic; retrying "
-                            f"(topic={selected_topic!r}, title={page_title[:80]!r}, url={chosen_url[:80]}...)"
-                        )
-                        excluded_urls.extend([selected_url, chosen_url])
-                        continue
-
-                    logger.info(f"✅ URL validated successfully -> {chosen_url}")
-                    return focused_context, chosen_url, html_content
-                else:
-                    logger.warning(f"❌ Selected URL failed validation (status: {status_code})")
-                    excluded_urls.append(selected_url)
-                    # Continue to next attempt
-            else:
-                # No URL selected - return context without URL
+            # No URL selected by LLM - return context without URL
+            if not selected_url:
                 logger.info("No URL selected for this topic")
                 return focused_context, None, None
+
+            # Validate the URL - only reject if it's actually broken (404, soft-404)
+            logger.info(f"🔍 Validating selected URL: {selected_url[:60]}...")
+            is_valid, html_content, status_code, final_url = validate_url(selected_url, fetch_content=True)
+
+            if is_valid:
+                # Use the final resolved URL (handles redirects)
+                chosen_url = final_url or selected_url
+                logger.info(f"✅ URL validated successfully -> {chosen_url}")
+                return focused_context, chosen_url, html_content
+            else:
+                # URL is actually broken - mark it and retry with a different topic
+                logger.warning(f"❌ URL is broken (status: {status_code}) - will retry with different topic")
+                broken_urls.append(selected_url)
+                if final_url and final_url != selected_url:
+                    broken_urls.append(final_url)
+                continue
 
         except Exception as e:
             logger.error(f"Error in topic selection attempt {attempt + 1}: {e}", exc_info=True)
             if attempt == max_selection_attempts - 1:
-                # Final attempt failed
                 break
 
     # All attempts exhausted - return context without URL
-    logger.warning(f"All {max_selection_attempts} topic selection attempts failed to find valid URL")
+    logger.warning(f"All {max_selection_attempts} topic selection attempts failed to find working URL")
     return search_context, None, None
 
 
