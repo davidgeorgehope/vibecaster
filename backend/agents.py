@@ -1762,6 +1762,135 @@ def generate_from_url(user_id: int, url: str) -> Dict[str, Any]:
         return result
 
 
+def generate_from_url_stream(user_id: int, url: str):
+    """
+    Stream social media post generation from a URL with progress updates.
+
+    Yields JSON strings with status updates and generated content.
+    This avoids timeout issues by streaming progress as content is generated.
+
+    Args:
+        user_id: The user ID (for campaign config lookup)
+        url: The URL to generate posts from
+
+    Yields:
+        JSON strings with status/content updates
+    """
+    import json
+
+    try:
+        logger.info("=" * 60)
+        logger.info(f"[STREAMING] Generating posts from URL for user {user_id}")
+        logger.info(f"URL: {url}")
+        logger.info("=" * 60)
+
+        # Step 1: Validate and fetch URL content
+        yield json.dumps({"status": "fetching", "message": "Fetching URL content..."})
+
+        is_valid, html_content, status_code, final_url = validate_url(url, fetch_content=True)
+
+        if not is_valid:
+            error_msg = f"Could not fetch content from URL (status: {status_code})"
+            logger.warning(error_msg)
+            yield json.dumps({"status": "error", "error": error_msg})
+            return
+
+        # Extract title and content
+        title = _extract_html_title(html_content)
+
+        import re as regex_module
+        body_text = regex_module.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=regex_module.DOTALL | regex_module.IGNORECASE)
+        body_text = regex_module.sub(r'<style[^>]*>.*?</style>', '', body_text, flags=regex_module.DOTALL | regex_module.IGNORECASE)
+        body_text = regex_module.sub(r'<[^>]+>', ' ', body_text)
+        body_text = regex_module.sub(r'\s+', ' ', body_text).strip()
+        body_text = body_text[:3000]
+
+        search_context = f"Title: {title}\n\nContent Summary:\n{body_text}\n\nSource URL: {final_url}"
+
+        yield json.dumps({"status": "content", "title": title, "source_url": final_url})
+
+        # Step 2: Get campaign config or use defaults
+        campaign = get_campaign(user_id)
+
+        if campaign and campaign.get("refined_persona"):
+            refined_persona = campaign["refined_persona"]
+            visual_style = campaign.get("visual_style", "")
+            user_prompt = campaign.get("user_prompt", "Create engaging social media content")
+        else:
+            refined_persona = "A knowledgeable content creator who shares interesting insights in an engaging, accessible way. Professional yet approachable tone."
+            visual_style = "Clean, modern digital illustration style. Professional and eye-catching visuals that complement the content."
+            user_prompt = "Create engaging social media content about this topic"
+
+        # Step 3: Generate X/Twitter post
+        yield json.dumps({"status": "generating_x", "message": "Generating X post..."})
+
+        x_post = None
+        try:
+            x_post, _ = generate_x_post(
+                search_context=search_context,
+                refined_persona=refined_persona,
+                user_prompt=user_prompt,
+                source_url=final_url,
+                recent_topics=[]
+            )
+            yield json.dumps({"status": "x_post", "x_post": x_post})
+            logger.info(f"X post generated ({len(x_post)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to generate X post: {e}")
+            yield json.dumps({"status": "x_post_error", "error": str(e)})
+
+        # Step 4: Generate LinkedIn post
+        yield json.dumps({"status": "generating_linkedin", "message": "Generating LinkedIn post..."})
+
+        linkedin_post = None
+        try:
+            linkedin_post = generate_linkedin_post(
+                search_context=search_context,
+                refined_persona=refined_persona,
+                user_prompt=user_prompt,
+                source_url=final_url,
+                recent_topics=[]
+            )
+            yield json.dumps({"status": "linkedin_post", "linkedin_post": linkedin_post})
+            logger.info(f"LinkedIn post generated ({len(linkedin_post)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to generate LinkedIn post: {e}")
+            yield json.dumps({"status": "linkedin_post_error", "error": str(e)})
+
+        # Step 5: Generate image
+        yield json.dumps({"status": "generating_image", "message": "Generating image..."})
+
+        try:
+            image_context_post = x_post or linkedin_post
+            if image_context_post:
+                image_bytes = generate_image(
+                    post_text=image_context_post,
+                    visual_style=visual_style,
+                    user_prompt=user_prompt,
+                    topic_context=search_context[:1000]
+                )
+                if image_bytes:
+                    image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+                    yield json.dumps({"status": "image", "image_base64": image_b64})
+                    logger.info(f"Image generated ({len(image_bytes)} bytes)")
+                else:
+                    yield json.dumps({"status": "image_error", "error": "Image generation returned None"})
+        except Exception as e:
+            logger.error(f"Failed to generate image: {e}")
+            yield json.dumps({"status": "image_error", "error": str(e)})
+
+        # Complete
+        yield json.dumps({"status": "complete", "source_url": final_url})
+
+        logger.info("=" * 60)
+        logger.info("[STREAMING] Generation complete")
+        logger.info("=" * 60)
+
+    except Exception as e:
+        logger.error(f"Error in generate_from_url_stream: {e}", exc_info=True)
+        yield json.dumps({"status": "error", "error": str(e)})
+
+
 def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optional[str],
                      image_base64: Optional[str], platforms: list) -> Dict[str, Any]:
     """
@@ -1828,3 +1957,324 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
             result["errors"]["linkedin"] = str(e)
 
     return result
+
+
+# ===== POST BUILDER CHAT =====
+
+POST_BUILDER_SYSTEM_PROMPT = """You are a social media campaign assistant. Generate engaging posts based on REAL content that has been searched for you.
+
+UNDERSTAND CREATIVE PERSONAS:
+When users describe a creative format like "mario and luigi explain X" or "anime girl teaching Y", this is their PERSONA/VOICE.
+- The persona defines HOW to present content (characters, style, tone, voice)
+- Preserve the persona EXACTLY in the posts you generate
+
+YOUR TASK:
+You will receive:
+1. The user's original request (with their persona/topic idea)
+2. REAL searched content about the topic (already fetched for you)
+
+You must:
+1. Call generate_posts() to create posts that present the REAL content IN THE PERSONA'S VOICE
+2. Include a visual_style that describes how to visualize the persona for image generation
+
+Example:
+- User says: "mario and luigi explain kubernetes"
+- Content: [Real article about Kubernetes 1.32 release...]
+- You call generate_posts with:
+  - persona: "Mario and Luigi characters, playful Italian-American voice"
+  - x_post: "Mama mia! 🍄 Kubernetes 1.32 just dropped..." (using REAL facts from content)
+  - linkedin_post: "It's-a me, Mario! Let me and my brother Luigi tell you about..." (using REAL facts)
+  - visual_style: "Mario and Luigi cartoon characters in Nintendo pixel art style, standing at a whiteboard, explaining Kubernetes concepts, video game aesthetic"
+  - source_url: The URL from the content
+
+IMPORTANT: Use ONLY facts from the provided content. The visual_style should capture how to DRAW the persona."""
+
+# Tool definitions for post builder - just function declarations
+# Google Search grounding is added separately when needed
+POST_BUILDER_FUNCTION_TOOL = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="search_and_fetch",
+            description="Search for current content about a topic and fetch article content. Call this FIRST before generating posts to get real, timely information.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "topic": types.Schema(
+                        type="STRING",
+                        description="The topic to search for (e.g., 'kubernetes best practices', 'observability trends', 'AI automation')"
+                    ),
+                    "persona_context": types.Schema(
+                        type="STRING",
+                        description="Brief description of the creative persona/voice to help find relevant content"
+                    )
+                },
+                required=["topic"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="generate_posts",
+            description="Generate social media posts combining the persona with fetched content. Call this AFTER search_and_fetch.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "persona": types.Schema(
+                        type="STRING",
+                        description="The creative persona/voice (e.g., 'Mario and Luigi characters with Italian-American flair')"
+                    ),
+                    "x_post": types.Schema(
+                        type="STRING",
+                        description="The X/Twitter post (under 250 chars, in the persona's voice)"
+                    ),
+                    "linkedin_post": types.Schema(
+                        type="STRING",
+                        description="The LinkedIn post (1-3 paragraphs, in the persona's voice)"
+                    ),
+                    "source_url": types.Schema(
+                        type="STRING",
+                        description="The source URL for the content"
+                    ),
+                    "visual_style": types.Schema(
+                        type="STRING",
+                        description="Visual style for image generation that captures the persona (e.g., 'Mario and Luigi cartoon characters in Nintendo pixel art style, video game aesthetic, standing at whiteboard')"
+                    )
+                },
+                required=["persona", "x_post", "linkedin_post", "visual_style"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="create_campaign_prompt",
+            description="Generate a campaign configuration that can be used to set up automated posting. Call this when user wants to create a campaign.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "campaign_prompt": types.Schema(
+                        type="STRING",
+                        description="The full campaign prompt describing persona, topics, and style"
+                    ),
+                    "refined_persona": types.Schema(
+                        type="STRING",
+                        description="Detailed persona description for post generation"
+                    ),
+                    "visual_style": types.Schema(
+                        type="STRING",
+                        description="Visual/image style description"
+                    )
+                },
+                required=["campaign_prompt", "refined_persona", "visual_style"]
+            )
+        )
+    ]
+)
+
+
+def chat_post_builder_stream(message: str, history: list[dict], user_id: int = None):
+    """
+    Stream a chat response for the post builder using a two-call approach:
+    1. Search for real content using Google grounding (via search_trending_topics)
+    2. Generate posts using function calling with the searched content
+
+    Args:
+        message: The user's current message
+        history: List of previous messages [{"role": "user"|"model", "content": "..."}]
+        user_id: Optional user ID to load campaign persona
+
+    Yields:
+        Text chunks or JSON with tool results
+    """
+    import json
+    import base64
+
+    try:
+        # Check if this is a simple conversational message or a post generation request
+        message_lower = message.lower()
+
+        # Simple responses for greetings/questions
+        if any(word in message_lower for word in ['hello', 'hi ', 'hey', 'help', 'what can you']):
+            yield "Hello! I'm your Post Builder assistant. Tell me what you'd like to post about and I'll help create engaging content.\n\n"
+            yield "For example, try: 'mario and luigi explain observability' or 'create a post about kubernetes best practices'"
+            return
+
+        # Extract topic from user's message for searching
+        # The message format is typically: "[persona] explain/about [topic]" or just "[topic]"
+        yield f"🔍 Analyzing your request and searching for content...\n\n"
+
+        # STEP 1: Search for real content using Google grounding
+        try:
+            search_context, urls, html_content = search_trending_topics(
+                user_prompt=f"Find current news or articles about: {message}",
+                refined_persona="informative content finder for social media posts",
+                recent_topics=[],
+                validate_urls=True
+            )
+
+            focused_context = search_context
+            selected_url = urls[0] if urls else None
+
+            if urls:
+                # Get focused content from one URL
+                try:
+                    focused_context, selected_url, _ = select_single_topic(
+                        search_context, urls, message
+                    )
+                    yield f"📄 Found content from: {selected_url}\n\n"
+                except Exception as e:
+                    logger.warning(f"select_single_topic failed: {e}, using broad context")
+                    yield f"📄 Found relevant content...\n\n"
+            else:
+                yield f"📄 Found some context to work with...\n\n"
+
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            yield f"⚠️ Search encountered an issue. Generating posts with general knowledge...\n\n"
+            focused_context = f"Topic: {message}"
+            selected_url = None
+
+        # STEP 2: Call LLM with function calling to generate posts
+        # Build the prompt with the searched content
+        generation_prompt = f"""User's original request: {message}
+
+REAL CONTENT FOUND (use these facts in your posts):
+{focused_context[:3000]}
+
+Source URL: {selected_url or 'No specific URL found'}
+
+Now call generate_posts() to create posts that:
+1. Present this REAL content in the persona's voice from the user's request
+2. Include a visual_style that describes how to DRAW/VISUALIZE the persona for image generation
+"""
+
+        # Get campaign persona if available
+        persona_context = ""
+        if user_id:
+            campaign_data = get_campaign(user_id)
+            if campaign_data and campaign_data.get("refined_persona"):
+                persona_context = f"\n\nUser's existing campaign persona for reference: {campaign_data['refined_persona']}"
+
+        system_instruction = POST_BUILDER_SYSTEM_PROMPT + persona_context
+
+        yield "✨ Generating posts in your style...\n\n"
+
+        # Make the function calling request (NO Google Search here - already done above)
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=[types.Content(role="user", parts=[types.Part(text=generation_prompt)])],
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.9,
+                tools=[POST_BUILDER_FUNCTION_TOOL],
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="HIGH"
+                )
+            )
+        )
+
+        # Process the response
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                # Check for function call
+                if hasattr(part, 'function_call') and part.function_call:
+                    fc = part.function_call
+                    args = dict(fc.args) if fc.args else {}
+
+                    if fc.name == "generate_posts":
+                        # Return posts with visual_style for image generation
+                        tool_result = {
+                            "type": "tool_call",
+                            "tool": "generate_posts",
+                            "x_post": args.get("x_post", ""),
+                            "linkedin_post": args.get("linkedin_post", ""),
+                            "source_url": args.get("source_url", selected_url or ""),
+                            "persona": args.get("persona", ""),
+                            "visual_style": args.get("visual_style", "")
+                        }
+                        encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
+                        yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
+                        yield f"\n\n✅ Posts generated in the '{args.get('persona', 'your')}' style!"
+                        if selected_url:
+                            yield f"\n📎 Source: {selected_url}"
+                        return
+
+                    elif fc.name == "create_campaign_prompt":
+                        # Return campaign configuration
+                        tool_result = {
+                            "type": "tool_call",
+                            "tool": "create_campaign_prompt",
+                            "campaign_prompt": args.get("campaign_prompt", ""),
+                            "refined_persona": args.get("refined_persona", ""),
+                            "visual_style": args.get("visual_style", "")
+                        }
+                        encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
+                        yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
+                        yield "\n\n📋 Campaign configuration generated!"
+                        return
+
+                # Regular text response (if model didn't call a function)
+                if hasattr(part, 'text') and part.text:
+                    yield part.text
+
+        # If we got here without generating posts, prompt the user
+        yield "\n\nI found some content but need more direction. Try being more specific, like:\n"
+        yield "- 'mario and luigi explain observability'\n"
+        yield "- 'create a post about the latest kubernetes release'\n"
+
+    except Exception as e:
+        logger.error(f"Error in chat_post_builder_stream: {e}", exc_info=True)
+        yield f"\n\n❌ Sorry, I encountered an error: {str(e)}"
+
+
+def parse_generated_posts(response_text: str) -> dict:
+    """
+    Parse the LLM response to extract generated posts.
+
+    Returns:
+        Dict with 'x_post' and 'linkedin_post' keys (values may be None)
+    """
+    result = {"x_post": None, "linkedin_post": None}
+
+    # Extract X post
+    x_match = re.search(r'---X_POST_START---\s*(.*?)\s*---X_POST_END---', response_text, re.DOTALL)
+    if x_match:
+        result["x_post"] = x_match.group(1).strip()
+
+    # Extract LinkedIn post
+    li_match = re.search(r'---LINKEDIN_POST_START---\s*(.*?)\s*---LINKEDIN_POST_END---', response_text, re.DOTALL)
+    if li_match:
+        result["linkedin_post"] = strip_markdown_formatting(li_match.group(1).strip())
+
+    return result
+
+
+def generate_image_for_post_builder(post_text: str, visual_style: str = None, user_id: int = None) -> Optional[bytes]:
+    """
+    Generate an image for a post builder preview.
+
+    Args:
+        post_text: The post text to visualize
+        visual_style: Optional visual style from the chat (e.g., "Mario and Luigi cartoon characters...")
+        user_id: Optional user ID to load campaign visual style as fallback
+
+    Returns:
+        Image bytes or None
+    """
+    try:
+        # Priority: 1. Provided visual_style, 2. Campaign visual_style, 3. Default
+        style = visual_style
+        user_prompt = post_text
+
+        if not style and user_id:
+            campaign = get_campaign(user_id)
+            if campaign:
+                if campaign.get("visual_style"):
+                    style = campaign["visual_style"]
+                if campaign.get("user_prompt"):
+                    user_prompt = campaign["user_prompt"]
+
+        if not style:
+            style = "Modern, clean, professional social media graphic"
+
+        logger.info(f"Generating image with visual_style: {style[:100]}...")
+        return generate_image(post_text, style, user_prompt, post_text)
+
+    except Exception as e:
+        logger.error(f"Error generating image for post builder: {e}", exc_info=True)
+        return None

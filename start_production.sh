@@ -3,7 +3,8 @@
 # Vibecaster Production Startup Script
 # This script starts both frontend and backend in production mode
 
-set -e  # Exit on error
+# Don't use set -e as it can cause issues with background processes
+# set -e  # Exit on error
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -31,10 +32,10 @@ echo ""
 # This ensures clean startup even if stop script wasn't run or processes became orphaned
 echo -e "${GREEN}[0/5] Cleaning up any existing processes...${NC}"
 
-# Kill any existing Next.js processes (next-server doesn't always show path in ps)
-EXISTING_NEXT=$(ps aux | grep -E "(next start|next-server)" | grep -v grep | awk '{print $2}')
+# Kill any existing Vibecaster Next.js processes (be specific to avoid killing unrelated Next.js)
+EXISTING_NEXT=$(ps aux | grep -E "next (start|server)" | grep vibecaster | grep -v grep | awk '{print $2}')
 if [ ! -z "$EXISTING_NEXT" ]; then
-    echo -e "   ${YELLOW}Found existing Next.js processes, stopping...${NC}"
+    echo -e "   ${YELLOW}Found existing Vibecaster Next.js processes, stopping...${NC}"
     for pid in $EXISTING_NEXT; do
         pkill -9 -P $pid 2>/dev/null || true
         kill -9 $pid 2>/dev/null || true
@@ -274,29 +275,32 @@ fi
 sleep 1
 
 # Start Next.js in production mode with custom port
-# Bind to 0.0.0.0 (IPv4) to avoid IPv6 conflicts
-nohup npx next start -p $FRONTEND_PORT -H 0.0.0.0 > "$LOGS_DIR/frontend.log" 2>&1 &
-
+# Run next directly (not through npm) to avoid orphaned process issues
+nohup node_modules/.bin/next start -p $FRONTEND_PORT -H 0.0.0.0 > "$LOGS_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
+disown $FRONTEND_PID 2>/dev/null || true
 echo $FRONTEND_PID > "$PIDS_DIR/frontend.pid"
 echo -e "   ✅ Frontend started (PID: $FRONTEND_PID)"
 echo -e "      Logs: $LOGS_DIR/frontend.log"
 echo -e "      URL: http://localhost:$FRONTEND_PORT"
 
-# Wait for frontend to be ready (check port is listening)
+# Wait for frontend to be ready (use curl to check HTTP response)
 echo -e "   Waiting for frontend to be ready..."
-for i in {1..30}; do
-    if lsof -Pi :$FRONTEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-        echo -e "   ✅ Frontend is listening on port $FRONTEND_PORT"
+for i in {1..45}; do
+    if curl -s -o /dev/null -w "" http://127.0.0.1:$FRONTEND_PORT/ 2>/dev/null; then
+        echo -e "   ✅ Frontend is responding on port $FRONTEND_PORT"
         break
     fi
-    if [ $i -eq 30 ]; then
-        echo -e "${RED}❌ Frontend failed to start within 30 seconds${NC}"
+    if [ $i -eq 45 ]; then
+        echo -e "${RED}❌ Frontend failed to start within 45 seconds${NC}"
         cat "$LOGS_DIR/frontend.log" | tail -20
         exit 1
     fi
     sleep 1
 done
+
+# Give frontend a moment to fully initialize
+sleep 2
 
 # ===== UPDATE NGINX TO MATCH ACTUAL PORTS =====
 if [ "$NGINX_CONFIGURED" = true ]; then

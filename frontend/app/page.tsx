@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
+import PostBuilder from '@/components/PostBuilder';
 
-type Tab = 'campaign' | 'url';
+type Tab = 'campaign' | 'url' | 'builder';
 
 interface ConnectionStatus {
   twitter: boolean;
@@ -280,7 +281,8 @@ export default function Home() {
           <div className="flex gap-1">
             {[
               { id: 'campaign', label: 'Campaign', icon: Megaphone },
-              { id: 'url', label: 'URL Post', icon: Link }
+              { id: 'url', label: 'URL Post', icon: Link },
+              { id: 'builder', label: 'Post Builder', icon: MessageSquare }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -356,6 +358,16 @@ export default function Home() {
         {activeTab === 'url' && (
           <div className="max-w-4xl mx-auto">
             <URLPostBox
+              token={token}
+              connections={connections}
+              showNotification={showNotification}
+            />
+          </div>
+        )}
+
+        {activeTab === 'builder' && (
+          <div className="max-w-6xl mx-auto">
+            <PostBuilder
               token={token}
               connections={connections}
               showNotification={showNotification}

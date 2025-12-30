@@ -1,6 +1,8 @@
 import os
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -9,7 +11,7 @@ import uvicorn
 
 # Import local modules
 from database import init_database, get_campaign, update_campaign, get_connection_status
-from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, post_url_content
+from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, generate_from_url_stream, post_url_content, chat_post_builder_stream, parse_generated_posts, generate_image_for_post_builder
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from admin import router as admin_router
@@ -82,6 +84,21 @@ class PostFromURLRequest(BaseModel):
     linkedin_post: str = None
     image_base64: str = None
     platforms: list[str]
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = []
+
+
+class GenerateImageRequest(BaseModel):
+    post_text: str
+    visual_style: Optional[str] = None
 
 
 # ===== SCHEDULER MANAGEMENT =====
@@ -346,6 +363,32 @@ async def generate_from_url_endpoint(request: GenerateFromURLRequest, user_id: i
         raise HTTPException(status_code=500, detail=f"Failed to generate posts: {str(e)}")
 
 
+@app.post("/api/generate-from-url-stream")
+async def generate_from_url_stream_endpoint(request: GenerateFromURLRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Stream social media post generation from a URL with progress updates.
+    Uses Server-Sent Events (SSE) to avoid timeout issues.
+    """
+    # Validate URL format
+    if not request.url or not request.url.startswith(('http://', 'https://')):
+        raise HTTPException(status_code=400, detail="Invalid URL format")
+
+    def generate():
+        for chunk in generate_from_url_stream(user_id, request.url):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 @app.post("/api/post-from-url")
 async def post_from_url_endpoint(request: PostFromURLRequest, user_id: int = Depends(get_current_user_id)):
     """
@@ -374,6 +417,75 @@ async def post_from_url_endpoint(request: PostFromURLRequest, user_id: int = Dep
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to post: {str(e)}")
+
+
+# ===== POST BUILDER CHAT =====
+
+@app.post("/api/chat")
+async def chat_endpoint(request: ChatRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Stream a chat response for the post builder.
+    Uses Server-Sent Events (SSE) for real-time streaming.
+    """
+    def generate():
+        try:
+            # Convert Pydantic models to dicts
+            history = [{"role": msg.role, "content": msg.content} for msg in request.history]
+
+            for chunk in chat_post_builder_stream(request.message, history, user_id):
+                # SSE format: data: <content>\n\n
+                yield f"data: {chunk}\n\n"
+
+            # Signal end of stream
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            logger.error(f"Error in chat stream: {e}")
+            yield f"data: Error: {str(e)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+
+@app.post("/api/chat/generate-image")
+async def chat_generate_image(request: GenerateImageRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Generate an image for a post builder preview.
+    Accepts optional visual_style to customize the image (e.g., "Mario and Luigi cartoon characters...")
+    """
+    try:
+        import concurrent.futures
+        import base64
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                generate_image_for_post_builder,
+                request.post_text,
+                request.visual_style,  # Pass visual_style from request
+                user_id
+            )
+            image_bytes = future.result(timeout=120)  # 2 minute timeout
+
+        if not image_bytes:
+            raise HTTPException(status_code=500, detail="Failed to generate image")
+
+        # Return base64 encoded image
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        return {"image_base64": image_base64}
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="Image generation timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate image: {str(e)}")
 
 
 # ===== MAIN ENTRY POINT =====
