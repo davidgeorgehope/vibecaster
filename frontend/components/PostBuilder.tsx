@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, Loader2, Twitter, Linkedin, Image, Trash2, Sparkles, Check, AlertCircle } from 'lucide-react';
+import { MessageSquare, Send, Loader2, Twitter, Linkedin, Image, Trash2, Sparkles, Check, AlertCircle, Search, Brain, Globe, Zap } from 'lucide-react';
 
 interface PostBuilderProps {
   token: string | null;
@@ -12,9 +12,29 @@ interface PostBuilderProps {
   showNotification: (type: 'success' | 'error' | 'info', message: string) => void;
 }
 
+interface AgentEvent {
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'searching' | 'search_results' | 'generating' | 'error' | 'complete' | 'text';
+  timestamp: number;
+  message?: string;
+  step?: string;
+  tool?: string;
+  result?: Record<string, unknown>;
+  query?: string;
+  success?: boolean;
+  selected_url?: string;
+  urls?: string[];
+  content_preview?: string;
+  error?: string;
+  error_type?: string;
+  retryable?: boolean;
+  content?: string;
+  source_url?: string;
+}
+
 interface Message {
   role: 'user' | 'model';
   content: string;
+  agentEvents?: AgentEvent[];
 }
 
 interface ParsedPosts {
@@ -35,6 +55,7 @@ export default function PostBuilder({ token, connections, showNotification }: Po
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingEvents, setStreamingEvents] = useState<AgentEvent[]>([]);
   const [parsedPosts, setParsedPosts] = useState<ParsedPosts>({ x_post: null, linkedin_post: null, source_url: null });
   const [campaignConfig, setCampaignConfig] = useState<CampaignConfig | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
@@ -54,7 +75,7 @@ export default function PostBuilder({ token, connections, showNotification }: Po
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, streamingEvents]);
 
   // Parse posts and campaign config from message content
   const parseToolCallsFromContent = (content: string): { posts: ParsedPosts; campaign: CampaignConfig | null } => {
@@ -156,6 +177,7 @@ export default function PostBuilder({ token, connections, showNotification }: Po
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsStreaming(true);
     setStreamingContent('');
+    setStreamingEvents([]);
 
     try {
       const response = await fetch('/api/chat', {
@@ -179,6 +201,7 @@ export default function PostBuilder({ token, connections, showNotification }: Po
 
       const decoder = new TextDecoder();
       let fullContent = '';
+      const collectedEvents: AgentEvent[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -193,6 +216,26 @@ export default function PostBuilder({ token, connections, showNotification }: Po
             if (data === '[DONE]') {
               continue;
             }
+
+            // Try to parse as JSON event
+            try {
+              const event = JSON.parse(data) as AgentEvent;
+              if (event.type) {
+                collectedEvents.push(event);
+                setStreamingEvents([...collectedEvents]);
+
+                // If it's a text event, add to content
+                if (event.type === 'text' && event.content) {
+                  fullContent += event.content;
+                  setStreamingContent(fullContent);
+                }
+                continue;
+              }
+            } catch {
+              // Not JSON, treat as plain text (backward compat)
+            }
+
+            // Plain text or base64 tool call
             fullContent += data;
             setStreamingContent(fullContent);
 
@@ -205,9 +248,10 @@ export default function PostBuilder({ token, connections, showNotification }: Po
         }
       }
 
-      // Add the complete message to history
-      setMessages(prev => [...prev, { role: 'model', content: fullContent }]);
+      // Add the complete message to history with events
+      setMessages(prev => [...prev, { role: 'model', content: fullContent, agentEvents: collectedEvents }]);
       setStreamingContent('');
+      setStreamingEvents([]);
 
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to send message';
@@ -300,6 +344,7 @@ export default function PostBuilder({ token, connections, showNotification }: Po
   const handleClearChat = () => {
     setMessages([]);
     setStreamingContent('');
+    setStreamingEvents([]);
     setParsedPosts({ x_post: null, linkedin_post: null, source_url: null });
     setCampaignConfig(null);
     setImageBase64(null);
@@ -314,6 +359,88 @@ export default function PostBuilder({ token, connections, showNotification }: Po
       .replace(/---X_POST_START---[\s\S]*?---X_POST_END---/g, '[X Post generated - see preview]')
       .replace(/---LINKEDIN_POST_START---[\s\S]*?---LINKEDIN_POST_END---/g, '[LinkedIn Post generated - see preview]')
       .trim();
+  };
+
+  // Render a single agent event as an inline bubble
+  const renderAgentEvent = (event: AgentEvent, index: number) => {
+    const getEventStyle = () => {
+      switch (event.type) {
+        case 'thinking':
+          return { bg: 'bg-gray-700/50', border: 'border-gray-600', icon: <Brain className="w-3 h-3" /> };
+        case 'searching':
+          return { bg: 'bg-blue-900/30', border: 'border-blue-700/50', icon: <Search className="w-3 h-3" /> };
+        case 'search_results':
+          return event.success
+            ? { bg: 'bg-green-900/30', border: 'border-green-700/50', icon: <Globe className="w-3 h-3" /> }
+            : { bg: 'bg-yellow-900/30', border: 'border-yellow-700/50', icon: <AlertCircle className="w-3 h-3" /> };
+        case 'generating':
+          return { bg: 'bg-purple-900/30', border: 'border-purple-700/50', icon: <Sparkles className="w-3 h-3" /> };
+        case 'tool_result':
+          return { bg: 'bg-gray-700/30', border: 'border-gray-600/50', icon: <Zap className="w-3 h-3" /> };
+        case 'complete':
+          return { bg: 'bg-green-900/30', border: 'border-green-700/50', icon: <Check className="w-3 h-3" /> };
+        case 'error':
+          return { bg: 'bg-red-900/30', border: 'border-red-700/50', icon: <AlertCircle className="w-3 h-3" /> };
+        default:
+          return { bg: 'bg-gray-700/30', border: 'border-gray-600/50', icon: null };
+      }
+    };
+
+    const style = getEventStyle();
+
+    // Skip text events (they're shown in the main content)
+    if (event.type === 'text') return null;
+
+    // Get display content based on event type
+    let displayContent = '';
+    switch (event.type) {
+      case 'thinking':
+        displayContent = event.message || 'Thinking...';
+        break;
+      case 'searching':
+        displayContent = event.query ? `Searching: "${event.query}"` : 'Searching...';
+        break;
+      case 'search_results':
+        if (event.success && event.selected_url) {
+          displayContent = `Found: ${event.selected_url}`;
+        } else if (!event.success) {
+          displayContent = event.message || 'Search had issues';
+        } else {
+          displayContent = 'Found relevant content';
+        }
+        break;
+      case 'generating':
+        displayContent = event.message || 'Generating...';
+        break;
+      case 'tool_result':
+        if (event.tool === 'intent_parser' && event.result) {
+          const r = event.result as { persona?: string; intent?: string };
+          displayContent = `Persona: ${r.persona || 'default'} | Intent: ${r.intent || 'generate'}`;
+        } else {
+          displayContent = `Tool: ${event.tool}`;
+        }
+        break;
+      case 'complete':
+        displayContent = event.message || 'Complete!';
+        break;
+      case 'error':
+        displayContent = event.message || event.error || 'An error occurred';
+        break;
+      default:
+        displayContent = event.message || '';
+    }
+
+    if (!displayContent) return null;
+
+    return (
+      <div
+        key={index}
+        className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs ${style.bg} border ${style.border} mb-2`}
+      >
+        <span className="text-gray-400 mt-0.5 flex-shrink-0">{style.icon}</span>
+        <span className="text-gray-300 break-all">{displayContent}</span>
+      </div>
+    );
   };
 
   const hasPosts = parsedPosts.x_post || parsedPosts.linkedin_post;
@@ -351,28 +478,62 @@ export default function PostBuilder({ token, connections, showNotification }: Po
           )}
 
           {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-lg p-3 ${
-                  message.role === 'user'
-                    ? 'bg-purple-600 text-white'
-                    : 'bg-gray-800 text-gray-200'
-                }`}
-              >
-                <p className="whitespace-pre-wrap text-sm">{formatMessageContent(message.content)}</p>
-              </div>
+            <div key={index}>
+              {/* User messages */}
+              {message.role === 'user' && (
+                <div className="flex justify-end">
+                  <div className="max-w-[85%] rounded-lg p-3 bg-purple-600 text-white">
+                    <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Model messages with agent events */}
+              {message.role === 'model' && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%]">
+                    {/* Agent events */}
+                    {message.agentEvents && message.agentEvents.length > 0 && (
+                      <div className="mb-2">
+                        {message.agentEvents.map((event, eventIndex) => renderAgentEvent(event, eventIndex))}
+                      </div>
+                    )}
+                    {/* Message content */}
+                    {formatMessageContent(message.content) && (
+                      <div className="rounded-lg p-3 bg-gray-800 text-gray-200">
+                        <p className="whitespace-pre-wrap text-sm">{formatMessageContent(message.content)}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
 
-          {/* Streaming message */}
-          {streamingContent && (
+          {/* Streaming events and content */}
+          {(streamingEvents.length > 0 || streamingContent) && (
             <div className="flex justify-start">
-              <div className="max-w-[85%] rounded-lg p-3 bg-gray-800 text-gray-200">
-                <p className="whitespace-pre-wrap text-sm">{formatMessageContent(streamingContent)}</p>
-                <span className="inline-block w-2 h-4 bg-purple-500 animate-pulse ml-1" />
+              <div className="max-w-[85%]">
+                {/* Streaming agent events */}
+                {streamingEvents.length > 0 && (
+                  <div className="mb-2">
+                    {streamingEvents.map((event, eventIndex) => renderAgentEvent(event, eventIndex))}
+                  </div>
+                )}
+                {/* Streaming content */}
+                {streamingContent && (
+                  <div className="rounded-lg p-3 bg-gray-800 text-gray-200">
+                    <p className="whitespace-pre-wrap text-sm">{formatMessageContent(streamingContent)}</p>
+                    <span className="inline-block w-2 h-4 bg-purple-500 animate-pulse ml-1" />
+                  </div>
+                )}
+                {/* Show loading indicator when only events are streaming */}
+                {streamingEvents.length > 0 && !streamingContent && (
+                  <div className="flex items-center gap-2 px-3 py-2 text-gray-400 text-xs">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Working...</span>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -24,6 +24,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
   const [url, setUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [streamingStatus, setStreamingStatus] = useState<string>('');
+  const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const [preview, setPreview] = useState<GeneratedContent>({
     x_post: null,
     linkedin_post: null,
@@ -47,6 +48,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
 
     setIsGenerating(true);
     setError(null);
+    setCompletedSteps([]);
     setPreview({
       x_post: null,
       linkedin_post: null,
@@ -79,20 +81,28 @@ export default function URLPostBox({ token, connections, showNotification }: URL
         throw new Error('Failed to read response stream');
       }
 
+      let buffer = '';
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        buffer += decoder.decode(value, { stream: true });
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            if (dataStr === '[DONE]') continue;
+        // SSE events are separated by double newlines
+        const events = buffer.split('\n\n');
+        // Keep the last incomplete chunk in the buffer
+        buffer = events.pop() || '';
 
-            try {
-              const data = JSON.parse(dataStr);
+        for (const event of events) {
+          const lines = event.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6);
+              if (dataStr === '[DONE]') continue;
+
+              try {
+                const data = JSON.parse(dataStr);
 
               // Update status message
               if (data.message) {
@@ -101,21 +111,49 @@ export default function URLPostBox({ token, connections, showNotification }: URL
 
               // Handle different status updates
               switch (data.status) {
+                case 'fetching':
+                  // Starting to fetch - no completed step yet
+                  break;
                 case 'content':
+                  setCompletedSteps(prev => [...prev, 'Fetched URL content']);
                   setPreview(prev => ({
                     ...prev,
                     title: data.title,
                     source_url: data.source_url
                   }));
                   break;
+                case 'generating_x':
+                  // About to generate X post
+                  break;
                 case 'x_post':
+                  setCompletedSteps(prev => [...prev, 'Generated X post']);
                   setPreview(prev => ({ ...prev, x_post: data.x_post }));
                   break;
+                case 'x_post_error':
+                  setCompletedSteps(prev => [...prev, 'X post failed']);
+                  console.error('X post generation failed:', data.error);
+                  break;
+                case 'generating_linkedin':
+                  // About to generate LinkedIn post
+                  break;
                 case 'linkedin_post':
+                  setCompletedSteps(prev => [...prev, 'Generated LinkedIn post']);
                   setPreview(prev => ({ ...prev, linkedin_post: data.linkedin_post }));
                   break;
+                case 'linkedin_post_error':
+                  setCompletedSteps(prev => [...prev, 'LinkedIn post failed']);
+                  console.error('LinkedIn post generation failed:', data.error);
+                  break;
+                case 'generating_image':
+                  // About to generate image
+                  break;
                 case 'image':
+                  setCompletedSteps(prev => [...prev, 'Generated image']);
                   setPreview(prev => ({ ...prev, image_base64: data.image_base64 }));
+                  break;
+                case 'image_error':
+                  setCompletedSteps(prev => [...prev, 'Image generation failed']);
+                  console.error('Image generation failed:', data.error);
                   break;
                 case 'complete':
                   setStreamingStatus('');
@@ -126,6 +164,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
               }
             } catch (parseErr) {
               // Ignore JSON parse errors for partial chunks
+            }
             }
           }
         }
@@ -190,6 +229,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
     setPosted({ twitter: false, linkedin: false });
     setError(null);
     setStreamingStatus('');
+    setCompletedSteps([]);
   };
 
   const hasContent = preview.x_post || preview.linkedin_post || preview.image_base64;
@@ -256,12 +296,22 @@ export default function URLPostBox({ token, connections, showNotification }: URL
         </div>
 
         {/* Status/Progress */}
-        {isGenerating && streamingStatus && (
-          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
-              <p className="text-sm text-purple-300">{streamingStatus}</p>
-            </div>
+        {isGenerating && (completedSteps.length > 0 || streamingStatus) && (
+          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg space-y-2">
+            {/* Completed steps */}
+            {completedSteps.map((step, index) => (
+              <div key={index} className="flex items-center gap-2 text-xs text-green-400">
+                <Check className="w-3 h-3" />
+                <span>{step}</span>
+              </div>
+            ))}
+            {/* Current status */}
+            {streamingStatus && (
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                <p className="text-sm text-purple-300">{streamingStatus}</p>
+              </div>
+            )}
           </div>
         )}
 

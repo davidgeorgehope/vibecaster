@@ -3,6 +3,7 @@ import sys
 import time
 import re
 import html
+import json
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
 from google import genai
@@ -25,6 +26,47 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 LLM_MODEL = "gemini-3-pro-preview"  # Primary model
 LLM_FALLBACK = "gemini-1.5-pro-002"  # Fallback model
 IMAGE_MODEL = "gemini-3-pro-image-preview"
+
+# QUIC/HTTP3 error patterns for graceful handling
+QUIC_ERROR_PATTERNS = [
+    'quic_protocol_error',
+    'quic_network_idle_timeout',
+    'quic_connection_refused',
+    'h3 error',
+    'http3',
+    'protocol_error',
+    'connection_closed',
+    'stream_reset',
+]
+
+
+def is_network_error(error: Exception) -> bool:
+    """Check if an error is a network/QUIC related error that should be retried."""
+    error_str = str(error).lower()
+    return any(pattern in error_str for pattern in QUIC_ERROR_PATTERNS)
+
+
+def emit_agent_event(event_type: str, **kwargs) -> str:
+    """
+    Create a JSON event string for SSE streaming.
+
+    Event types:
+    - thinking: Agent is reasoning
+    - tool_call: Agent is calling a tool
+    - tool_result: Tool returned results
+    - searching: Agent is searching
+    - search_results: Search results found
+    - generating: Agent is generating content
+    - error: An error occurred
+    - complete: Task completed
+    """
+    import time as time_module
+    event = {
+        "type": event_type,
+        "timestamp": time_module.time(),
+        **kwargs
+    }
+    return json.dumps(event) + "\n"
 
 
 def strip_markdown_formatting(text: str) -> str:
@@ -330,7 +372,6 @@ Respond in this exact JSON format:
         )
 
         result = response.text
-        import json
         data = json.loads(result)
 
         return data.get("refined_persona", ""), data.get("visual_style", "")
@@ -474,9 +515,21 @@ Provide:
                 return response_text, urls, None
 
         except Exception as e:
-            logger.error(f"Error in search attempt {search_attempt + 1}: {e}", exc_info=True)
-            if search_attempt == max_search_retries - 1:
-                return f"General discussion about {user_prompt}", [], None
+            if is_network_error(e):
+                logger.warning(f"Network/QUIC error in search attempt {search_attempt + 1}: {e}")
+                if search_attempt < max_search_retries - 1:
+                    # Exponential backoff for network errors
+                    wait_time = 2 ** search_attempt
+                    logger.info(f"Retrying after {wait_time}s backoff...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"All retries exhausted due to network errors: {e}")
+                    return f"General discussion about {user_prompt}", [], None
+            else:
+                logger.error(f"Error in search attempt {search_attempt + 1}: {e}", exc_info=True)
+                if search_attempt == max_search_retries - 1:
+                    return f"General discussion about {user_prompt}", [], None
 
     return f"General discussion about {user_prompt}", [], None
 
@@ -597,7 +650,6 @@ RESPOND IN THIS EXACT JSON FORMAT:
                 )
             )
 
-            import json
             result = json.loads(response.text)
 
             selected_topic = result.get("selected_topic", "")
@@ -828,7 +880,6 @@ Respond in this exact JSON format:
             )
         )
 
-        import json
         result = json.loads(response.text)
         is_valid = result.get("is_valid", False)
         feedback = result.get("feedback", "No feedback provided")
@@ -888,7 +939,6 @@ Respond in this exact JSON format:
             )
         )
 
-        import json
         result = json.loads(response.text)
         topics = result.get("topics", [])
         logger.info(f"Extracted {len(topics)} topics: {topics}")
@@ -1776,8 +1826,6 @@ def generate_from_url_stream(user_id: int, url: str):
     Yields:
         JSON strings with status/content updates
     """
-    import json
-
     try:
         logger.info("=" * 60)
         logger.info(f"[STREAMING] Generating posts from URL for user {user_id}")
@@ -2067,6 +2115,7 @@ def agent_intent_parser(message: str, history: list = None) -> dict:
     """
     Agent that extracts structured intent from user message.
     Separates persona from topic and creates optimized search query.
+    Uses the LLM to understand the user's intent.
     """
     INTENT_PARSER_PROMPT = """Analyze this social media post request and extract structured information.
 
@@ -2074,9 +2123,12 @@ Return a JSON object with:
 1. "intent": One of:
    - "generate_posts" - user wants to create social media posts
    - "brainstorm" - user wants to explore ideas without generating
-   - "campaign" - user wants to set up automated posting
+   - "generate_campaign_prompt" - user wants to create a campaign prompt/brief based on the current conversation context
    - "greeting" - user is just saying hello
    - "clarify" - request is unclear, need more info
+
+IMPORTANT: If user says things like "generate a campaign prompt", "create a campaign brief", "make a campaign for this",
+"campaign prompt for this concept" - the intent is "generate_campaign_prompt". This is DIFFERENT from "generate_posts".
 
 2. "persona": The creative voice/character if specified
    - Examples: "Mario and Luigi video game characters", "Gordon Ramsay chef", "anime teacher"
@@ -2100,9 +2152,21 @@ Return a JSON object with:
 Return ONLY valid JSON, no explanation."""
 
     try:
+        # Build context including history
+        context_parts = []
+        if history:
+            context_parts.append("Previous conversation:")
+            for msg in history[-6:]:  # Last 3 exchanges
+                role = msg.get("role", "user")
+                content = msg.get("content", "")[:500]
+                context_parts.append(f"  {role}: {content}")
+            context_parts.append("")
+        context_parts.append(f"Current user message: {message}")
+        full_context = "\n".join(context_parts)
+
         response = client.models.generate_content(
             model=LLM_MODEL,
-            contents=f"User message: {message}",
+            contents=full_context,
             config=types.GenerateContentConfig(
                 system_instruction=INTENT_PARSER_PROMPT,
                 temperature=0.2,
@@ -2159,13 +2223,16 @@ def agent_search(query: str, persona_context: str = None) -> dict:
             "success": True
         }
     except Exception as e:
-        logger.error(f"Search agent error: {e}")
+        error_type = "network" if is_network_error(e) else "general"
+        logger.error(f"Search agent error ({error_type}): {e}")
         return {
             "content": f"Topic: {query}",
             "urls": [],
             "selected_url": None,
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "error_type": error_type,
+            "retryable": error_type == "network"
         }
 
 
@@ -2253,6 +2320,78 @@ Format as a bulleted list that's easy to read."""
         logger.error(f"Brainstorm agent error: {e}")
         return {
             "suggestions": f"I encountered an issue exploring {topic_area}. Try being more specific.",
+            "success": False
+        }
+
+
+def agent_generate_campaign_prompt(persona: str, topic: str, visual_style: str, history: list = None) -> dict:
+    """
+    Agent that generates a structured campaign prompt/brief based on
+    conversation context. This can be used to populate the Campaign tab.
+    """
+    CAMPAIGN_PROMPT_GENERATOR = """Generate a detailed campaign prompt/brief for a social media content campaign.
+
+Based on the conversation context, create a structured campaign document that includes:
+
+1. CAMPAIGN CONCEPT: A one-sentence summary of the campaign concept
+2. PERSONA/VOICE: Who will be "teaching" or presenting the content
+3. VISUAL STYLE: Detailed description of how content should be visualized
+4. CONTENT FOCUS: What topics to cover, what to avoid
+5. EXAMPLE PROMPT: A ready-to-use prompt for the Campaign tab
+
+Format the output as a campaign brief that could be directly pasted into a campaign configuration.
+Make it detailed and actionable. Include specifics about tone, style, and content guidelines.
+
+The campaign prompt should be in a format like this example:
+---
+"I want to talk about [TOPIC] concepts and teach them with [PERSONA]:
+Week commencing date: [suggest a date]
+Create [VISUAL_STYLE] tutorials on [TOPIC] topics taught by [PERSONA].
+CONTENT FOCUS: Teach concepts and best practices, not release announcements. Explain HOW things work and WHY they matter.
+Include links to relevant documentation where appropriate."
+---
+
+Return ONLY the campaign brief text, formatted nicely with clear sections."""
+
+    try:
+        # Build context from history
+        context_summary = ""
+        if history:
+            context_summary = "Recent conversation:\n"
+            for msg in history[-10:]:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")[:300]
+                context_summary += f"  {role}: {content}\n"
+
+        prompt = f"""{context_summary}
+
+Current context:
+- Persona: {persona}
+- Topic: {topic}
+- Visual Style: {visual_style}
+
+Generate a detailed campaign prompt for this concept."""
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=CAMPAIGN_PROMPT_GENERATOR,
+                temperature=0.7
+            )
+        )
+
+        return {
+            "campaign_prompt": response.text,
+            "persona": persona,
+            "topic": topic,
+            "visual_style": visual_style,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"Campaign prompt generator error: {e}")
+        return {
+            "campaign_prompt": f"I had trouble generating a campaign prompt. The concept is: {persona} explaining {topic}.",
             "success": False
         }
 
@@ -2384,11 +2523,9 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
     Yields:
         Text chunks or JSON with tool results
     """
-    import base64
-
     try:
         # STEP 1: Parse intent to understand the request
-        yield "🤔 Understanding your request...\n\n"
+        yield emit_agent_event("thinking", message="Analyzing your request...", step="intent_parsing")
 
         intent_data = agent_intent_parser(message, history)
         intent = intent_data.get("intent", "generate_posts")
@@ -2399,46 +2536,108 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
 
         logger.info(f"Intent: {intent}, Persona: {persona}, Topic: {topic}, Query: {search_query}")
 
+        # Emit intent parsing result
+        yield emit_agent_event("tool_result", tool="intent_parser", result={
+            "intent": intent,
+            "persona": persona,
+            "topic": topic,
+            "search_query": search_query,
+            "visual_style": visual_style
+        })
+
         # STEP 2: Route based on intent
         if intent == "greeting":
-            yield "Hello! I'm your Post Builder assistant. Tell me what you'd like to post about and I'll help create engaging content.\n\n"
-            yield "For example, try:\n"
-            yield "- 'mario and luigi explain observability'\n"
-            yield "- 'create a post about kubernetes best practices'\n"
-            yield "- 'what's trending in AI?'\n"
+            yield emit_agent_event("text", content="Hello! I'm your Post Builder assistant. Tell me what you'd like to post about and I'll help create engaging content.\n\nFor example, try:\n- 'mario and luigi explain observability'\n- 'create a post about kubernetes best practices'\n- 'what's trending in AI?'")
             return
 
         if intent == "clarify":
-            yield "I'd love to help! Could you tell me more about what you'd like to post about?\n\n"
-            yield "You can specify:\n"
-            yield "- A topic (e.g., 'kubernetes', 'observability', 'AI')\n"
-            yield "- A creative persona (e.g., 'mario and luigi explain...')\n"
-            yield "- Or ask 'what's trending in [topic]?' to brainstorm ideas\n"
+            yield emit_agent_event("text", content="I'd love to help! Could you tell me more about what you'd like to post about?\n\nYou can specify:\n- A topic (e.g., 'kubernetes', 'observability', 'AI')\n- A creative persona (e.g., 'mario and luigi explain...')\n- Or ask 'what's trending in [topic]?' to brainstorm ideas")
             return
 
         if intent == "brainstorm":
-            yield f"💡 Exploring ideas about {topic}...\n\n"
+            yield emit_agent_event("thinking", message=f"Exploring ideas about {topic}...", step="brainstorming")
             brainstorm_result = agent_brainstorm(topic)
-            yield brainstorm_result.get("suggestions", "No suggestions found.")
-            yield "\n\nWant me to create posts about any of these? Just say which one!"
+            suggestions = brainstorm_result.get("suggestions", "No suggestions found.")
+            yield emit_agent_event("tool_result", tool="brainstorm", result={"suggestions": suggestions})
+            yield emit_agent_event("text", content=f"{suggestions}\n\nWant me to create posts about any of these? Just say which one!")
+            return
+
+        if intent == "generate_campaign_prompt":
+            yield emit_agent_event("thinking", message="Generating campaign prompt from our conversation...", step="campaign_prompt")
+
+            # Use context from conversation history to get the actual persona/topic
+            # If current message triggered this intent, we need to look at history for context
+            context_persona = persona
+            context_topic = topic
+            context_visual_style = visual_style
+
+            # Look through history to find the most relevant persona/topic
+            if history:
+                for msg in reversed(history):
+                    content = msg.get("content", "").lower()
+                    # Look for messages that had actual content generation
+                    if "mario" in content or "luigi" in content:
+                        context_persona = "Mario and Luigi video game characters"
+                    if "observability" in content:
+                        context_topic = "observability"
+                    # More sophisticated extraction from history
+                    if msg.get("role") == "assistant" and "Persona:" in msg.get("content", ""):
+                        # Try to parse persona from previous responses
+                        lines = msg.get("content", "").split("\n")
+                        for line in lines:
+                            if "Persona:" in line:
+                                parts = line.split("Persona:")
+                                if len(parts) > 1:
+                                    persona_part = parts[1].split("|")[0].strip()
+                                    if persona_part and persona_part != "professional thought leader":
+                                        context_persona = persona_part
+                                        break
+
+            campaign_result = agent_generate_campaign_prompt(
+                persona=context_persona,
+                topic=context_topic,
+                visual_style=context_visual_style,
+                history=history
+            )
+
+            if campaign_result.get("success"):
+                yield emit_agent_event("tool_result", tool="campaign_prompt_generator", result={
+                    "persona": context_persona,
+                    "topic": context_topic
+                })
+
+                campaign_prompt = campaign_result.get("campaign_prompt", "")
+                yield emit_agent_event("text", content=f"Here's a campaign prompt based on our conversation:\n\n---\n\n{campaign_prompt}\n\n---\n\nYou can copy this into your **Campaign** tab, or tell me to adjust anything!")
+                yield emit_agent_event("complete", success=True, message="Campaign prompt generated!")
+            else:
+                yield emit_agent_event("error", message="Had trouble generating the campaign prompt.", retryable=True)
             return
 
         # STEP 3: For generate_posts intent - search with OPTIMIZED query
-        yield f"🔍 Searching for content about: **{topic}**\n\n"
+        yield emit_agent_event("searching", query=search_query, message=f"Searching for content about: {topic}")
 
         search_result = agent_search(search_query, persona)
 
         if search_result.get("success") and search_result.get("content"):
             selected_url = search_result.get("selected_url")
-            if selected_url:
-                yield f"📄 Found content from: {selected_url}\n\n"
-            else:
-                yield f"📄 Found relevant content...\n\n"
+            urls = search_result.get("urls", [])
+            yield emit_agent_event("search_results",
+                success=True,
+                selected_url=selected_url,
+                urls=urls[:3],  # Limit for display
+                content_preview=search_result.get("content", "")[:200]
+            )
         else:
-            yield f"⚠️ Search had issues, generating with available context...\n\n"
+            # Provide specific feedback for different error types
+            error_type = search_result.get("error_type", "unknown")
+            yield emit_agent_event("search_results",
+                success=False,
+                error_type=error_type,
+                message="Network issue during search" if error_type == "network" else "Search had issues"
+            )
 
         # STEP 4: Generate posts using persona + searched content
-        yield f"✨ Generating posts as **{persona}**...\n\n"
+        yield emit_agent_event("generating", message=f"Generating posts as {persona}...", step="post_generation")
 
         # Get campaign persona for additional context
         campaign_visual_style = None
@@ -2461,7 +2660,7 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
         )
 
         if post_result.get("success"):
-            # Return posts in the format frontend expects
+            # Return posts in the format frontend expects (keep base64 for backward compat)
             tool_result = {
                 "type": "tool_call",
                 "tool": "generate_posts",
@@ -2473,16 +2672,29 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
             }
             encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
             yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
-            yield f"\n\n✅ Posts generated in the **{persona}** style!"
-            if search_result.get("selected_url"):
-                yield f"\n📎 Source: {search_result.get('selected_url')}"
+            yield emit_agent_event("complete",
+                success=True,
+                message=f"Posts generated in the {persona} style!",
+                source_url=search_result.get("selected_url")
+            )
         else:
-            yield f"\n\n❌ Had trouble generating posts: {post_result.get('error', 'Unknown error')}"
-            yield "\n\nTry rephrasing your request or being more specific about the topic."
+            error_msg = post_result.get('error', 'Unknown error')
+            yield emit_agent_event("error",
+                message=f"Had trouble generating posts: {error_msg}",
+                error=error_msg,
+                retryable=True
+            )
+            yield emit_agent_event("text", content="Try rephrasing your request or being more specific about the topic.")
 
     except Exception as e:
         logger.error(f"Error in chat_post_builder_stream: {e}", exc_info=True)
-        yield f"\n\n❌ Sorry, I encountered an error: {str(e)}"
+        error_type = "network" if is_network_error(e) else "general"
+        yield emit_agent_event("error",
+            message=f"Sorry, I encountered an error: {str(e)}",
+            error=str(e),
+            error_type=error_type,
+            retryable=error_type == "network"
+        )
 
 
 def parse_generated_posts(response_text: str) -> dict:
