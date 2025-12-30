@@ -27,18 +27,35 @@ echo -e "${GREEN}║   Vibecaster Production Startup        ║${NC}"
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
 echo ""
 
-# Check if already running
-if [ -f "$PIDS_DIR/backend.pid" ] && kill -0 $(cat "$PIDS_DIR/backend.pid") 2>/dev/null; then
-    echo -e "${YELLOW}⚠️  Backend is already running (PID: $(cat "$PIDS_DIR/backend.pid"))${NC}"
-    echo "   Run ./stop_production.sh first to stop existing processes"
-    exit 1
+# Proactively stop any existing Vibecaster processes
+# This ensures clean startup even if stop script wasn't run or processes became orphaned
+echo -e "${GREEN}[0/5] Cleaning up any existing processes...${NC}"
+
+# Kill any existing Next.js processes (next-server doesn't always show path in ps)
+EXISTING_NEXT=$(ps aux | grep -E "(next start|next-server)" | grep -v grep | awk '{print $2}')
+if [ ! -z "$EXISTING_NEXT" ]; then
+    echo -e "   ${YELLOW}Found existing Next.js processes, stopping...${NC}"
+    for pid in $EXISTING_NEXT; do
+        pkill -9 -P $pid 2>/dev/null || true
+        kill -9 $pid 2>/dev/null || true
+    done
+    sleep 2
 fi
 
-if [ -f "$PIDS_DIR/frontend.pid" ] && kill -0 $(cat "$PIDS_DIR/frontend.pid") 2>/dev/null; then
-    echo -e "${YELLOW}⚠️  Frontend is already running (PID: $(cat "$PIDS_DIR/frontend.pid"))${NC}"
-    echo "   Run ./stop_production.sh first to stop existing processes"
-    exit 1
+# Kill any existing uvicorn processes for vibecaster
+EXISTING_UVICORN=$(ps aux | grep "uvicorn main:app" | grep vibecaster | grep -v grep | awk '{print $2}')
+if [ ! -z "$EXISTING_UVICORN" ]; then
+    echo -e "   ${YELLOW}Found existing uvicorn processes, stopping...${NC}"
+    for pid in $EXISTING_UVICORN; do
+        kill -9 $pid 2>/dev/null || true
+    done
+    sleep 1
 fi
+
+# Clean up stale PID files
+rm -f "$PIDS_DIR/backend.pid" "$PIDS_DIR/frontend.pid" 2>/dev/null
+
+echo -e "   ✅ Cleanup complete"
 
 # ===== BACKEND SETUP =====
 echo -e "${GREEN}[1/4] Setting up Backend...${NC}"
@@ -234,13 +251,15 @@ done
 echo -e "${GREEN}[5/5] Starting Frontend (Production Mode)...${NC}"
 cd "$FRONTEND_DIR"
 
-# Check for any lingering Next.js processes
-LINGERING_NEXT=$(ps aux | grep "next start" | grep "$BASE_DIR" | grep -v grep)
-if [ ! -z "$LINGERING_NEXT" ]; then
-    echo -e "${RED}❌ Found lingering Next.js processes!${NC}"
-    echo "$LINGERING_NEXT"
-    echo -e "${YELLOW}Run ./stop_production.sh to clean up first${NC}"
-    exit 1
+# Verify no lingering Next.js processes on target port
+LINGERING_NEXT_PID=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
+if [ ! -z "$LINGERING_NEXT_PID" ]; then
+    echo -e "${YELLOW}   Found process on port $FRONTEND_PORT, cleaning up...${NC}"
+    for pid in $LINGERING_NEXT_PID; do
+        pkill -9 -P $pid 2>/dev/null || true
+        kill -9 $pid 2>/dev/null || true
+    done
+    sleep 2
 fi
 
 # Double-check port is free right before starting

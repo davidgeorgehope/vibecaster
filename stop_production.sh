@@ -158,13 +158,14 @@ done
 # Also kill any lingering Next.js or uvicorn processes related to vibecaster
 echo -e "${GREEN}Checking for lingering Node/Python processes...${NC}"
 
-# Find and kill any Next.js processes in the vibecaster directory
+# Find and kill any Next.js processes (next-server doesn't always show path)
 # Check for both "next start" and "next-server" patterns
-NEXTJS_PIDS=$(ps aux | grep -E "(next start|next-server)" | grep "$BASE_DIR" | grep -v grep | awk '{print $2}')
+NEXTJS_PIDS=$(ps aux | grep -E "(next start|next-server)" | grep -v grep | awk '{print $2}')
 if [ ! -z "$NEXTJS_PIDS" ]; then
     echo -e "${YELLOW}Found lingering Next.js processes: $NEXTJS_PIDS${NC}"
     for pid in $NEXTJS_PIDS; do
         if ! is_docker_process $pid; then
+            echo -e "   Killing Next.js process $pid..."
             pkill -9 -P $pid 2>/dev/null || true
             safe_kill $pid 9
         fi

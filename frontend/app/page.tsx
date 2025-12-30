@@ -5,7 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link } from 'lucide-react';
+import URLPostBox from '@/components/URLPostBox';
+
+type Tab = 'campaign' | 'url';
 
 interface ConnectionStatus {
   twitter: boolean;
@@ -23,6 +26,7 @@ export default function Home() {
     type: 'success' | 'error' | 'info';
     message: string;
   } | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>('campaign');
 
   // Define helper functions with useCallback before useEffect hooks
   const showNotification = useCallback((type: 'success' | 'error' | 'info', message: string) => {
@@ -270,55 +274,94 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Tabs */}
+      <div className="border-b border-gray-800">
+        <div className="container mx-auto px-6">
+          <div className="flex gap-1">
+            {[
+              { id: 'campaign', label: 'Campaign', icon: Megaphone },
+              { id: 'url', label: 'URL Post', icon: Link }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as Tab)}
+                className={`flex items-center gap-2 px-4 py-3 font-medium transition-colors border-b-2 ${
+                  activeTab === tab.id
+                    ? 'text-purple-400 border-purple-500'
+                    : 'text-gray-400 border-transparent hover:text-white'
+                }`}
+              >
+                <tab.icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Main Content */}
       <main className="container mx-auto px-6 py-12">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
-          {/* Box 1: Twitter Connection */}
-          <ConnectionBox
-            service="twitter"
-            connected={connections.twitter}
-            onConnect={handleTwitterConnect}
-            onDisconnect={handleTwitterDisconnect}
-          />
+        {activeTab === 'campaign' && (
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
+              {/* Box 1: Twitter Connection */}
+              <ConnectionBox
+                service="twitter"
+                connected={connections.twitter}
+                onConnect={handleTwitterConnect}
+                onDisconnect={handleTwitterDisconnect}
+              />
 
-          {/* Box 2: LinkedIn Connection */}
-          <ConnectionBox
-            service="linkedin"
-            connected={connections.linkedin}
-            onConnect={handleLinkedInConnect}
-            onDisconnect={handleLinkedInDisconnect}
-          />
+              {/* Box 2: LinkedIn Connection */}
+              <ConnectionBox
+                service="linkedin"
+                connected={connections.linkedin}
+                onConnect={handleLinkedInConnect}
+                onDisconnect={handleLinkedInDisconnect}
+              />
 
-          {/* Box 3: Campaign Prompt */}
-          <div className="lg:col-span-3">
-            <PromptBox
-              onActivate={handleActivateCampaign}
-              onRunNow={handleRunNow}
-              token={token}
-            />
-          </div>
-        </div>
-
-        {/* Info Section */}
-        <div className="max-w-7xl mx-auto mt-12">
-          <div className="bg-gray-900/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
-            <h2 className="text-xl font-semibold text-white mb-4">How it works</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-gray-300">
-              <div>
-                <div className="text-purple-400 font-semibold mb-2">1. Connect</div>
-                <p className="text-sm">Link your X (Twitter) and LinkedIn accounts securely via OAuth</p>
-              </div>
-              <div>
-                <div className="text-purple-400 font-semibold mb-2">2. Configure</div>
-                <p className="text-sm">Set your content prompt - AI will analyze and create a persona</p>
-              </div>
-              <div>
-                <div className="text-purple-400 font-semibold mb-2">3. Automate</div>
-                <p className="text-sm">AI generates and posts content daily using Google Gemini & Imagen</p>
+              {/* Box 3: Campaign Prompt */}
+              <div className="lg:col-span-3">
+                <PromptBox
+                  onActivate={handleActivateCampaign}
+                  onRunNow={handleRunNow}
+                  token={token}
+                />
               </div>
             </div>
+
+            {/* Info Section */}
+            <div className="max-w-7xl mx-auto mt-12">
+              <div className="bg-gray-900/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">How it works</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-gray-300">
+                  <div>
+                    <div className="text-purple-400 font-semibold mb-2">1. Connect</div>
+                    <p className="text-sm">Link your X (Twitter) and LinkedIn accounts securely via OAuth</p>
+                  </div>
+                  <div>
+                    <div className="text-purple-400 font-semibold mb-2">2. Configure</div>
+                    <p className="text-sm">Set your content prompt - AI will analyze and create a persona</p>
+                  </div>
+                  <div>
+                    <div className="text-purple-400 font-semibold mb-2">3. Automate</div>
+                    <p className="text-sm">AI generates and posts content daily using Google Gemini & Imagen</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === 'url' && (
+          <div className="max-w-4xl mx-auto">
+            <URLPostBox
+              token={token}
+              connections={connections}
+              showNotification={showNotification}
+            />
           </div>
-        </div>
+        )}
       </main>
 
       {/* Footer */}

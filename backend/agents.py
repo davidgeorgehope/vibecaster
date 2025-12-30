@@ -291,13 +291,13 @@ def validate_and_select_url(urls: list, fetch_content: bool = True) -> Tuple[Opt
     return None, None
 
 
-def analyze_user_prompt(user_prompt: str) -> Tuple[str, str, bool]:
+def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
     """
     Analyze user prompt to generate refined persona and visual style.
     CRITICAL: Preserves the user's exact creative vision and specific requirements.
 
     Returns:
-        Tuple of (refined_persona, visual_style, include_links)
+        Tuple of (refined_persona, visual_style)
     """
     try:
         analysis_prompt = f"""
@@ -305,25 +305,15 @@ Analyze this social media automation request and generate:
 
 1. A REFINED PERSONA - A detailed system instruction that STRICTLY PRESERVES the user's exact creative vision, voice, tone, and specific requirements
 2. A VISUAL STYLE - Art direction that EXACTLY follows the user's specified visual requirements
-3. INCLUDE_LINKS - Detect if the user wants source links/URLs included in posts
 
 CRITICAL: If the user specifies a particular creative concept (e.g., "anime girl teaching", "stick figures explaining", "meme format"), you MUST preserve that exact concept in both outputs. DO NOT generalize or dilute their vision.
-
-For include_links, look for phrases like:
-- "include links", "add links", "with links", "share links"
-- "include sources", "add sources", "with sources", "cite sources"
-- "include URL", "add URL", "with URL"
-- "link to article", "link to source"
-
-If NO mention of links/sources/URLs is found, set include_links to false.
 
 User Request: "{user_prompt}"
 
 Respond in this exact JSON format:
 {{
     "refined_persona": "Your detailed persona description that preserves ALL user requirements",
-    "visual_style": "Your visual style description that EXACTLY matches user specifications",
-    "include_links": true or false
+    "visual_style": "Your visual style description that EXACTLY matches user specifications"
 }}
 """
 
@@ -343,15 +333,14 @@ Respond in this exact JSON format:
         import json
         data = json.loads(result)
 
-        return data.get("refined_persona", ""), data.get("visual_style", ""), data.get("include_links", False)
+        return data.get("refined_persona", ""), data.get("visual_style", "")
 
     except Exception as e:
         logger.error(f"Error analyzing prompt: {e}", exc_info=True)
-        # Fallback: preserve user's original prompt exactly and default to not including links
+        # Fallback: preserve user's original prompt exactly
         return (
             f"IMPORTANT: Follow this exact creative direction: {user_prompt}",
-            f"Visual style as specified: {user_prompt}",
-            False
+            f"Visual style as specified: {user_prompt}"
         )
 
 
@@ -622,17 +611,27 @@ RESPOND IN THIS EXACT JSON FORMAT:
             logger.info(f"🔢 Selected URL index: {selected_url_index}")
             logger.info(f"🔗 Selected URL (raw): {selected_url_raw}")
 
-            # Get URL from index first (most reliable), fall back to raw URL
+            # Get URL from index first (most reliable), fall back to raw URL ONLY if it's in our list
+            # This prevents hallucinated URLs - we only accept URLs from the grounded search results
             selected_url: Optional[str] = None
             if isinstance(selected_url_index, int) and 1 <= selected_url_index <= len(urls_in_prompt):
                 selected_url = urls_in_prompt[selected_url_index - 1]
+                logger.info(f"✅ URL selected by index {selected_url_index}")
             else:
-                selected_url = _clean_url_text(selected_url_raw)
+                # Only accept raw URL if it exactly matches one in our list (prevents hallucination)
+                cleaned_raw = _clean_url_text(selected_url_raw)
+                if cleaned_raw and cleaned_raw in urls_in_prompt:
+                    selected_url = cleaned_raw
+                    logger.info(f"✅ URL selected by exact match in list")
+                elif cleaned_raw:
+                    logger.warning(f"❌ LLM returned URL not in provided list (potential hallucination): {cleaned_raw[:80]}...")
+                    logger.info("Will retry with different topic selection")
 
-            # No URL selected by LLM - return context without URL
+            # No URL selected by LLM - retry to get a different topic with valid URL
+            # (URLs are now required, so we don't return without one)
             if not selected_url:
-                logger.info("No URL selected for this topic")
-                return focused_context, None, None
+                logger.warning("No valid URL selected - retrying topic selection")
+                continue
 
             # Validate the URL - only reject if it's actually broken (404, soft-404)
             logger.info(f"🔍 Validating selected URL: {selected_url[:60]}...")
@@ -1259,17 +1258,18 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         return False
 
 
-def generate_x_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, include_links: bool = False, max_retries: int = 3) -> Tuple[str, str]:
+def generate_x_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, max_retries: int = 3) -> Tuple[str, str]:
     """
     Generate X/Twitter-specific post (280 char limit, casual, punchy).
     CRITICAL: Must follow user's exact creative format/vision.
 
+    URLs are always included when available (grounded search provides credible sources).
+
     Args:
-        include_links: If True, append source URL to the post
         max_retries: Number of retry attempts before failing (default: 3)
 
     Returns:
-        Tuple of (post_text, shortened_url)
+        Tuple of (post_text, source_url)
 
     Raises:
         Exception: If all retries fail - caller should handle by skipping post
@@ -1281,8 +1281,8 @@ def generate_x_post(search_context: str, refined_persona: str, user_prompt: str,
                 time.sleep(2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
 
             # X counts URLs as ~23 chars, but we'll use 230 chars for text to be safe
-            # Only adjust max length if we're actually including the link
-            max_text_length = 230 if (source_url and include_links) else 280
+            # Always reserve space for URL since we always include it
+            max_text_length = 230 if source_url else 280
 
             avoidance_text = ""
             if recent_topics:
@@ -1339,12 +1339,12 @@ Write ONLY the final post text, nothing else.
 
             final_post = response.text.strip()
 
-            # Add URL if provided, user wants links included, and not already in post
-            if source_url and include_links and source_url not in final_post:
+            # Always add URL if provided and not already in post
+            if source_url and source_url not in final_post:
                 final_post = f"{final_post}\n\n{source_url}"
                 logger.info(f"X post with URL (total: {len(final_post)} chars)")
 
-            return final_post, source_url if include_links else None
+            return final_post, source_url
 
         except Exception as e:
             logger.warning(f"Attempt {attempt + 1}/{max_retries} failed for X post: {e}")
@@ -1355,13 +1355,14 @@ Write ONLY the final post text, nothing else.
             # Continue to next retry
 
 
-def generate_linkedin_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, include_links: bool = False, max_retries: int = 3) -> str:
+def generate_linkedin_post(search_context: str, refined_persona: str, user_prompt: str, source_url: Optional[str], recent_topics: list, max_retries: int = 3) -> str:
     """
     Generate LinkedIn-specific post (longer form, professional, detailed).
     CRITICAL: Must follow user's exact creative format/vision adapted for professional audience.
 
+    URLs are always included when available (grounded search provides credible sources).
+
     Args:
-        include_links: If True, append source URL to the post
         max_retries: Number of retry attempts before failing (default: 3)
 
     Returns:
@@ -1435,10 +1436,10 @@ Write ONLY the final post text in plain text format, nothing else.
             # Strip any markdown formatting (LinkedIn doesn't support it)
             final_post = strip_markdown_formatting(final_post)
 
-            # Ensure URL is included if provided, user wants links, and not already in post
-            if source_url and include_links and source_url not in final_post:
+            # Always add URL if provided and not already in post
+            if source_url and source_url not in final_post:
                 final_post = f"{final_post}\n\n{source_url}"
-                logger.info(f"Added missing source URL to LinkedIn post")
+                logger.info(f"Added source URL to LinkedIn post")
 
             logger.info(f"LinkedIn post ({len(final_post)} chars)")
 
@@ -1483,11 +1484,9 @@ def run_agent_cycle(user_id: int):
         user_prompt = campaign["user_prompt"]
         refined_persona = campaign.get("refined_persona", "")
         visual_style = campaign.get("visual_style", "")
-        include_links = campaign.get("include_links", False)
 
         logger.info(f"Campaign: {user_prompt}")
         logger.info(f"Persona: {refined_persona[:100]}...")
-        logger.info(f"Include links: {include_links}")
 
         # Get recent topics to avoid repetition
         recent_topics = get_recent_topics(user_id, days=14)
@@ -1560,7 +1559,7 @@ def run_agent_cycle(user_id: int):
         if twitter_tokens:
             try:
                 logger.info("[3/6] Generating X-specific post...")
-                x_post, x_url = generate_x_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
+                x_post, x_url = generate_x_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics)
                 logger.info(f"X post: {x_post}")
             except Exception as e:
                 logger.error(f"Failed to generate X post: {e}")
@@ -1571,7 +1570,7 @@ def run_agent_cycle(user_id: int):
         if linkedin_tokens:
             try:
                 logger.info("[4/6] Generating LinkedIn-specific post...")
-                linkedin_post = generate_linkedin_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics, include_links)
+                linkedin_post = generate_linkedin_post(enhanced_context, refined_persona, user_prompt, source_url, recent_topics)
                 logger.info(f"LinkedIn post: {linkedin_post[:150]}...")
             except Exception as e:
                 logger.error(f"Failed to generate LinkedIn post: {e}")
@@ -1623,3 +1622,209 @@ def run_agent_cycle(user_id: int):
 
     except Exception as e:
         logger.error(f"Error in agent cycle for user {user_id}: {e}", exc_info=True)
+
+
+def generate_from_url(user_id: int, url: str) -> Dict[str, Any]:
+    """
+    Generate social media posts from a given URL.
+
+    This function:
+    1. Validates and fetches content from the URL
+    2. Uses campaign persona/style if available, otherwise infers from content
+    3. Generates X/Twitter post, LinkedIn post, and image
+    4. Returns all generated content for preview (does NOT post automatically)
+
+    Args:
+        user_id: The user ID (for campaign config lookup)
+        url: The URL to generate posts from
+
+    Returns:
+        Dict with keys: x_post, linkedin_post, image_base64, source_url, error
+    """
+    result = {
+        "x_post": None,
+        "linkedin_post": None,
+        "image_base64": None,
+        "source_url": url,
+        "error": None
+    }
+
+    try:
+        logger.info("=" * 60)
+        logger.info(f"Generating posts from URL for user {user_id}")
+        logger.info(f"URL: {url}")
+        logger.info("=" * 60)
+
+        # Step 1: Validate and fetch URL content
+        logger.info("[1/5] Validating URL and fetching content...")
+        is_valid, html_content, status_code, final_url = validate_url(url, fetch_content=True)
+
+        if not is_valid:
+            error_msg = f"Could not fetch content from URL (status: {status_code})"
+            logger.warning(error_msg)
+            result["error"] = error_msg
+            return result
+
+        result["source_url"] = final_url
+
+        # Extract a summary from the HTML content for context
+        # Use the page title and some body text
+        title = _extract_html_title(html_content)
+
+        # Strip HTML tags to get plain text (basic extraction)
+        import re as regex_module
+        body_text = regex_module.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=regex_module.DOTALL | regex_module.IGNORECASE)
+        body_text = regex_module.sub(r'<style[^>]*>.*?</style>', '', body_text, flags=regex_module.DOTALL | regex_module.IGNORECASE)
+        body_text = regex_module.sub(r'<[^>]+>', ' ', body_text)
+        body_text = regex_module.sub(r'\s+', ' ', body_text).strip()
+        body_text = body_text[:3000]  # Limit to prevent token overflow
+
+        search_context = f"Title: {title}\n\nContent Summary:\n{body_text}\n\nSource URL: {final_url}"
+        logger.info(f"Extracted context: {search_context[:200]}...")
+
+        # Step 2: Get campaign config or use defaults
+        logger.info("[2/5] Getting persona and style settings...")
+        campaign = get_campaign(user_id)
+
+        if campaign and campaign.get("refined_persona"):
+            refined_persona = campaign["refined_persona"]
+            visual_style = campaign.get("visual_style", "")
+            user_prompt = campaign.get("user_prompt", "Create engaging social media content")
+            logger.info("Using campaign persona and style")
+        else:
+            # Generate a simple persona based on the content
+            refined_persona = "A knowledgeable content creator who shares interesting insights in an engaging, accessible way. Professional yet approachable tone."
+            visual_style = "Clean, modern digital illustration style. Professional and eye-catching visuals that complement the content."
+            user_prompt = "Create engaging social media content about this topic"
+            logger.info("Using default persona (no campaign configured)")
+
+        # Step 3: Generate X/Twitter post
+        logger.info("[3/5] Generating X/Twitter post...")
+        try:
+            x_post, _ = generate_x_post(
+                search_context=search_context,
+                refined_persona=refined_persona,
+                user_prompt=user_prompt,
+                source_url=final_url,
+                recent_topics=[]
+            )
+            result["x_post"] = x_post
+            logger.info(f"X post generated ({len(x_post)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to generate X post: {e}")
+
+        # Step 4: Generate LinkedIn post
+        logger.info("[4/5] Generating LinkedIn post...")
+        try:
+            linkedin_post = generate_linkedin_post(
+                search_context=search_context,
+                refined_persona=refined_persona,
+                user_prompt=user_prompt,
+                source_url=final_url,
+                recent_topics=[]
+            )
+            result["linkedin_post"] = linkedin_post
+            logger.info(f"LinkedIn post generated ({len(linkedin_post)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to generate LinkedIn post: {e}")
+
+        # Step 5: Generate image
+        logger.info("[5/5] Generating image...")
+        try:
+            image_context_post = result["x_post"] or result["linkedin_post"]
+            if image_context_post:
+                image_bytes = generate_image(
+                    post_text=image_context_post,
+                    visual_style=visual_style,
+                    user_prompt=user_prompt,
+                    topic_context=search_context[:1000]  # Limit context for image
+                )
+                if image_bytes:
+                    result["image_base64"] = base64.b64encode(image_bytes).decode('utf-8')
+                    logger.info(f"Image generated ({len(image_bytes)} bytes)")
+                else:
+                    logger.warning("Image generation returned None")
+        except Exception as e:
+            logger.error(f"Failed to generate image: {e}")
+
+        logger.info("=" * 60)
+        logger.info("Generation complete")
+        logger.info(f"  X post: {'✓' if result['x_post'] else '✗'}")
+        logger.info(f"  LinkedIn post: {'✓' if result['linkedin_post'] else '✗'}")
+        logger.info(f"  Image: {'✓' if result['image_base64'] else '✗'}")
+        logger.info("=" * 60)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error generating from URL: {e}", exc_info=True)
+        result["error"] = str(e)
+        return result
+
+
+def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optional[str],
+                     image_base64: Optional[str], platforms: list) -> Dict[str, Any]:
+    """
+    Post pre-generated content to specified platforms.
+
+    Args:
+        user_id: The user ID
+        x_post: The X/Twitter post text (or None to skip)
+        linkedin_post: The LinkedIn post text (or None to skip)
+        image_base64: Base64-encoded image (or None for no image)
+        platforms: List of platforms to post to ['twitter', 'linkedin']
+
+    Returns:
+        Dict with keys: posted (list), errors (dict)
+    """
+    result = {
+        "posted": [],
+        "errors": {}
+    }
+
+    # Decode image if provided
+    image_bytes = None
+    if image_base64:
+        try:
+            image_bytes = base64.b64decode(image_base64)
+        except Exception as e:
+            logger.error(f"Failed to decode image: {e}")
+
+    # Post to Twitter
+    if 'twitter' in platforms and x_post:
+        try:
+            twitter_tokens = get_oauth_tokens(user_id, "twitter")
+            if not twitter_tokens:
+                result["errors"]["twitter"] = "Not connected to Twitter"
+            else:
+                success = post_to_twitter(user_id, x_post, image_bytes)
+                if success:
+                    result["posted"].append("twitter")
+                    # Extract simple topic for history
+                    topics = [x_post[:50].split('\n')[0]]
+                    save_post_history(user_id, x_post, topics, ["twitter"])
+                else:
+                    result["errors"]["twitter"] = "Failed to post"
+        except Exception as e:
+            logger.error(f"Error posting to Twitter: {e}")
+            result["errors"]["twitter"] = str(e)
+
+    # Post to LinkedIn
+    if 'linkedin' in platforms and linkedin_post:
+        try:
+            linkedin_tokens = get_oauth_tokens(user_id, "linkedin")
+            if not linkedin_tokens:
+                result["errors"]["linkedin"] = "Not connected to LinkedIn"
+            else:
+                success = post_to_linkedin(user_id, linkedin_post, image_bytes)
+                if success:
+                    result["posted"].append("linkedin")
+                    topics = [linkedin_post[:50].split('\n')[0]]
+                    save_post_history(user_id, linkedin_post, topics, ["linkedin"])
+                else:
+                    result["errors"]["linkedin"] = "Failed to post"
+        except Exception as e:
+            logger.error(f"Error posting to LinkedIn: {e}")
+            result["errors"]["linkedin"] = str(e)
+
+    return result

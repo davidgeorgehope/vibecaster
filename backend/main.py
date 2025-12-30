@@ -9,7 +9,7 @@ import uvicorn
 
 # Import local modules
 from database import init_database, get_campaign, update_campaign, get_connection_status
-from agents import analyze_user_prompt, run_agent_cycle
+from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, post_url_content
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from admin import router as admin_router
@@ -71,6 +71,17 @@ class CampaignResponse(BaseModel):
     visual_style: str
     schedule_cron: str
     last_run: int
+
+
+class GenerateFromURLRequest(BaseModel):
+    url: str
+
+
+class PostFromURLRequest(BaseModel):
+    x_post: str = None
+    linkedin_post: str = None
+    image_base64: str = None
+    platforms: list[str]
 
 
 # ===== SCHEDULER MANAGEMENT =====
@@ -228,8 +239,7 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
     try:
         # Analyze user prompt with AI
         logger.info(f"Analyzing prompt: {request.user_prompt}")
-        refined_persona, visual_style, include_links = analyze_user_prompt(request.user_prompt)
-        logger.info(f"Include links: {include_links}")
+        refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
 
         # Update campaign in database
         update_campaign(
@@ -237,8 +247,7 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
             user_prompt=request.user_prompt,
             refined_persona=refined_persona,
             visual_style=visual_style,
-            schedule_cron=request.schedule_cron,
-            include_links=include_links
+            schedule_cron=request.schedule_cron
         )
 
         # Reconfigure scheduler for this user
@@ -305,6 +314,66 @@ async def delete_campaign(user_id: int = Depends(get_current_user_id)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/generate-from-url")
+async def generate_from_url_endpoint(request: GenerateFromURLRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Generate social media posts from a URL.
+    Returns X post, LinkedIn post, and image for preview before posting.
+    """
+    try:
+        # Validate URL format
+        if not request.url or not request.url.startswith(('http://', 'https://')):
+            raise HTTPException(status_code=400, detail="Invalid URL format")
+
+        # Run generation in a separate thread to avoid blocking
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(generate_from_url, user_id, request.url)
+            result = future.result(timeout=180)  # 3 minute timeout
+
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        return result
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="Generation timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate posts: {str(e)}")
+
+
+@app.post("/api/post-from-url")
+async def post_from_url_endpoint(request: PostFromURLRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Post pre-generated content to specified platforms.
+    """
+    try:
+        if not request.platforms:
+            raise HTTPException(status_code=400, detail="No platforms specified")
+
+        valid_platforms = ['twitter', 'linkedin']
+        for platform in request.platforms:
+            if platform not in valid_platforms:
+                raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
+
+        result = post_url_content(
+            user_id=user_id,
+            x_post=request.x_post,
+            linkedin_post=request.linkedin_post,
+            image_base64=request.image_base64,
+            platforms=request.platforms
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to post: {str(e)}")
 
 
 # ===== MAIN ENTRY POINT =====
