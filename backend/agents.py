@@ -1959,7 +1959,305 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
     return result
 
 
-# ===== POST BUILDER CHAT =====
+# ===== POST BUILDER MULTI-AGENT SYSTEM =====
+
+# Orchestrator system prompt - decides which agents to call
+ORCHESTRATOR_SYSTEM_PROMPT = """You are a conversation orchestrator for a social media post builder.
+
+Your job is to analyze the user's message and call the appropriate agents in the right order.
+
+AVAILABLE AGENTS (call as tools):
+1. call_intent_parser - ALWAYS call this first to understand the user's request
+2. call_search_agent - Search for content about a topic (use OPTIMIZED query from intent parser)
+3. call_post_generator - Generate X and LinkedIn posts using persona + content
+4. call_brainstorm_agent - Explore topic ideas without generating posts
+5. respond_to_user - Send a direct response (for greetings, clarifications)
+
+WORKFLOW FOR POST GENERATION:
+When user says something like "mario and luigi explain kubernetes":
+1. Call call_intent_parser with the message
+   - This extracts: persona="Mario and Luigi", topic="kubernetes", search_query="kubernetes best practices 2024"
+2. Call call_search_agent with the OPTIMIZED search_query (NOT the raw message!)
+3. Call call_post_generator with persona, topic, content, and visual_style
+
+CRITICAL RULES:
+- ALWAYS call call_intent_parser FIRST to understand the request
+- When searching, use the search_query from intent parser, NOT the raw user message
+- "mario and luigi explain observability" should search for "observability" not "mario luigi observability"
+- The persona is HOW to present content, the topic is WHAT to search for
+- If intent is "greeting", just call respond_to_user
+- If intent is "brainstorm", call brainstorm_agent instead of search+generate
+
+EXAMPLES:
+- "mario and luigi explain kubernetes" → intent_parser → search("kubernetes best practices") → post_generator(persona="Mario/Luigi")
+- "what's trending in AI?" → intent_parser → brainstorm_agent("AI trends")
+- "hello" → intent_parser → respond_to_user("Hello! I can help...")
+"""
+
+# Orchestrator tools - the agents it can call
+ORCHESTRATOR_TOOLS = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="call_intent_parser",
+            description="ALWAYS call this FIRST. Analyzes user message to extract intent, persona, topic, and optimized search query.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "message": types.Schema(type="STRING", description="The user's message to analyze")
+                },
+                required=["message"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="call_search_agent",
+            description="Search for content using an OPTIMIZED query (from intent parser). Do NOT pass the raw user message.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "query": types.Schema(type="STRING", description="Optimized search query from intent parser (e.g., 'kubernetes best practices 2024')"),
+                    "persona_context": types.Schema(type="STRING", description="Brief persona description for context")
+                },
+                required=["query"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="call_post_generator",
+            description="Generate social media posts using persona + searched content",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "persona": types.Schema(type="STRING", description="Creative persona/voice (e.g., 'Mario and Luigi characters')"),
+                    "topic": types.Schema(type="STRING", description="The topic being discussed"),
+                    "content": types.Schema(type="STRING", description="Real content from search to use in posts"),
+                    "visual_style": types.Schema(type="STRING", description="How to visualize the persona for images"),
+                    "source_url": types.Schema(type="STRING", description="Source URL for attribution")
+                },
+                required=["persona", "topic", "content", "visual_style"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="call_brainstorm_agent",
+            description="Explore and suggest topic ideas without generating posts",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "topic_area": types.Schema(type="STRING", description="Area to brainstorm about")
+                },
+                required=["topic_area"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="respond_to_user",
+            description="Send a direct response to user (for greetings, clarifications, errors)",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "message": types.Schema(type="STRING", description="Message to send to user")
+                },
+                required=["message"]
+            )
+        )
+    ]
+)
+
+
+# ===== INDIVIDUAL AGENTS =====
+
+def agent_intent_parser(message: str, history: list = None) -> dict:
+    """
+    Agent that extracts structured intent from user message.
+    Separates persona from topic and creates optimized search query.
+    """
+    INTENT_PARSER_PROMPT = """Analyze this social media post request and extract structured information.
+
+Return a JSON object with:
+1. "intent": One of:
+   - "generate_posts" - user wants to create social media posts
+   - "brainstorm" - user wants to explore ideas without generating
+   - "campaign" - user wants to set up automated posting
+   - "greeting" - user is just saying hello
+   - "clarify" - request is unclear, need more info
+
+2. "persona": The creative voice/character if specified
+   - Examples: "Mario and Luigi video game characters", "Gordon Ramsay chef", "anime teacher"
+   - If no persona, use "professional thought leader"
+
+3. "topic": The ACTUAL subject matter to search for
+   - CRITICAL: Extract ONLY the topic, SEPARATE from persona
+   - "mario and luigi explain kubernetes" → topic is "kubernetes"
+   - "gordon ramsay talks about cloud computing" → topic is "cloud computing"
+
+4. "search_query": Optimized Google search query
+   - Should find recent, relevant content about the TOPIC
+   - Do NOT include persona in search query
+   - Add context like "2024", "best practices", "news" if appropriate
+   - Example: "kubernetes container orchestration news 2024"
+
+5. "visual_style": How to visualize the persona for image generation
+   - Describe the visual aesthetic
+   - Example: "Mario and Luigi cartoon characters in Nintendo pixel art style, colorful, standing at a whiteboard"
+
+Return ONLY valid JSON, no explanation."""
+
+    try:
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=f"User message: {message}",
+            config=types.GenerateContentConfig(
+                system_instruction=INTENT_PARSER_PROMPT,
+                temperature=0.2,
+                response_mime_type="application/json"
+            )
+        )
+        result = json.loads(response.text)
+        logger.info(f"Intent parser result: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Intent parser error: {e}")
+        # Fallback - treat as simple post request
+        return {
+            "intent": "generate_posts",
+            "persona": "professional thought leader",
+            "topic": message,
+            "search_query": message,
+            "visual_style": "professional, modern, clean design"
+        }
+
+
+def agent_search(query: str, persona_context: str = None) -> dict:
+    """
+    Agent that performs grounded search with optimized query.
+    Uses existing search_trending_topics but with the OPTIMIZED query.
+    """
+    try:
+        logger.info(f"Search agent: searching for '{query}'")
+
+        # Use existing search function with optimized query
+        search_context, urls, html_content = search_trending_topics(
+            user_prompt=query,  # Already optimized by intent parser
+            refined_persona=persona_context or "informative content finder for social media posts",
+            recent_topics=[],
+            validate_urls=True
+        )
+
+        focused_context = search_context
+        selected_url = urls[0] if urls else None
+
+        # Try to focus on a single topic
+        if urls:
+            try:
+                focused_context, selected_url, _ = select_single_topic(
+                    search_context, urls, query
+                )
+            except Exception as e:
+                logger.warning(f"select_single_topic failed: {e}")
+
+        return {
+            "content": focused_context,
+            "urls": urls,
+            "selected_url": selected_url,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"Search agent error: {e}")
+        return {
+            "content": f"Topic: {query}",
+            "urls": [],
+            "selected_url": None,
+            "success": False,
+            "error": str(e)
+        }
+
+
+def agent_post_generator(persona: str, topic: str, content: str, visual_style: str, source_url: str = None) -> dict:
+    """
+    Agent that generates posts using persona + real content.
+    """
+    POST_GEN_PROMPT = f"""Generate social media posts.
+
+PERSONA (your voice/character): {persona}
+TOPIC: {topic}
+VISUAL STYLE FOR IMAGES: {visual_style}
+
+REAL CONTENT TO USE (include these facts in your posts):
+{content[:4000]}
+
+SOURCE URL: {source_url or 'Not specified'}
+
+Create posts that present the REAL facts above IN THE PERSONA'S VOICE.
+- The persona is HOW you speak (character, tone, style)
+- The content is WHAT you say (real facts, news, information)
+
+Call generate_posts() with the posts you create."""
+
+    try:
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=POST_GEN_PROMPT,
+            config=types.GenerateContentConfig(
+                temperature=0.9,
+                tools=[POST_BUILDER_FUNCTION_TOOL]
+            )
+        )
+
+        # Extract function call result
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    args = dict(part.function_call.args) if part.function_call.args else {}
+                    return {
+                        "x_post": args.get("x_post", ""),
+                        "linkedin_post": args.get("linkedin_post", ""),
+                        "persona": args.get("persona", persona),
+                        "visual_style": args.get("visual_style", visual_style),
+                        "source_url": args.get("source_url", source_url or ""),
+                        "success": True
+                    }
+
+        return {"success": False, "error": "No posts generated"}
+    except Exception as e:
+        logger.error(f"Post generator error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def agent_brainstorm(topic_area: str) -> dict:
+    """
+    Agent that explores topic ideas without generating posts.
+    Uses Google Search grounding to find trends.
+    """
+    BRAINSTORM_PROMPT = f"""Explore content ideas about: {topic_area}
+
+Search for:
+- Trending topics and recent news
+- Interesting angles and perspectives
+- What people are discussing
+
+Return a helpful list of potential post topics with brief descriptions.
+Format as a bulleted list that's easy to read."""
+
+    try:
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=BRAINSTORM_PROMPT,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.7
+            )
+        )
+
+        return {
+            "suggestions": response.text,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"Brainstorm agent error: {e}")
+        return {
+            "suggestions": f"I encountered an issue exploring {topic_area}. Try being more specific.",
+            "success": False
+        }
+
+
+# ===== POST BUILDER FUNCTION TOOL (for post_generator agent) =====
 
 POST_BUILDER_SYSTEM_PROMPT = """You are a social media campaign assistant. Generate engaging posts based on REAL content that has been searched for you.
 
@@ -2069,9 +2367,14 @@ POST_BUILDER_FUNCTION_TOOL = types.Tool(
 
 def chat_post_builder_stream(message: str, history: list[dict], user_id: int = None):
     """
-    Stream a chat response for the post builder using a two-call approach:
-    1. Search for real content using Google grounding (via search_trending_topics)
-    2. Generate posts using function calling with the searched content
+    Stream a chat response using the multi-agent orchestrator pattern.
+
+    Flow:
+    1. Intent Parser - understand persona, topic, intent
+    2. Route based on intent:
+       - greeting → respond directly
+       - brainstorm → brainstorm agent
+       - generate_posts → search agent (optimized query) → post generator
 
     Args:
         message: The user's current message
@@ -2081,141 +2384,101 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
     Yields:
         Text chunks or JSON with tool results
     """
-    import json
     import base64
 
     try:
-        # Check if this is a simple conversational message or a post generation request
-        message_lower = message.lower()
+        # STEP 1: Parse intent to understand the request
+        yield "🤔 Understanding your request...\n\n"
 
-        # Simple responses for greetings/questions
-        if any(word in message_lower for word in ['hello', 'hi ', 'hey', 'help', 'what can you']):
+        intent_data = agent_intent_parser(message, history)
+        intent = intent_data.get("intent", "generate_posts")
+        persona = intent_data.get("persona", "professional thought leader")
+        topic = intent_data.get("topic", message)
+        search_query = intent_data.get("search_query", topic)
+        visual_style = intent_data.get("visual_style", "professional, modern design")
+
+        logger.info(f"Intent: {intent}, Persona: {persona}, Topic: {topic}, Query: {search_query}")
+
+        # STEP 2: Route based on intent
+        if intent == "greeting":
             yield "Hello! I'm your Post Builder assistant. Tell me what you'd like to post about and I'll help create engaging content.\n\n"
-            yield "For example, try: 'mario and luigi explain observability' or 'create a post about kubernetes best practices'"
+            yield "For example, try:\n"
+            yield "- 'mario and luigi explain observability'\n"
+            yield "- 'create a post about kubernetes best practices'\n"
+            yield "- 'what's trending in AI?'\n"
             return
 
-        # Extract topic from user's message for searching
-        # The message format is typically: "[persona] explain/about [topic]" or just "[topic]"
-        yield f"🔍 Analyzing your request and searching for content...\n\n"
+        if intent == "clarify":
+            yield "I'd love to help! Could you tell me more about what you'd like to post about?\n\n"
+            yield "You can specify:\n"
+            yield "- A topic (e.g., 'kubernetes', 'observability', 'AI')\n"
+            yield "- A creative persona (e.g., 'mario and luigi explain...')\n"
+            yield "- Or ask 'what's trending in [topic]?' to brainstorm ideas\n"
+            return
 
-        # STEP 1: Search for real content using Google grounding
-        try:
-            search_context, urls, html_content = search_trending_topics(
-                user_prompt=f"Find current news or articles about: {message}",
-                refined_persona="informative content finder for social media posts",
-                recent_topics=[],
-                validate_urls=True
-            )
+        if intent == "brainstorm":
+            yield f"💡 Exploring ideas about {topic}...\n\n"
+            brainstorm_result = agent_brainstorm(topic)
+            yield brainstorm_result.get("suggestions", "No suggestions found.")
+            yield "\n\nWant me to create posts about any of these? Just say which one!"
+            return
 
-            focused_context = search_context
-            selected_url = urls[0] if urls else None
+        # STEP 3: For generate_posts intent - search with OPTIMIZED query
+        yield f"🔍 Searching for content about: **{topic}**\n\n"
 
-            if urls:
-                # Get focused content from one URL
-                try:
-                    focused_context, selected_url, _ = select_single_topic(
-                        search_context, urls, message
-                    )
-                    yield f"📄 Found content from: {selected_url}\n\n"
-                except Exception as e:
-                    logger.warning(f"select_single_topic failed: {e}, using broad context")
-                    yield f"📄 Found relevant content...\n\n"
+        search_result = agent_search(search_query, persona)
+
+        if search_result.get("success") and search_result.get("content"):
+            selected_url = search_result.get("selected_url")
+            if selected_url:
+                yield f"📄 Found content from: {selected_url}\n\n"
             else:
-                yield f"📄 Found some context to work with...\n\n"
+                yield f"📄 Found relevant content...\n\n"
+        else:
+            yield f"⚠️ Search had issues, generating with available context...\n\n"
 
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            yield f"⚠️ Search encountered an issue. Generating posts with general knowledge...\n\n"
-            focused_context = f"Topic: {message}"
-            selected_url = None
+        # STEP 4: Generate posts using persona + searched content
+        yield f"✨ Generating posts as **{persona}**...\n\n"
 
-        # STEP 2: Call LLM with function calling to generate posts
-        # Build the prompt with the searched content
-        generation_prompt = f"""User's original request: {message}
-
-REAL CONTENT FOUND (use these facts in your posts):
-{focused_context[:3000]}
-
-Source URL: {selected_url or 'No specific URL found'}
-
-Now call generate_posts() to create posts that:
-1. Present this REAL content in the persona's voice from the user's request
-2. Include a visual_style that describes how to DRAW/VISUALIZE the persona for image generation
-"""
-
-        # Get campaign persona if available
-        persona_context = ""
+        # Get campaign persona for additional context
+        campaign_visual_style = None
         if user_id:
             campaign_data = get_campaign(user_id)
-            if campaign_data and campaign_data.get("refined_persona"):
-                persona_context = f"\n\nUser's existing campaign persona for reference: {campaign_data['refined_persona']}"
+            if campaign_data and campaign_data.get("visual_style"):
+                campaign_visual_style = campaign_data.get("visual_style")
 
-        system_instruction = POST_BUILDER_SYSTEM_PROMPT + persona_context
+        # Use visual_style from intent parser, or fallback to campaign style
+        final_visual_style = visual_style
+        if campaign_visual_style and visual_style == "professional, modern design":
+            final_visual_style = campaign_visual_style
 
-        yield "✨ Generating posts in your style...\n\n"
-
-        # Make the function calling request (NO Google Search here - already done above)
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[types.Content(role="user", parts=[types.Part(text=generation_prompt)])],
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.9,
-                tools=[POST_BUILDER_FUNCTION_TOOL],
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
+        post_result = agent_post_generator(
+            persona=persona,
+            topic=topic,
+            content=search_result.get("content", f"Topic: {topic}"),
+            visual_style=final_visual_style,
+            source_url=search_result.get("selected_url")
         )
 
-        # Process the response
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                # Check for function call
-                if hasattr(part, 'function_call') and part.function_call:
-                    fc = part.function_call
-                    args = dict(fc.args) if fc.args else {}
-
-                    if fc.name == "generate_posts":
-                        # Return posts with visual_style for image generation
-                        tool_result = {
-                            "type": "tool_call",
-                            "tool": "generate_posts",
-                            "x_post": args.get("x_post", ""),
-                            "linkedin_post": args.get("linkedin_post", ""),
-                            "source_url": args.get("source_url", selected_url or ""),
-                            "persona": args.get("persona", ""),
-                            "visual_style": args.get("visual_style", "")
-                        }
-                        encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
-                        yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
-                        yield f"\n\n✅ Posts generated in the '{args.get('persona', 'your')}' style!"
-                        if selected_url:
-                            yield f"\n📎 Source: {selected_url}"
-                        return
-
-                    elif fc.name == "create_campaign_prompt":
-                        # Return campaign configuration
-                        tool_result = {
-                            "type": "tool_call",
-                            "tool": "create_campaign_prompt",
-                            "campaign_prompt": args.get("campaign_prompt", ""),
-                            "refined_persona": args.get("refined_persona", ""),
-                            "visual_style": args.get("visual_style", "")
-                        }
-                        encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
-                        yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
-                        yield "\n\n📋 Campaign configuration generated!"
-                        return
-
-                # Regular text response (if model didn't call a function)
-                if hasattr(part, 'text') and part.text:
-                    yield part.text
-
-        # If we got here without generating posts, prompt the user
-        yield "\n\nI found some content but need more direction. Try being more specific, like:\n"
-        yield "- 'mario and luigi explain observability'\n"
-        yield "- 'create a post about the latest kubernetes release'\n"
+        if post_result.get("success"):
+            # Return posts in the format frontend expects
+            tool_result = {
+                "type": "tool_call",
+                "tool": "generate_posts",
+                "x_post": post_result.get("x_post", ""),
+                "linkedin_post": post_result.get("linkedin_post", ""),
+                "source_url": post_result.get("source_url", ""),
+                "persona": post_result.get("persona", persona),
+                "visual_style": post_result.get("visual_style", final_visual_style)
+            }
+            encoded = base64.b64encode(json.dumps(tool_result).encode()).decode()
+            yield f"__TOOL_CALL_B64__{encoded}__END_TOOL_CALL__"
+            yield f"\n\n✅ Posts generated in the **{persona}** style!"
+            if search_result.get("selected_url"):
+                yield f"\n📎 Source: {search_result.get('selected_url')}"
+        else:
+            yield f"\n\n❌ Had trouble generating posts: {post_result.get('error', 'Unknown error')}"
+            yield "\n\nTry rephrasing your request or being more specific about the topic."
 
     except Exception as e:
         logger.error(f"Error in chat_post_builder_stream: {e}", exc_info=True)
