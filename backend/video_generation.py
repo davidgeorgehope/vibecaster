@@ -219,22 +219,19 @@ def generate_scene_image(
         return None
 
 
-def generate_video_from_image(
+def generate_video_from_image_stream(
     first_frame_bytes: bytes,
     video_prompt: str
-) -> Optional[bytes]:
+):
     """
-    Generate a video using Veo 3.1 with a first frame image (image-to-video).
+    Generate a video using Veo 3.1 with progress events (generator).
 
-    NOTE: reference_images cannot be used with image-to-video mode per Veo API.
-    Character consistency should be handled via generate_scene_image() instead.
+    Yields:
+        ('progress', poll_count, max_polls) during polling
+        ('complete', video_bytes) on success
+        ('error', error_message) on failure
 
-    Args:
-        first_frame_bytes: First frame image bytes
-        video_prompt: Motion/action prompt for video generation
-
-    Returns:
-        Video bytes (MP4) or None if generation fails
+    NOTE: Use this for SSE streaming to keep Cloudflare connection alive.
     """
     tmp_image_path = None
     tmp_video_path = None
@@ -242,14 +239,12 @@ def generate_video_from_image(
     try:
         logger.info(f"🎥 Generating video from first frame...")
 
-        # Save first frame to temp file (Veo requires file path, not PIL Image)
+        # Save first frame to temp file
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
             tmp_image_path = tmp_img.name
             tmp_img.write(first_frame_bytes)
             tmp_img.flush()
 
-        # Load image using types.Image.from_file for proper format
-        # NOTE: from_file requires keyword argument (location=) - all params are keyword-only
         first_frame = types.Image.from_file(location=tmp_image_path)
 
         # Start video generation
@@ -259,74 +254,92 @@ def generate_video_from_image(
             image=first_frame
         )
 
-        # Poll until complete
+        # Poll until complete, yielding progress for SSE keepalive
         poll_count = 0
         max_polls = 60  # 10 minutes max
         while not operation.done and poll_count < max_polls:
-            logger.info(f"Video generation in progress... (poll {poll_count + 1})")
+            poll_count += 1
+            logger.info(f"Video generation in progress... (poll {poll_count}/{max_polls})")
+
+            # Yield progress event to keep SSE connection alive through Cloudflare
+            yield ('progress', poll_count, max_polls)
+
             time.sleep(POLL_INTERVAL)
             operation = client.operations.get(operation)
-            poll_count += 1
 
         if not operation.done:
             logger.error(f"Video generation timed out after {poll_count * POLL_INTERVAL} seconds")
-            return None
+            yield ('error', 'Video generation timed out')
+            return
 
         # Download the generated video
         if operation.response and operation.response.generated_videos:
             video = operation.response.generated_videos[0]
 
-            # Validate video object structure
             if not hasattr(video, 'video') or video.video is None:
                 logger.error("Veo API returned video object without video data")
-                return None
+                yield ('error', 'No video data in response')
+                return
 
-            # Save video to temp file
             with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
                 tmp_video_path = tmp_vid.name
 
-            # Download and save with explicit error handling
             try:
                 client.files.download(file=video.video)
                 video.video.save(tmp_video_path)
             except Exception as save_error:
                 logger.error(f"Failed to download/save video from Veo: {save_error}")
-                return None
+                yield ('error', f'Failed to download video: {save_error}')
+                return
 
-            # Read video bytes
             with open(tmp_video_path, 'rb') as f:
                 video_bytes = f.read()
 
-            # Validate video has meaningful content
-            # A valid MP4 header is at least a few hundred bytes, but a real video
-            # segment should be much larger (typically 100KB+ for even a few seconds)
-            MIN_VIDEO_SIZE = 10000  # 10KB minimum
+            MIN_VIDEO_SIZE = 10000
             if len(video_bytes) < MIN_VIDEO_SIZE:
-                logger.error(f"Video file too small ({len(video_bytes)} bytes), likely corrupt or empty")
-                return None
+                logger.error(f"Video file too small ({len(video_bytes)} bytes)")
+                yield ('error', 'Video file too small')
+                return
 
             logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
-            return video_bytes
-
-        logger.warning("No video in response - API returned empty generated_videos list")
-        return None
+            yield ('complete', video_bytes)
+        else:
+            logger.warning("No video in response")
+            yield ('error', 'No video in API response')
 
     except Exception as e:
         logger.error(f"Error generating video: {e}", exc_info=True)
-        return None
+        yield ('error', str(e))
 
     finally:
-        # Clean up temp files
+        # Cleanup temp files
         if tmp_image_path and os.path.exists(tmp_image_path):
             try:
                 os.unlink(tmp_image_path)
-            except Exception:
+            except:
                 pass
         if tmp_video_path and os.path.exists(tmp_video_path):
             try:
                 os.unlink(tmp_video_path)
-            except Exception:
+            except:
                 pass
+
+
+def generate_video_from_image(
+    first_frame_bytes: bytes,
+    video_prompt: str
+) -> Optional[bytes]:
+    """
+    Generate a video using Veo 3.1 (blocking wrapper).
+
+    For SSE streaming with Cloudflare, use generate_video_from_image_stream() instead.
+    """
+    for event_type, *data in generate_video_from_image_stream(first_frame_bytes, video_prompt):
+        if event_type == 'complete':
+            return data[0]
+        elif event_type == 'error':
+            return None
+    return None
 
 
 def stitch_videos(video_segments: List[bytes], output_format: str = "mp4") -> Optional[bytes]:
@@ -505,7 +518,7 @@ def generate_video_stream(
 
             update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
 
-            # Generate video from image
+            # Generate video from image using streaming to keep SSE alive
             # NOTE: Character consistency is handled by generate_scene_image(), not here.
             # Veo API doesn't support reference_images with image-to-video mode.
             yield emit_event("scene_video",
@@ -513,10 +526,24 @@ def generate_video_stream(
                            total=len(scenes),
                            message=f"Generating video for scene {scene_num}...")
 
-            video_bytes = generate_video_from_image(
+            video_bytes = None
+            for event_type, *event_data in generate_video_from_image_stream(
                 first_frame_bytes=image_bytes,
                 video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
-            )
+            ):
+                if event_type == 'progress':
+                    poll_count, max_polls = event_data
+                    # Emit keepalive event every poll to prevent Cloudflare timeout
+                    yield emit_event("scene_progress",
+                                   scene=scene_num,
+                                   total=len(scenes),
+                                   poll=poll_count,
+                                   max_polls=max_polls,
+                                   message=f"Rendering scene {scene_num}... ({poll_count * 10}s)")
+                elif event_type == 'complete':
+                    video_bytes = event_data[0]
+                elif event_type == 'error':
+                    logger.error(f"Video generation error: {event_data[0]}")
 
             if video_bytes:
                 update_video_scene(scene_id, video_data=video_bytes,
