@@ -263,9 +263,9 @@ def generate_video_from_image(
                     ref_tmp_paths.append(ref_tmp.name)
                 ref_img = types.Image.from_file(location=ref_tmp_paths[-1])
                 ref_list.append(types.RawReferenceImage(
-                    reference_image=ref_img,
-                    reference_id=i,
-                    reference_type="REFERENCE_TYPE_SUBJECT"
+                    referenceImage=ref_img,
+                    referenceId=i,
+                    referenceType="REFERENCE_TYPE_SUBJECT"
                 ))
             config_kwargs["reference_images"] = ref_list
 
