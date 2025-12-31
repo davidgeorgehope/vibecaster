@@ -167,9 +167,11 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
 
         const { jobs } = await response.json();
 
-        // Find first in-progress job
+        // Find first in-progress job that was updated recently (within 30 min)
+        const thirtyMinutesAgo = Date.now() / 1000 - 30 * 60;
         const activeJob = jobs.find((j: VideoJob) =>
-          ['pending', 'planning', 'generating', 'stitching'].includes(j.status)
+          ['pending', 'planning', 'generating', 'stitching'].includes(j.status) &&
+          j.updated_at > thirtyMinutesAgo
         );
 
         if (activeJob) {
@@ -383,6 +385,30 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     stopPolling();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+    }
+  };
+
+  const handleDismissJob = async () => {
+    if (!token || !jobId) return;
+
+    try {
+      const response = await fetch(`/api/video/jobs/${jobId}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        stopPolling();
+        setPhase('idle');
+        setStatusMessage('');
+        setJobId(null);
+        setScenes([]);
+        setScriptTitle('');
+        setScriptSummary('');
+        showNotification('info', 'Job dismissed');
+      }
+    } catch (error) {
+      console.error('Failed to dismiss job:', error);
     }
   };
 
@@ -600,19 +626,30 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
       {phase !== 'idle' && (
         <div className="mt-6 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
           {/* Phase Indicator */}
-          <div className="flex items-center gap-3 mb-4">
-            {phase === 'planning' && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
-            {phase === 'generating' && <Film className="w-5 h-5 text-purple-400" />}
-            {phase === 'stitching' && <Scissors className="w-5 h-5 text-purple-400 animate-pulse" />}
-            {phase === 'complete' && <Check className="w-5 h-5 text-green-400" />}
-            {phase === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
-            <span className={`font-medium ${
-              phase === 'complete' ? 'text-green-400' :
-              phase === 'error' ? 'text-red-400' :
-              'text-white'
-            }`}>
-              {statusMessage}
-            </span>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              {phase === 'planning' && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
+              {phase === 'generating' && <Film className="w-5 h-5 text-purple-400" />}
+              {phase === 'stitching' && <Scissors className="w-5 h-5 text-purple-400 animate-pulse" />}
+              {phase === 'complete' && <Check className="w-5 h-5 text-green-400" />}
+              {phase === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
+              <span className={`font-medium ${
+                phase === 'complete' ? 'text-green-400' :
+                phase === 'error' ? 'text-red-400' :
+                'text-white'
+              }`}>
+                {statusMessage}
+              </span>
+            </div>
+            {isGenerating && jobId && (
+              <button
+                onClick={handleDismissJob}
+                className="text-sm text-gray-400 hover:text-red-400 transition-colors"
+                title="Dismiss this job"
+              >
+                Dismiss
+              </button>
+            )}
           </div>
 
           {/* Script Info */}

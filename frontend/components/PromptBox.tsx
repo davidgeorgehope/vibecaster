@@ -4,14 +4,14 @@ import { useState, useEffect } from 'react';
 import { Sparkles, Loader2, Play, Trash2, Image, Video } from 'lucide-react';
 
 interface PromptBoxProps {
-  onActivate: (prompt: string, mediaType?: string) => Promise<void>;
+  onActivate: (prompt: string) => Promise<void>;
   onRunNow: () => Promise<void>;
   token: string | null;
 }
 
 export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProps) {
   const [prompt, setPrompt] = useState('');
-  const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
+  const [detectedMediaType, setDetectedMediaType] = useState<'image' | 'video'>('image');
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -32,7 +32,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
           setPrompt(data.user_prompt);
           setCampaignConfigured(true);
           if (data.media_type) {
-            setMediaType(data.media_type);
+            setDetectedMediaType(data.media_type);
           }
         }
       })
@@ -47,7 +47,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
 
     setIsLoading(true);
     try {
-      await onActivate(prompt, mediaType);
+      await onActivate(prompt);
       setCampaignConfigured(true);
     } finally {
       setIsLoading(false);
@@ -109,43 +109,22 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
         />
       </div>
 
-      {/* Media Type Selector */}
-      <div className="mb-4">
-        <label className="block text-sm font-medium text-gray-400 mb-2">
-          Media Type for Posts
-        </label>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setMediaType('image')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border transition-colors ${
-              mediaType === 'image'
-                ? 'border-purple-500 bg-purple-500/20 text-purple-400'
-                : 'border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600'
-            }`}
-          >
-            <Image className="w-4 h-4" />
-            Image
-          </button>
-          <button
-            type="button"
-            onClick={() => setMediaType('video')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border transition-colors ${
-              mediaType === 'video'
-                ? 'border-purple-500 bg-purple-500/20 text-purple-400'
-                : 'border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600'
-            }`}
-          >
-            <Video className="w-4 h-4" />
-            Video (8s clip)
-          </button>
+      {/* Media Type Info */}
+      {campaignConfigured && (
+        <div className="mb-4 flex items-center gap-2 text-sm text-gray-400">
+          {detectedMediaType === 'video' ? (
+            <>
+              <Video className="w-4 h-4 text-purple-400" />
+              <span>AI detected: <span className="text-purple-400">Video</span> (auto-detected from prompt)</span>
+            </>
+          ) : (
+            <>
+              <Image className="w-4 h-4 text-purple-400" />
+              <span>AI detected: <span className="text-purple-400">Image</span> (default)</span>
+            </>
+          )}
         </div>
-        {mediaType === 'video' && (
-          <p className="mt-2 text-xs text-yellow-500/80">
-            Note: Video generation takes 2-5 minutes per post
-          </p>
-        )}
-      </div>
+      )}
 
       <div className="flex flex-col gap-3">
         <button

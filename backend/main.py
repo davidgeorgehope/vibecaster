@@ -70,7 +70,43 @@ scheduler = BackgroundScheduler()
 class SetupRequest(BaseModel):
     user_prompt: str
     schedule_cron: str = "0 9 * * *"  # Default: Daily at 9 AM
-    media_type: str = "image"  # "image" (default) or "video"
+    media_type: Optional[str] = None  # Auto-detected from prompt if not provided
+
+
+def detect_media_type_from_prompt(prompt: str) -> str:
+    """
+    Auto-detect whether the user wants video or image content based on their prompt.
+
+    Examples that trigger video:
+    - "generate opentelemetry memes daily with a 40 second video"
+    - "create short video clips about kubernetes"
+    - "post animated explainers"
+
+    Default is image.
+    """
+    prompt_lower = prompt.lower()
+
+    # Video keywords and patterns
+    video_patterns = [
+        'video', 'videos', 'clip', 'clips', 'animation', 'animated',
+        'second video', 'seconds video', 'minute video', 'minutes video',
+        's video', 'sec video', 'min video',
+        'motion', 'moving', 'explainer video', 'short video'
+    ]
+
+    # Check for video indicators
+    for pattern in video_patterns:
+        if pattern in prompt_lower:
+            return 'video'
+
+    # Check for duration mentions (e.g., "30s", "1 minute", "40 seconds")
+    import re
+    duration_pattern = r'\b(\d+)\s*(s|sec|second|seconds|min|minute|minutes)\b'
+    if re.search(duration_pattern, prompt_lower):
+        return 'video'
+
+    # Default to image
+    return 'image'
 
 
 class CampaignResponse(BaseModel):
@@ -319,14 +355,19 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
     """
     Setup or update the campaign configuration.
     This analyzes the user prompt and configures the AI agent.
+    Media type (image/video) is auto-detected from the prompt.
     """
     try:
         # Analyze user prompt with AI
         logger.info(f"Analyzing prompt: {request.user_prompt}")
         refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
 
-        # Validate media_type
-        media_type = request.media_type if request.media_type in ("image", "video") else "image"
+        # Auto-detect media type from prompt (or use explicit value if provided)
+        if request.media_type and request.media_type in ("image", "video"):
+            media_type = request.media_type
+        else:
+            media_type = detect_media_type_from_prompt(request.user_prompt)
+            logger.info(f"Auto-detected media type: {media_type}")
 
         # Update campaign in database
         update_campaign(
@@ -954,6 +995,23 @@ async def download_video_endpoint(job_id: int, user_id: int = Depends(get_curren
             "Content-Disposition": f"attachment; filename=\"{job.get('title', 'video')}.mp4\""
         }
     )
+
+
+@app.post("/api/video/jobs/{job_id}/cancel")
+async def cancel_video_job_endpoint(job_id: int, user_id: int = Depends(get_current_user_id)):
+    """Cancel/dismiss a video job (marks as error)."""
+    from database import get_video_job, update_video_job
+
+    job = get_video_job(job_id, user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+
+    # Only allow canceling in-progress jobs
+    if job['status'] in ('complete', 'partial', 'error'):
+        raise HTTPException(status_code=400, detail="Job already finished")
+
+    update_video_job(job_id, status='error', error_message='Cancelled by user')
+    return {"success": True, "message": "Job cancelled"}
 
 
 # ===== MAIN ENTRY POINT =====

@@ -5,14 +5,15 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
 import TranscribeBox from '@/components/TranscribeBox';
 import BioBox from '@/components/BioBox';
 import VideoBuilder from '@/components/VideoBuilder';
+import JobsPanel from '@/components/JobsPanel';
 
-type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'bio';
+type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'bio' | 'jobs';
 
 interface ConnectionStatus {
   twitter: boolean;
@@ -163,7 +164,7 @@ export default function Home() {
     }
   };
 
-  const handleActivateCampaign = async (prompt: string, mediaType: string = 'image') => {
+  const handleActivateCampaign = async (prompt: string) => {
     if (!token) return;
     try {
       const response = await fetch('/api/setup', {
@@ -174,8 +175,8 @@ export default function Home() {
         },
         body: JSON.stringify({
           user_prompt: prompt,
-          schedule_cron: '0 9 * * *', // Daily at 9 AM
-          media_type: mediaType
+          schedule_cron: '0 9 * * *' // Daily at 9 AM
+          // media_type is auto-detected by backend
         })
       });
 
@@ -289,7 +290,8 @@ export default function Home() {
               { id: 'builder', label: 'Post Builder', icon: MessageSquare },
               { id: 'transcribe', label: 'Transcribe', icon: Mic },
               { id: 'video', label: 'Video', icon: Video },
-              { id: 'bio', label: 'Bio', icon: User }
+              { id: 'bio', label: 'Bio', icon: User },
+              { id: 'jobs', label: 'Jobs', icon: ListTodo }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -395,6 +397,13 @@ export default function Home() {
 
         <div className={activeTab === 'bio' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <BioBox
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
+
+        <div className={activeTab === 'jobs' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <JobsPanel
             token={token}
             showNotification={showNotification}
           />
