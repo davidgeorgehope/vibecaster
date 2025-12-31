@@ -17,9 +17,11 @@ class TestGenerateVideoForPost:
     def test_generates_video_from_post_text(self):
         """Test that video is generated from post text using first-frame approach."""
         import agents
+        import agents_lib.chat_stream as chat_stream
         import video_generation
 
-        with patch.object(agents, 'generate_image_for_post_builder', return_value=b'first_frame_bytes') as mock_image_gen, \
+        # Patch at the source module where the calls happen
+        with patch.object(chat_stream, 'generate_image_for_post_builder', return_value=b'first_frame_bytes') as mock_image_gen, \
              patch.object(video_generation, 'generate_video_from_image', return_value=b'video_bytes_mp4') as mock_video_gen:
 
             result = agents.generate_video_for_post(
@@ -35,8 +37,9 @@ class TestGenerateVideoForPost:
     def test_returns_none_if_image_fails(self):
         """Test that None is returned if first frame generation fails."""
         import agents
+        import agents_lib.chat_stream as chat_stream
 
-        with patch.object(agents, 'generate_image_for_post_builder', return_value=None):
+        with patch.object(chat_stream, 'generate_image_for_post_builder', return_value=None):
             result = agents.generate_video_for_post(
                 post_text="Test post",
                 visual_style="real person",
@@ -48,9 +51,10 @@ class TestGenerateVideoForPost:
     def test_returns_none_if_video_gen_fails(self):
         """Test that None is returned if video generation fails."""
         import agents
+        import agents_lib.chat_stream as chat_stream
         import video_generation
 
-        with patch.object(agents, 'generate_image_for_post_builder', return_value=b'first_frame_bytes'), \
+        with patch.object(chat_stream, 'generate_image_for_post_builder', return_value=b'first_frame_bytes'), \
              patch.object(video_generation, 'generate_video_from_image', return_value=None):
 
             result = agents.generate_video_for_post(
@@ -65,7 +69,7 @@ class TestGenerateVideoForPost:
 class TestGenerateMediaForPostBuilder:
     """Tests for generate_media_for_post_builder function."""
 
-    @patch('agents.generate_image_for_post_builder')
+    @patch('agents_lib.chat_stream.generate_image_for_post_builder')
     def test_default_is_image(self, mock_image_gen):
         """Test that default media type is image."""
         from agents import generate_media_for_post_builder
@@ -81,7 +85,7 @@ class TestGenerateMediaForPostBuilder:
         assert mime_type == "image/png"
         mock_image_gen.assert_called_once()
 
-    @patch('agents.generate_video_for_post')
+    @patch('agents_lib.chat_stream.generate_video_for_post')
     def test_video_when_specified(self, mock_video_gen):
         """Test that video is generated when media_type is video."""
         from agents import generate_media_for_post_builder
@@ -98,7 +102,7 @@ class TestGenerateMediaForPostBuilder:
         assert mime_type == "video/mp4"
         mock_video_gen.assert_called_once()
 
-    @patch('agents.generate_image_for_post_builder')
+    @patch('agents_lib.chat_stream.generate_image_for_post_builder')
     def test_explicit_image_type(self, mock_image_gen):
         """Test that image is generated when media_type is explicitly image."""
         from agents import generate_media_for_post_builder

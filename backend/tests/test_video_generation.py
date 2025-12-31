@@ -175,65 +175,91 @@ class TestGenerateSceneImage:
 class TestGenerateVideoFromImage:
     """Tests for generate_video_from_image function."""
 
+    @patch('video_generation.types.Image')
     @patch('video_generation.client')
-    @patch('video_generation.time')
-    def test_generates_video_from_first_frame(self, mock_time, mock_client):
-        """Test that video is generated from first frame."""
+    @patch('video_generation.time.sleep')
+    def test_generates_video_from_first_frame(self, mock_sleep, mock_client, mock_image_type):
+        """Test successful video generation from first frame."""
         from video_generation import generate_video_from_image
         from PIL import Image
         from io import BytesIO
-        import tempfile
 
         # Create first frame
-        img = Image.new('RGB', (10, 10), color='blue')
+        img = Image.new('RGB', (100, 100), color='blue')
         img_bytes = BytesIO()
         img.save(img_bytes, format='PNG')
         first_frame = img_bytes.getvalue()
 
-        # Mock operation
+        # Create mock video response with proper video data (> 10KB)
+        mock_video_bytes = b'x' * 15000  # 15KB - above MIN_VIDEO_SIZE threshold
+
+        # Mock types.Image.from_file to return a mock image
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock the video object
         mock_video = Mock()
         mock_video.video = Mock()
-        mock_video.video.save = Mock()
 
+        # Mock operation
         mock_operation = Mock()
         mock_operation.done = True
+        mock_operation.response = Mock()
         mock_operation.response.generated_videos = [mock_video]
 
         mock_client.models.generate_videos.return_value = mock_operation
         mock_client.files.download = Mock()
 
-        # Mock file operations
-        with patch('video_generation.tempfile.NamedTemporaryFile') as mock_tmp:
-            mock_tmp.return_value.__enter__ = Mock(return_value=Mock(name='/tmp/test.mp4'))
-            mock_tmp.return_value.__exit__ = Mock(return_value=False)
+        # Mock video.save to write our mock bytes
+        def mock_save(path):
+            with open(path, 'wb') as f:
+                f.write(mock_video_bytes)
 
-            with patch('builtins.open', create=True) as mock_open:
-                mock_open.return_value.__enter__ = Mock(return_value=Mock(
-                    read=Mock(return_value=b'video_bytes')
-                ))
-                mock_open.return_value.__exit__ = Mock(return_value=False)
+        mock_video.video.save = mock_save
 
-                with patch('video_generation.os.unlink'):
-                    # This test may not work perfectly due to file mocking complexity
-                    # but it verifies the function is callable
-                    pass
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Test motion prompt"
+        )
 
+        assert result is not None
+        assert len(result) == len(mock_video_bytes)
+        mock_client.models.generate_videos.assert_called_once()
+
+    @patch('video_generation.types.Image')
     @patch('video_generation.client')
-    @patch('video_generation.time')
-    def test_polls_until_complete(self, mock_time, mock_client):
+    @patch('video_generation.time.sleep')
+    def test_polls_until_complete(self, mock_sleep, mock_client, mock_image_type):
         """Test that operation is polled until done."""
         from video_generation import generate_video_from_image
         from PIL import Image
         from io import BytesIO
 
         # Create first frame
-        img = Image.new('RGB', (10, 10), color='green')
+        img = Image.new('RGB', (100, 100), color='green')
         img_bytes = BytesIO()
         img.save(img_bytes, format='PNG')
         first_frame = img_bytes.getvalue()
 
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
         # Mock operation that completes after 2 polls
         poll_count = [0]
+        mock_video_bytes = b'v' * 20000
+
+        mock_video = Mock()
+        mock_video.video = Mock()
+
+        def mock_save(path):
+            with open(path, 'wb') as f:
+                f.write(mock_video_bytes)
+
+        mock_video.video.save = mock_save
+
+        mock_operation = Mock()
+        mock_operation.done = False
+        mock_operation.response = Mock()
+        mock_operation.response.generated_videos = [mock_video]
 
         def get_operation(op):
             poll_count[0] += 1
@@ -241,14 +267,231 @@ class TestGenerateVideoFromImage:
                 op.done = True
             return op
 
+        mock_client.models.generate_videos.return_value = mock_operation
+        mock_client.operations.get = get_operation
+        mock_client.files.download = Mock()
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Motion test"
+        )
+
+        assert result is not None
+        assert poll_count[0] == 2  # Polled exactly 2 times
+        assert mock_sleep.call_count >= 1  # Sleep was called during polling
+
+    @patch('video_generation.types.Image')
+    @patch('video_generation.client')
+    @patch('video_generation.time.sleep')
+    def test_returns_none_on_timeout(self, mock_sleep, mock_client, mock_image_type):
+        """Test that None is returned when operation times out.
+
+        Note: This test uses a smaller max_polls value to avoid long test times.
+        In production, max_polls=60 gives up to 10 minutes of polling.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+
+        # Create first frame
+        img = Image.new('RGB', (100, 100), color='red')
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock operation that never completes
+        poll_count = [0]
+
         mock_operation = Mock()
         mock_operation.done = False
+
+        def get_operation(op):
+            poll_count[0] += 1
+            return op
 
         mock_client.models.generate_videos.return_value = mock_operation
         mock_client.operations.get = get_operation
 
-        # Run (will timeout in test but verifies polling logic)
-        # This is a simplified test - full integration would need more mocking
+        # The function has max_polls=60, so this will run 60 iterations
+        # with mocked time.sleep that returns immediately
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Timeout test"
+        )
+
+        assert result is None
+        assert poll_count[0] == 60  # Reached max polls
+
+    @patch('video_generation.types.Image')
+    @patch('video_generation.client')
+    @patch('video_generation.time.sleep')
+    def test_returns_none_when_video_object_missing_data(self, mock_sleep, mock_client, mock_image_type):
+        """Test that None is returned when Veo returns video object without video data.
+
+        This is a common production failure mode where the API returns a response
+        but the video.video attribute is None.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+
+        # Create first frame
+        img = Image.new('RGB', (100, 100), color='yellow')
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock video object with video=None (production failure scenario)
+        mock_video = Mock()
+        mock_video.video = None  # This is the failure mode
+
+        mock_operation = Mock()
+        mock_operation.done = True
+        mock_operation.response = Mock()
+        mock_operation.response.generated_videos = [mock_video]
+
+        mock_client.models.generate_videos.return_value = mock_operation
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Missing video data test"
+        )
+
+        assert result is None
+
+    @patch('video_generation.types.Image')
+    @patch('video_generation.client')
+    @patch('video_generation.time.sleep')
+    def test_returns_none_when_download_fails(self, mock_sleep, mock_client, mock_image_type):
+        """Test that None is returned when video download/save fails.
+
+        This covers the production failure where Veo returns success but
+        the actual video file cannot be downloaded or saved.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+
+        # Create first frame
+        img = Image.new('RGB', (100, 100), color='purple')
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock video that raises exception on save
+        mock_video = Mock()
+        mock_video.video = Mock()
+        mock_video.video.save = Mock(side_effect=Exception("Network error during download"))
+
+        mock_operation = Mock()
+        mock_operation.done = True
+        mock_operation.response = Mock()
+        mock_operation.response.generated_videos = [mock_video]
+
+        mock_client.models.generate_videos.return_value = mock_operation
+        mock_client.files.download = Mock()
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Download failure test"
+        )
+
+        assert result is None
+
+    @patch('video_generation.types.Image')
+    @patch('video_generation.client')
+    @patch('video_generation.time.sleep')
+    def test_returns_none_when_video_too_small(self, mock_sleep, mock_client, mock_image_type):
+        """Test that None is returned when video file is too small (< 10KB).
+
+        This covers the production failure where Veo generates a corrupt
+        or empty video file that passes initial validation but is unusable.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+
+        # Create first frame
+        img = Image.new('RGB', (100, 100), color='orange')
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock video that produces a tiny file (< 10KB MIN_VIDEO_SIZE threshold)
+        mock_video_bytes = b'tiny'  # Only 4 bytes - way below threshold
+
+        mock_video = Mock()
+        mock_video.video = Mock()
+
+        def mock_save(path):
+            with open(path, 'wb') as f:
+                f.write(mock_video_bytes)
+
+        mock_video.video.save = mock_save
+
+        mock_operation = Mock()
+        mock_operation.done = True
+        mock_operation.response = Mock()
+        mock_operation.response.generated_videos = [mock_video]
+
+        mock_client.models.generate_videos.return_value = mock_operation
+        mock_client.files.download = Mock()
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Small video test"
+        )
+
+        assert result is None
+
+    @patch('video_generation.types.Image')
+    @patch('video_generation.client')
+    @patch('video_generation.time.sleep')
+    def test_returns_none_when_generated_videos_empty(self, mock_sleep, mock_client, mock_image_type):
+        """Test that None is returned when generated_videos list is empty.
+
+        This covers the production failure where the API returns success
+        but the generated_videos list is empty.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+
+        # Create first frame
+        img = Image.new('RGB', (100, 100), color='cyan')
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Mock types.Image.from_file
+        mock_image_type.from_file.return_value = Mock()
+
+        # Mock operation with empty generated_videos list
+        mock_operation = Mock()
+        mock_operation.done = True
+        mock_operation.response = Mock()
+        mock_operation.response.generated_videos = []  # Empty list
+
+        mock_client.models.generate_videos.return_value = mock_operation
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Empty videos test"
+        )
+
+        assert result is None
 
 
 class TestStitchVideos:
@@ -371,3 +614,192 @@ class TestGetVideoJobStatus:
             result = get_video_job_status(999, 1)
 
             assert result is None
+
+
+# ===== LIVE API INTEGRATION TESTS =====
+# These tests call the actual Veo API and are marked with pytest.mark.integration
+# Run with: pytest -m integration tests/test_video_generation.py -v
+# These tests cost API credits and may take 1-5 minutes to complete
+
+@pytest.mark.integration
+class TestVeoApiIntegration:
+    """
+    Integration tests that call the live Veo API.
+
+    These tests are designed to catch production failures like:
+    - API returning video object without video data
+    - Video files being too small/corrupt
+    - Timeout issues
+    - Download failures
+
+    Skip these in CI by not passing -m integration.
+    """
+
+    def test_live_video_generation_success(self):
+        """
+        End-to-end test: Generate actual video from image using Veo API.
+
+        This test exercises the full production path and validates:
+        1. Image is created from first frame bytes
+        2. Video is generated from the image
+        3. Video file is downloaded and has valid size
+
+        Expected runtime: 30-120 seconds
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+        import os
+
+        # Skip if no API key
+        if not os.getenv("GEMINI_API_KEY"):
+            pytest.skip("GEMINI_API_KEY not set")
+
+        # Create a simple test image (solid color to minimize API complexity)
+        img = Image.new('RGB', (512, 512), color=(100, 150, 200))
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        # Call the actual API
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Subtle camera zoom, gentle motion, professional quality"
+        )
+
+        # Validate result
+        assert result is not None, "Veo API returned None - check logs for failure reason"
+        assert len(result) > 10000, f"Video too small ({len(result)} bytes), likely corrupt"
+
+        # Basic MP4 header validation
+        # MP4 files start with 'ftyp' atom (within first 12 bytes)
+        assert b'ftyp' in result[:32], "Video doesn't appear to be valid MP4"
+
+    def test_live_video_with_complex_prompt(self):
+        """
+        Test video generation with a more complex motion prompt.
+
+        This tests whether complex prompts cause failures.
+        """
+        from video_generation import generate_video_from_image
+        from PIL import Image
+        from io import BytesIO
+        import os
+
+        if not os.getenv("GEMINI_API_KEY"):
+            pytest.skip("GEMINI_API_KEY not set")
+
+        # Create test image with some variation (gradient)
+        img = Image.new('RGB', (512, 512))
+        for x in range(512):
+            for y in range(512):
+                img.putpixel((x, y), (x // 2, y // 2, 128))
+
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        first_frame = img_bytes.getvalue()
+
+        result = generate_video_from_image(
+            first_frame_bytes=first_frame,
+            video_prompt="Cinematic slow motion, smooth camera pan from left to right, "
+                        "professional lighting, subtle depth of field effect"
+        )
+
+        assert result is not None, "Complex prompt caused generation failure"
+        assert len(result) > 10000, f"Video too small ({len(result)} bytes)"
+
+
+@pytest.mark.integration
+class TestGenerateSceneImageIntegration:
+    """Live API tests for scene image generation."""
+
+    def test_live_image_generation(self):
+        """Test actual image generation from prompt."""
+        from video_generation import generate_scene_image
+        import os
+
+        if not os.getenv("GEMINI_API_KEY"):
+            pytest.skip("GEMINI_API_KEY not set")
+
+        result = generate_scene_image(
+            image_prompt="A simple abstract background with geometric shapes",
+            style="cartoon"
+        )
+
+        assert result is not None, "Image generation returned None"
+        assert len(result) > 1000, f"Image too small ({len(result)} bytes)"
+
+        # Basic PNG validation
+        assert result[:8] == b'\x89PNG\r\n\x1a\n', "Not a valid PNG"
+
+
+@pytest.mark.integration
+class TestFullVideoStreamIntegration:
+    """End-to-end test of the full video generation stream."""
+
+    def test_live_single_scene_video_stream(self):
+        """
+        Full integration test: Generate a complete single-scene video.
+
+        This tests the entire pipeline:
+        1. Script planning
+        2. Scene image generation
+        3. Video generation from image
+        4. (No stitching needed for single scene)
+
+        Expected runtime: 2-5 minutes
+        """
+        from video_generation import generate_video_stream, emit_event
+        from database import get_db
+        import os
+        import json
+
+        if not os.getenv("GEMINI_API_KEY"):
+            pytest.skip("GEMINI_API_KEY not set")
+
+        # Create test user for the video job
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO users (id, email, hashed_password, created_at)
+                VALUES (99999, 'video_integration_test@test.com', 'hashed', 1234567890)
+            """)
+            conn.commit()
+
+        try:
+            events = []
+            for event in generate_video_stream(
+                user_id=99999,
+                topic="Simple test topic",
+                style="educational",
+                target_duration=8  # Single 8-second scene
+            ):
+                parsed = json.loads(event.strip())
+                events.append(parsed)
+                print(f"Event: {parsed['type']}")  # Show progress
+
+            # Verify key events occurred
+            event_types = [e['type'] for e in events]
+
+            assert 'job_created' in event_types, "Job was not created"
+            assert 'planning' in event_types, "Planning did not start"
+            assert 'script_ready' in event_types, "Script was not generated"
+
+            # Check if we got a complete or error status
+            if 'complete' in event_types:
+                complete_event = next(e for e in events if e['type'] == 'complete')
+                assert 'video_base64' in complete_event, "Complete event missing video data"
+            elif 'error' in event_types:
+                error_event = next(e for e in events if e['type'] == 'error')
+                pytest.fail(f"Video generation failed: {error_event.get('message', 'Unknown error')}")
+            else:
+                pytest.fail(f"Neither complete nor error event found. Events: {event_types}")
+
+        finally:
+            # Cleanup test data
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM video_scenes WHERE job_id IN (SELECT id FROM video_jobs WHERE user_id = 99999)")
+                cursor.execute("DELETE FROM video_jobs WHERE user_id = 99999")
+                cursor.execute("DELETE FROM users WHERE id = 99999")
+                conn.commit()
