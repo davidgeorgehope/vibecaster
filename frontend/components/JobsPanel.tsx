@@ -95,7 +95,7 @@ export default function JobsPanel({ token, showNotification }: JobsPanelProps) {
           if (details) setExpandedJobDetails(details);
         });
       }
-    }, 10000);
+    }, 5000);  // Poll every 5s for faster job updates
 
     return () => clearInterval(interval);
   }, [jobs, fetchJobs, expandedJobId, fetchJobDetails]);
@@ -126,6 +126,24 @@ export default function JobsPanel({ token, showNotification }: JobsPanelProps) {
       fetchJobs();
     } catch (error) {
       showNotification('error', 'Failed to cancel job');
+    }
+  };
+
+  const handleDismiss = async (jobId: number) => {
+    if (!token) return;
+
+    try {
+      const response = await fetch(`/api/video/jobs/${jobId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!response.ok) throw new Error('Failed to dismiss job');
+
+      showNotification('info', 'Job dismissed');
+      fetchJobs();
+    } catch (error) {
+      showNotification('error', 'Failed to dismiss job');
     }
   };
 
@@ -341,7 +359,7 @@ export default function JobsPanel({ token, showNotification }: JobsPanelProps) {
                   )}
                   {job.status === 'error' && (
                     <button
-                      onClick={() => handleCancel(job.id)}
+                      onClick={() => handleDismiss(job.id)}
                       className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     >
                       <X className="w-4 h-4" />

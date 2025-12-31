@@ -999,7 +999,7 @@ async def download_video_endpoint(job_id: int, user_id: int = Depends(get_curren
 
 @app.post("/api/video/jobs/{job_id}/cancel")
 async def cancel_video_job_endpoint(job_id: int, user_id: int = Depends(get_current_user_id)):
-    """Cancel/dismiss a video job (marks as error)."""
+    """Cancel an in-progress video job (marks as error)."""
     from database import get_video_job, update_video_job
 
     job = get_video_job(job_id, user_id)
@@ -1012,6 +1012,19 @@ async def cancel_video_job_endpoint(job_id: int, user_id: int = Depends(get_curr
 
     update_video_job(job_id, status='error', error_message='Cancelled by user')
     return {"success": True, "message": "Job cancelled"}
+
+
+@app.delete("/api/video/jobs/{job_id}")
+async def delete_video_job_endpoint(job_id: int, user_id: int = Depends(get_current_user_id)):
+    """Delete a video job (for cleanup/dismiss of finished jobs)."""
+    from database import get_video_job, delete_video_job
+
+    job = get_video_job(job_id, user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+
+    delete_video_job(job_id)
+    return {"success": True, "message": "Job deleted"}
 
 
 # ===== MAIN ENTRY POINT =====

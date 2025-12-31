@@ -37,6 +37,11 @@ DEFAULT_VIDEO_DURATION = 8  # Veo generates 8-second clips
 MAX_SCENES = 6  # Cap at 6 scenes (48 seconds) to control costs
 POLL_INTERVAL = 10  # seconds between status checks
 
+# Retry settings for quota errors
+MAX_QUOTA_RETRIES = 10  # Max retries on quota errors
+# Exponential backoff: 1m, 2m, 4m, 8m, 15m, then 15m repeated
+QUOTA_RETRY_DELAYS = [60, 120, 240, 480, 900, 900, 900, 900, 900, 900]
+
 
 def emit_event(event_type: str, **kwargs) -> str:
     """Create a JSON event string for SSE streaming."""
@@ -490,23 +495,28 @@ def generate_video_stream(
         video_segments = []
         failed_scenes = []  # Track which scenes failed for partial success warning
 
+        # Pre-create all scenes in DB so frontend can see total count
+        scene_ids = {}
         for scene in scenes:
             scene_num = scene['scene_number']
-
-            # Rate limit protection: delay between scenes (except first)
-            # Veo API has 10-20 RPM limit; 30s delay keeps us well under
-            if scene_num > 1:
-                logger.info(f"Waiting 30s before scene {scene_num} to avoid rate limits...")
-                yield emit_event("scene_delay", scene=scene_num, delay=30,
-                               message=f"Waiting 30s before scene {scene_num} (rate limit protection)...")
-                time.sleep(30)
-
-            scene_id = create_video_scene(
+            scene_ids[scene_num] = create_video_scene(
                 job_id=job_id,
                 scene_number=scene_num,
                 prompt=scene.get('video_prompt'),
                 narration=scene.get('narration')
             )
+
+        for scene in scenes:
+            scene_num = scene['scene_number']
+            scene_id = scene_ids[scene_num]
+
+            # Rate limit protection: delay between scenes (except first)
+            # Veo API has 10-20 RPM limit; 2 min delay to avoid hitting limits on scene 3+
+            if scene_num > 1:
+                logger.info(f"Waiting 2 minutes before scene {scene_num} to avoid rate limits...")
+                yield emit_event("scene_delay", scene=scene_num, delay=120,
+                               message=f"Waiting 2 minutes before scene {scene_num} (rate limit cooldown)...")
+                time.sleep(120)
 
             # Generate first frame image
             yield emit_event(f"scene_image",
@@ -522,6 +532,13 @@ def generate_video_stream(
             )
 
             if not image_bytes:
+                # Scene 1 failed - can't make video without first scene
+                if scene_num == 1:
+                    yield emit_event("error", message="First scene image failed - cannot continue")
+                    update_video_scene(scene_id, status="error", error_message="Image generation failed")
+                    update_video_job(job_id, status="error", error_message="Scene 1 image failed")
+                    return
+
                 yield emit_event("scene_error", scene=scene_num, error="Failed to generate image")
                 update_video_scene(scene_id, status="error", error_message="Image generation failed")
                 failed_scenes.append(scene_num)
@@ -529,52 +546,97 @@ def generate_video_stream(
 
             update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
 
-            # Generate video from image using streaming to keep SSE alive
+            # Generate video from image with retry logic for quota errors
             # NOTE: Character consistency is handled by generate_scene_image(), not here.
             # Veo API doesn't support reference_images with image-to-video mode.
-            yield emit_event("scene_video",
-                           scene=scene_num,
-                           total=len(scenes),
-                           message=f"Generating video for scene {scene_num}...")
-
             video_bytes = None
-            for event_type, *event_data in generate_video_from_image_stream(
-                first_frame_bytes=image_bytes,
-                video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
-            ):
-                if event_type == 'progress':
-                    poll_count, max_polls = event_data
-                    # Emit keepalive event every poll to prevent Cloudflare timeout
-                    yield emit_event("scene_progress",
-                                   scene=scene_num,
-                                   total=len(scenes),
-                                   poll=poll_count,
-                                   max_polls=max_polls,
-                                   message=f"Rendering scene {scene_num}... ({poll_count * 10}s)")
-                elif event_type == 'complete':
-                    video_bytes = event_data[0]
-                elif event_type == 'error':
-                    error_msg = event_data[0]
+            quota_retry_count = 0
+
+            while video_bytes is None and quota_retry_count <= MAX_QUOTA_RETRIES:
+                yield emit_event("scene_video",
+                               scene=scene_num,
+                               total=len(scenes),
+                               message=f"Generating video for scene {scene_num}..." +
+                                       (f" (retry {quota_retry_count})" if quota_retry_count > 0 else ""))
+
+                generation_error = None
+                for event_type, *event_data in generate_video_from_image_stream(
+                    first_frame_bytes=image_bytes,
+                    video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
+                ):
+                    if event_type == 'progress':
+                        poll_count, max_polls = event_data
+                        yield emit_event("scene_progress",
+                                       scene=scene_num,
+                                       total=len(scenes),
+                                       poll=poll_count,
+                                       max_polls=max_polls,
+                                       message=f"Rendering scene {scene_num}... ({poll_count * 10}s)")
+                    elif event_type == 'complete':
+                        video_bytes = event_data[0]
+                    elif event_type == 'error':
+                        generation_error = event_data[0]
+                        break
+
+                # Handle errors with retry for quota issues
+                if generation_error:
+                    error_msg = str(generation_error)
                     logger.error(f"Video generation error: {error_msg}")
-                    # Surface rate limit errors to user
-                    if '429' in str(error_msg) or 'RESOURCE_EXHAUSTED' in str(error_msg):
-                        yield emit_event("scene_error", scene=scene_num,
-                                       error="Rate limited - too many requests. Try again later.")
-                    else:
-                        yield emit_event("scene_error", scene=scene_num, error=str(error_msg)[:100])
-                    update_video_scene(scene_id, status="error", error_message=str(error_msg)[:200])
+
+                    # Quota errors - retry with exponential backoff
+                    if '429' in error_msg or 'RESOURCE_EXHAUSTED' in error_msg:
+                        if quota_retry_count < MAX_QUOTA_RETRIES:
+                            delay = QUOTA_RETRY_DELAYS[quota_retry_count]
+                            quota_retry_count += 1
+                            logger.info(f"Quota exceeded, waiting {delay}s before retry {quota_retry_count}/{MAX_QUOTA_RETRIES}")
+                            yield emit_event("quota_retry",
+                                           scene=scene_num,
+                                           retry=quota_retry_count,
+                                           max_retries=MAX_QUOTA_RETRIES,
+                                           delay=delay,
+                                           message=f"Quota exceeded - waiting {delay//60}m {delay%60}s before retry {quota_retry_count}/{MAX_QUOTA_RETRIES}...")
+                            time.sleep(delay)
+                            continue  # Retry the video generation
+                        else:
+                            # Max retries exhausted
+                            yield emit_event("error", message="Quota exceeded after max retries - try again later")
+                            update_video_scene(scene_id, status="error", error_message="Quota exceeded after retries")
+                            update_video_job(job_id, status="error", error_message="Quota exceeded after retries")
+                            return
+
+                    # Scene 1 failed with non-quota error - abort
+                    if scene_num == 1:
+                        yield emit_event("error", message=f"First scene failed: {error_msg[:80]}")
+                        update_video_scene(scene_id, status="error", error_message=error_msg[:200])
+                        update_video_job(job_id, status="error", error_message=f"Scene 1 failed: {error_msg[:100]}")
+                        return
+
+                    # Later scenes can fail - continue with partial video
+                    yield emit_event("scene_error", scene=scene_num, error=error_msg[:100])
+                    update_video_scene(scene_id, status="error", error_message=error_msg[:200])
                     failed_scenes.append(scene_num)
-                    continue  # Skip to next scene
+                    break  # Exit retry loop, move to next scene
 
             if video_bytes:
                 update_video_scene(scene_id, video_data=video_bytes,
                                  duration_seconds=DEFAULT_VIDEO_DURATION, status="complete")
                 video_segments.append(video_bytes)
                 yield emit_event("scene_complete", scene=scene_num, total=len(scenes))
-            else:
+            elif scene_num not in failed_scenes:
+                # No video and not already marked as failed (shouldn't happen but just in case)
                 yield emit_event("scene_error", scene=scene_num, error="Video generation returned empty")
                 update_video_scene(scene_id, status="error", error_message="Video generation returned empty")
                 failed_scenes.append(scene_num)
+
+        # Fallback: if in-memory list is empty but DB has completed scenes, retrieve them
+        # This handles cases where some scenes succeeded but later ones failed
+        if not video_segments and job_id:
+            from database import get_completed_scene_videos
+            db_scenes = get_completed_scene_videos(job_id)
+            if db_scenes:
+                video_segments = [video_data for _, video_data in db_scenes]
+                logger.info(f"Retrieved {len(video_segments)} completed scene(s) from database")
+                yield emit_event("info", message=f"Retrieved {len(video_segments)} saved scene(s)")
 
         if not video_segments:
             yield emit_event("error", message="No video segments generated")

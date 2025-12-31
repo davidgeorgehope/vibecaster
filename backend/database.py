@@ -489,6 +489,16 @@ def update_video_job(job_id: int, status: Optional[str] = None, title: Optional[
         cursor.execute(query, params)
 
 
+def delete_video_job(job_id: int):
+    """Delete a video job and its scenes."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Delete scenes first (foreign key constraint)
+        cursor.execute("DELETE FROM video_scenes WHERE job_id = ?", (job_id,))
+        # Delete job
+        cursor.execute("DELETE FROM video_jobs WHERE id = ?", (job_id,))
+
+
 def get_video_job(job_id: int, user_id: int = None) -> Optional[Dict[str, Any]]:
     """Retrieve a video job by ID."""
     import json
@@ -593,6 +603,24 @@ def get_video_scenes(job_id: int) -> list:
         """, (job_id,))
 
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_completed_scene_videos(job_id: int) -> list:
+    """Get video_data for all complete scenes of a job.
+
+    Returns list of (scene_number, video_data) tuples ordered by scene_number.
+    Only returns scenes with status='complete' and non-null video_data.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT scene_number, video_data
+            FROM video_scenes
+            WHERE job_id = ? AND status = 'complete' AND video_data IS NOT NULL
+            ORDER BY scene_number
+        """, (job_id,))
+
+        return [(row['scene_number'], row['video_data']) for row in cursor.fetchall()]
 
 
 # ===== ADMIN FUNCTIONS =====

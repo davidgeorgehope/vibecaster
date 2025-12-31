@@ -100,17 +100,22 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         // Update scenes from job data
         if (job.scenes && job.scenes.length > 0) {
           setTotalScenes(job.scenes.length);
+          // Validate and map scene statuses - ensure they match expected values
+          const validStatuses = ['pending', 'generating_image', 'generating_video', 'complete', 'error'];
           setScenes(job.scenes.map((s: { scene_number: number; status: string; narration?: string }) => ({
             scene_number: s.scene_number,
             narration: s.narration || '',
-            status: s.status as Scene['status']
+            status: (validStatuses.includes(s.status) ? s.status : 'pending') as Scene['status']
           })));
 
           // Find current scene (first non-complete scene)
           const currentIdx = job.scenes.findIndex((s: { status: string }) =>
             s.status !== 'complete' && s.status !== 'error'
           );
-          setCurrentScene(currentIdx >= 0 ? job.scenes[currentIdx].scene_number : job.scenes.length);
+          // Use last scene number if all scenes are done, not array length
+          setCurrentScene(currentIdx >= 0
+            ? job.scenes[currentIdx].scene_number
+            : job.scenes[job.scenes.length - 1].scene_number);
         }
 
         // Handle terminal states
@@ -377,6 +382,11 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
 
       case 'scene_progress':
         setStatusMessage(event.message as string || `Rendering scene ${event.scene}...`);
+        break;
+
+      case 'quota_retry':
+        setStatusMessage(event.message as string || `Quota exceeded - retrying...`);
+        showNotification('info', `Retry ${event.retry}/${event.max_retries} - waiting for quota reset`);
         break;
     }
   };
