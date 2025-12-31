@@ -288,29 +288,46 @@ def generate_video_from_image(
             poll_count += 1
 
         if not operation.done:
-            logger.error("Video generation timed out")
+            logger.error(f"Video generation timed out after {poll_count * POLL_INTERVAL} seconds")
             return None
 
         # Download the generated video
         if operation.response and operation.response.generated_videos:
             video = operation.response.generated_videos[0]
 
+            # Validate video object structure
+            if not hasattr(video, 'video') or video.video is None:
+                logger.error("Veo API returned video object without video data")
+                return None
+
             # Save video to temp file
             with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
                 tmp_video_path = tmp_vid.name
 
-            # Download and save
-            client.files.download(file=video.video)
-            video.video.save(tmp_video_path)
+            # Download and save with explicit error handling
+            try:
+                client.files.download(file=video.video)
+                video.video.save(tmp_video_path)
+            except Exception as save_error:
+                logger.error(f"Failed to download/save video from Veo: {save_error}")
+                return None
 
             # Read video bytes
             with open(tmp_video_path, 'rb') as f:
                 video_bytes = f.read()
 
+            # Validate video has meaningful content
+            # A valid MP4 header is at least a few hundred bytes, but a real video
+            # segment should be much larger (typically 100KB+ for even a few seconds)
+            MIN_VIDEO_SIZE = 10000  # 10KB minimum
+            if len(video_bytes) < MIN_VIDEO_SIZE:
+                logger.error(f"Video file too small ({len(video_bytes)} bytes), likely corrupt or empty")
+                return None
+
             logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
             return video_bytes
 
-        logger.warning("No video in response")
+        logger.warning("No video in response - API returned empty generated_videos list")
         return None
 
     except Exception as e:
