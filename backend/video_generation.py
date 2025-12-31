@@ -248,7 +248,8 @@ def generate_video_from_image(
             tmp_img.flush()
 
         # Load image using types.Image.from_file for proper format
-        first_frame = types.Image.from_file(tmp_image_path)
+        # NOTE: from_file requires keyword argument (location=) - all params are keyword-only
+        first_frame = types.Image.from_file(location=tmp_image_path)
 
         # Build config with reference images if provided
         config_kwargs = {}
@@ -260,7 +261,7 @@ def generate_video_from_image(
                     ref_tmp.write(ref_bytes)
                     ref_tmp.flush()
                     ref_tmp_paths.append(ref_tmp.name)
-                ref_img = types.Image.from_file(ref_tmp_paths[-1])
+                ref_img = types.Image.from_file(location=ref_tmp_paths[-1])
                 ref_list.append(types.RawReferenceImage(
                     reference_image=ref_img,
                     reference_id=i,
