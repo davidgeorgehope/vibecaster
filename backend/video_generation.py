@@ -38,9 +38,9 @@ MAX_SCENES = 6  # Cap at 6 scenes (48 seconds) to control costs
 POLL_INTERVAL = 10  # seconds between status checks
 
 # Retry settings for quota errors
-MAX_QUOTA_RETRIES = 10  # Max retries on quota errors
-# Exponential backoff: 1m, 2m, 4m, 8m, 15m, then 15m repeated
-QUOTA_RETRY_DELAYS = [60, 120, 240, 480, 900, 900, 900, 900, 900, 900]
+# Only 3 retries (7 min total) - if still failing, likely daily quota exhausted
+MAX_QUOTA_RETRIES = 3
+QUOTA_RETRY_DELAYS = [60, 120, 240]  # 1m, 2m, 4m backoff
 
 
 def emit_event(event_type: str, **kwargs) -> str:
