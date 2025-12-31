@@ -543,7 +543,16 @@ def generate_video_stream(
                 elif event_type == 'complete':
                     video_bytes = event_data[0]
                 elif event_type == 'error':
-                    logger.error(f"Video generation error: {event_data[0]}")
+                    error_msg = event_data[0]
+                    logger.error(f"Video generation error: {error_msg}")
+                    # Surface rate limit errors to user
+                    if '429' in str(error_msg) or 'RESOURCE_EXHAUSTED' in str(error_msg):
+                        yield emit_event("scene_error", scene=scene_num,
+                                       error="Rate limited - too many requests. Try again later.")
+                    else:
+                        yield emit_event("scene_error", scene=scene_num, error=str(error_msg)[:100])
+                    update_video_scene(scene_id, status="error", error_message=str(error_msg)[:200])
+                    continue  # Skip to next scene
 
             if video_bytes:
                 update_video_scene(scene_id, video_data=video_bytes,
@@ -551,8 +560,8 @@ def generate_video_stream(
                 video_segments.append(video_bytes)
                 yield emit_event("scene_complete", scene=scene_num, total=len(scenes))
             else:
-                yield emit_event("scene_error", scene=scene_num, error="Failed to generate video")
-                update_video_scene(scene_id, status="error", error_message="Video generation failed")
+                yield emit_event("scene_error", scene=scene_num, error="Video generation returned empty")
+                update_video_scene(scene_id, status="error", error_message="Video generation returned empty")
 
         if not video_segments:
             yield emit_event("error", message="No video segments generated")
