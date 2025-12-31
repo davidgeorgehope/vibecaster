@@ -491,6 +491,12 @@ def generate_video_stream(
 
         for scene in scenes:
             scene_num = scene['scene_number']
+
+            # Rate limit protection: delay between scenes (except first)
+            if scene_num > 1:
+                logger.info(f"Waiting 5s before scene {scene_num} to avoid rate limits...")
+                time.sleep(5)
+
             scene_id = create_video_scene(
                 job_id=job_id,
                 scene_number=scene_num,
