@@ -708,6 +708,9 @@ class TestVeoApiIntegration:
         assert result is not None, "Complex prompt caused generation failure"
         assert len(result) > 10000, f"Video too small ({len(result)} bytes)"
 
+    # NOTE: reference_images test removed - Veo API doesn't support
+    # reference_images with image-to-video mode (they're mutually exclusive)
+
 
 @pytest.mark.integration
 class TestGenerateSceneImageIntegration:

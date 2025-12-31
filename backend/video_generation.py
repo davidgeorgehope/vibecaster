@@ -221,16 +221,17 @@ def generate_scene_image(
 
 def generate_video_from_image(
     first_frame_bytes: bytes,
-    video_prompt: str,
-    reference_images: Optional[List[bytes]] = None
+    video_prompt: str
 ) -> Optional[bytes]:
     """
-    Generate a video using Veo 3.1 with a first frame image.
+    Generate a video using Veo 3.1 with a first frame image (image-to-video).
+
+    NOTE: reference_images cannot be used with image-to-video mode per Veo API.
+    Character consistency should be handled via generate_scene_image() instead.
 
     Args:
         first_frame_bytes: First frame image bytes
         video_prompt: Motion/action prompt for video generation
-        reference_images: Optional list of reference images for consistency (max 3)
 
     Returns:
         Video bytes (MP4) or None if generation fails
@@ -251,32 +252,11 @@ def generate_video_from_image(
         # NOTE: from_file requires keyword argument (location=) - all params are keyword-only
         first_frame = types.Image.from_file(location=tmp_image_path)
 
-        # Build config with reference images if provided
-        config_kwargs = {}
-        if reference_images:
-            ref_list = []
-            ref_tmp_paths = []
-            for i, ref_bytes in enumerate(reference_images[:3]):  # Max 3 references
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as ref_tmp:
-                    ref_tmp.write(ref_bytes)
-                    ref_tmp.flush()
-                    ref_tmp_paths.append(ref_tmp.name)
-                ref_img = types.Image.from_file(location=ref_tmp_paths[-1])
-                ref_list.append(types.RawReferenceImage(
-                    referenceImage=ref_img,
-                    referenceId=i,
-                    referenceType="REFERENCE_TYPE_SUBJECT"
-                ))
-            config_kwargs["reference_images"] = ref_list
-
-        config = types.GenerateVideosConfig(**config_kwargs) if config_kwargs else None
-
         # Start video generation
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=video_prompt,
-            image=first_frame,
-            config=config
+            image=first_frame
         )
 
         # Poll until complete
@@ -526,20 +506,16 @@ def generate_video_stream(
             update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
 
             # Generate video from image
+            # NOTE: Character consistency is handled by generate_scene_image(), not here.
+            # Veo API doesn't support reference_images with image-to-video mode.
             yield emit_event("scene_video",
                            scene=scene_num,
                            total=len(scenes),
                            message=f"Generating video for scene {scene_num}...")
 
-            # Build reference images list
-            reference_images = []
-            if character_reference and scene.get('include_character'):
-                reference_images.append(character_reference)
-
             video_bytes = generate_video_from_image(
                 first_frame_bytes=image_bytes,
-                video_prompt=scene.get('video_prompt', scene.get('visual_description', '')),
-                reference_images=reference_images if reference_images else None
+                video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
             )
 
             if video_bytes:
