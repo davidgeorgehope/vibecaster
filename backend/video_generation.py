@@ -488,14 +488,18 @@ def generate_video_stream(
         update_video_job(job_id, status="generating")
         scenes = script.get('scenes', [])
         video_segments = []
+        failed_scenes = []  # Track which scenes failed for partial success warning
 
         for scene in scenes:
             scene_num = scene['scene_number']
 
             # Rate limit protection: delay between scenes (except first)
+            # Veo API has 10-20 RPM limit; 30s delay keeps us well under
             if scene_num > 1:
-                logger.info(f"Waiting 5s before scene {scene_num} to avoid rate limits...")
-                time.sleep(5)
+                logger.info(f"Waiting 30s before scene {scene_num} to avoid rate limits...")
+                yield emit_event("scene_delay", scene=scene_num, delay=30,
+                               message=f"Waiting 30s before scene {scene_num} (rate limit protection)...")
+                time.sleep(30)
 
             scene_id = create_video_scene(
                 job_id=job_id,
@@ -520,6 +524,7 @@ def generate_video_stream(
             if not image_bytes:
                 yield emit_event("scene_error", scene=scene_num, error="Failed to generate image")
                 update_video_scene(scene_id, status="error", error_message="Image generation failed")
+                failed_scenes.append(scene_num)
                 continue
 
             update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
@@ -558,6 +563,7 @@ def generate_video_stream(
                     else:
                         yield emit_event("scene_error", scene=scene_num, error=str(error_msg)[:100])
                     update_video_scene(scene_id, status="error", error_message=str(error_msg)[:200])
+                    failed_scenes.append(scene_num)
                     continue  # Skip to next scene
 
             if video_bytes:
@@ -568,11 +574,18 @@ def generate_video_stream(
             else:
                 yield emit_event("scene_error", scene=scene_num, error="Video generation returned empty")
                 update_video_scene(scene_id, status="error", error_message="Video generation returned empty")
+                failed_scenes.append(scene_num)
 
         if not video_segments:
             yield emit_event("error", message="No video segments generated")
             update_video_job(job_id, status="error", error_message="No segments generated")
             return
+
+        # Warn about partial success if some scenes failed
+        if failed_scenes:
+            warning_msg = f"Warning: {len(failed_scenes)} scene(s) failed (scenes {', '.join(map(str, failed_scenes))}). Returning partial video."
+            logger.warning(warning_msg)
+            yield emit_event("warning", message=warning_msg)
 
         # Phase 3: Stitch videos
         yield emit_event("stitching", message="Combining video segments...")
@@ -581,7 +594,8 @@ def generate_video_stream(
         final_video = stitch_videos(video_segments)
 
         if final_video:
-            update_video_job(job_id, status="complete",
+            status = "partial" if failed_scenes else "complete"
+            update_video_job(job_id, status=status,
                            final_video=final_video, final_video_mime="video/mp4")
 
             # Return base64 encoded video for immediate preview
@@ -590,7 +604,9 @@ def generate_video_stream(
                            job_id=job_id,
                            title=script.get('title'),
                            duration=len(video_segments) * DEFAULT_VIDEO_DURATION,
-                           video_base64=video_base64)
+                           video_base64=video_base64,
+                           partial=bool(failed_scenes),
+                           failed_scenes=failed_scenes if failed_scenes else None)
         else:
             yield emit_event("error", message="Failed to stitch videos")
             update_video_job(job_id, status="error", error_message="Stitching failed")
