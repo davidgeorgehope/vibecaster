@@ -13,6 +13,9 @@ import uvicorn
 from database import init_database, get_campaign, update_campaign, get_connection_status
 from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, generate_from_url_stream, post_url_content, chat_post_builder_stream, parse_generated_posts, generate_image_for_post_builder
 from transcription import transcribe_media_stream, SUPPORTED_MIME_TYPES
+from author_bio import generate_character_reference, search_author_images, download_image_from_url, validate_image
+from video_generation import generate_video_stream, get_video_job_status
+from database import save_author_bio, get_author_bio, delete_author_bio, get_user_video_jobs
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from admin import router as admin_router
@@ -100,6 +103,38 @@ class ChatRequest(BaseModel):
 class GenerateImageRequest(BaseModel):
     post_text: str
     visual_style: Optional[str] = None
+
+
+# ===== AUTHOR BIO MODELS =====
+
+class AuthorBioRequest(BaseModel):
+    name: str
+    description: str
+    style: str = "real_person"  # real_person, cartoon, anime, avatar, 3d_render
+
+
+class GenerateReferenceRequest(BaseModel):
+    description: str
+    style: str = "real_person"
+    additional_context: Optional[str] = None
+
+
+class SearchImagesRequest(BaseModel):
+    author_name: str
+    limit: int = 5
+
+
+class DownloadImageRequest(BaseModel):
+    url: str
+
+
+# ===== VIDEO GENERATION MODELS =====
+
+class VideoGenerateRequest(BaseModel):
+    topic: str
+    style: str = "educational"  # educational, storybook, social_media
+    target_duration: int = 30  # Target duration in seconds
+    user_prompt: Optional[str] = None
 
 
 # ===== SCHEDULER MANAGEMENT =====
@@ -541,6 +576,299 @@ async def transcribe_stream_endpoint(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# ===== AUTHOR BIO ENDPOINTS =====
+
+@app.get("/api/author-bio")
+async def get_author_bio_endpoint(user_id: int = Depends(get_current_user_id)):
+    """Get current author/character bio."""
+    bio = get_author_bio(user_id)
+    if not bio:
+        return {
+            "exists": False,
+            "name": "",
+            "description": "",
+            "style": "real_person",
+            "has_reference_image": False
+        }
+
+    return {
+        "exists": True,
+        "name": bio.get("name", ""),
+        "description": bio.get("description", ""),
+        "style": bio.get("style", "real_person"),
+        "has_reference_image": bool(bio.get("reference_image")),
+        "reference_image_base64": bio.get("reference_image_base64"),
+        "reference_image_mime": bio.get("reference_image_mime", "image/png"),
+        "created_at": bio.get("created_at"),
+        "updated_at": bio.get("updated_at")
+    }
+
+
+@app.post("/api/author-bio")
+async def save_author_bio_endpoint(
+    request: AuthorBioRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Save or update author/character bio."""
+    try:
+        save_author_bio(
+            user_id=user_id,
+            name=request.name,
+            description=request.description,
+            style=request.style
+        )
+        return {"success": True, "message": "Author bio saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save bio: {str(e)}")
+
+
+@app.delete("/api/author-bio")
+async def delete_author_bio_endpoint(user_id: int = Depends(get_current_user_id)):
+    """Delete author/character bio."""
+    try:
+        delete_author_bio(user_id)
+        return {"success": True, "message": "Author bio deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete bio: {str(e)}")
+
+
+@app.post("/api/author-bio/generate-reference")
+async def generate_reference_endpoint(
+    request: GenerateReferenceRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Generate a character reference image from description."""
+    try:
+        import concurrent.futures
+        import base64
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                generate_character_reference,
+                request.description,
+                request.style,
+                request.additional_context or ""
+            )
+            image_bytes = future.result(timeout=120)  # 2 minute timeout
+
+        if not image_bytes:
+            raise HTTPException(status_code=500, detail="Failed to generate character reference")
+
+        # Save the generated image to the bio
+        save_author_bio(
+            user_id=user_id,
+            reference_image=image_bytes,
+            reference_image_mime="image/png"
+        )
+
+        # Return base64 encoded image
+        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        return {
+            "success": True,
+            "image_base64": image_base64,
+            "mime_type": "image/png"
+        }
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="Image generation timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate reference: {str(e)}")
+
+
+@app.post("/api/author-bio/search-images")
+async def search_images_endpoint(
+    request: SearchImagesRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Search for author images online."""
+    try:
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                search_author_images,
+                request.author_name,
+                request.limit
+            )
+            results = future.result(timeout=30)
+
+        return {"results": results}
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="Search timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@app.post("/api/author-bio/upload-reference")
+async def upload_reference_endpoint(
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Upload author/character reference image."""
+    import base64
+
+    # Validate file type
+    content_type = file.content_type or ""
+    if not content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=400,
+            detail="File must be an image (PNG, JPEG, GIF, or WEBP)"
+        )
+
+    # Read file
+    file_bytes = await file.read()
+
+    # Validate size (max 10MB)
+    if len(file_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large. Maximum size: 10MB")
+
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Validate image
+    validation = validate_image(file_bytes)
+    if not validation.get('valid'):
+        raise HTTPException(status_code=400, detail=f"Invalid image: {validation.get('error')}")
+
+    # Save to bio
+    save_author_bio(
+        user_id=user_id,
+        reference_image=file_bytes,
+        reference_image_mime=validation.get('mime_type', content_type)
+    )
+
+    # Return success with image info
+    return {
+        "success": True,
+        "image_base64": base64.b64encode(file_bytes).decode('utf-8'),
+        "mime_type": validation.get('mime_type'),
+        "width": validation.get('width'),
+        "height": validation.get('height')
+    }
+
+
+@app.post("/api/author-bio/download-image")
+async def download_image_endpoint(
+    request: DownloadImageRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """Download an image from URL and set as reference."""
+    import base64
+    import concurrent.futures
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(download_image_from_url, request.url)
+            image_bytes = future.result(timeout=30)
+
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="Failed to download image from URL")
+
+        # Validate image
+        validation = validate_image(image_bytes)
+        if not validation.get('valid'):
+            raise HTTPException(status_code=400, detail=f"Invalid image: {validation.get('error')}")
+
+        # Save to bio
+        save_author_bio(
+            user_id=user_id,
+            reference_image=image_bytes,
+            reference_image_mime=validation.get('mime_type', 'image/png')
+        )
+
+        return {
+            "success": True,
+            "image_base64": base64.b64encode(image_bytes).decode('utf-8'),
+            "mime_type": validation.get('mime_type'),
+            "width": validation.get('width'),
+            "height": validation.get('height')
+        }
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail="Download timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download image: {str(e)}")
+
+
+# ===== VIDEO GENERATION ENDPOINTS =====
+
+@app.post("/api/video/generate-stream")
+async def video_generate_stream_endpoint(
+    request: VideoGenerateRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Stream video generation with progress updates.
+    Uses Server-Sent Events (SSE) for real-time feedback.
+    """
+    def generate():
+        for event in generate_video_stream(
+            user_id=user_id,
+            topic=request.topic,
+            style=request.style,
+            target_duration=request.target_duration,
+            user_prompt=request.user_prompt or ""
+        ):
+            yield f"data: {event}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.get("/api/video/jobs")
+async def get_video_jobs_endpoint(user_id: int = Depends(get_current_user_id)):
+    """Get list of user's video generation jobs."""
+    jobs = get_user_video_jobs(user_id)
+    return {"jobs": jobs}
+
+
+@app.get("/api/video/jobs/{job_id}")
+async def get_video_job_endpoint(job_id: int, user_id: int = Depends(get_current_user_id)):
+    """Get status and details of a specific video job."""
+    job = get_video_job_status(job_id, user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+    return job
+
+
+@app.get("/api/video/jobs/{job_id}/download")
+async def download_video_endpoint(job_id: int, user_id: int = Depends(get_current_user_id)):
+    """Download completed video."""
+    from database import get_video_job
+
+    job = get_video_job(job_id, user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found")
+
+    if job['status'] != 'complete':
+        raise HTTPException(status_code=400, detail="Video not ready")
+
+    if not job.get('final_video'):
+        raise HTTPException(status_code=404, detail="Video data not found")
+
+    from fastapi.responses import Response
+    return Response(
+        content=job['final_video'],
+        media_type=job.get('final_video_mime', 'video/mp4'),
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{job.get('title', 'video')}.mp4\""
         }
     )
 

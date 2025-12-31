@@ -81,6 +81,60 @@ def init_database():
             )
         """)
 
+        # Create author_bio table for global author/character profiles
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS author_bio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER UNIQUE NOT NULL,
+                name TEXT,
+                description TEXT,
+                style TEXT,
+                reference_image BLOB,
+                reference_image_mime TEXT,
+                metadata_json TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create video_jobs table for async video generation tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS video_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                job_id TEXT UNIQUE,
+                status TEXT DEFAULT 'pending',
+                title TEXT,
+                script_json TEXT,
+                videos_json TEXT,
+                final_video BLOB,
+                final_video_mime TEXT,
+                error_message TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create video_scenes table for scene assets
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS video_scenes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                scene_number INTEGER NOT NULL,
+                prompt TEXT,
+                narration TEXT,
+                first_frame_image BLOB,
+                video_data BLOB,
+                duration_seconds REAL,
+                status TEXT DEFAULT 'pending',
+                error_message TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES video_jobs(id) ON DELETE CASCADE
+            )
+        """)
+
         # Migration: Add include_links column to existing campaign tables
         cursor.execute("PRAGMA table_info(campaign)")
         columns = [column[1] for column in cursor.fetchall()]
@@ -272,6 +326,261 @@ def get_recent_topics(user_id: int, days: int = 14) -> list:
                 all_topics.extend(topics)
 
         return all_topics
+
+
+# ===== AUTHOR BIO FUNCTIONS =====
+
+def save_author_bio(user_id: int, name: Optional[str] = None, description: Optional[str] = None,
+                   style: Optional[str] = None, reference_image: Optional[bytes] = None,
+                   reference_image_mime: Optional[str] = None, metadata: Optional[Dict] = None):
+    """Save or update author bio for a user."""
+    import json
+    import time
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        now = int(time.time())
+
+        # Check if bio exists
+        cursor.execute("SELECT id FROM author_bio WHERE user_id = ?", (user_id,))
+        existing = cursor.fetchone()
+
+        if existing:
+            # Update existing bio
+            updates = []
+            params = []
+
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+            if style is not None:
+                updates.append("style = ?")
+                params.append(style)
+            if reference_image is not None:
+                updates.append("reference_image = ?")
+                params.append(reference_image)
+            if reference_image_mime is not None:
+                updates.append("reference_image_mime = ?")
+                params.append(reference_image_mime)
+            if metadata is not None:
+                updates.append("metadata_json = ?")
+                params.append(json.dumps(metadata))
+
+            updates.append("updated_at = ?")
+            params.append(now)
+
+            if updates:
+                query = f"UPDATE author_bio SET {', '.join(updates)} WHERE user_id = ?"
+                params.append(user_id)
+                cursor.execute(query, params)
+        else:
+            # Create new bio
+            cursor.execute("""
+                INSERT INTO author_bio (user_id, name, description, style, reference_image,
+                                       reference_image_mime, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, name or "", description or "", style or "real_person",
+                  reference_image, reference_image_mime, json.dumps(metadata) if metadata else None,
+                  now, now))
+
+
+def get_author_bio(user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve author bio for a user."""
+    import json
+    import base64
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM author_bio WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        bio = dict(row)
+        # Parse metadata JSON
+        if bio.get('metadata_json'):
+            bio['metadata'] = json.loads(bio['metadata_json'])
+        # Convert image to base64 for API response
+        if bio.get('reference_image'):
+            bio['reference_image_base64'] = base64.b64encode(bio['reference_image']).decode('utf-8')
+        return bio
+
+
+def delete_author_bio(user_id: int):
+    """Delete author bio for a user."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM author_bio WHERE user_id = ?", (user_id,))
+
+
+# ===== VIDEO JOB FUNCTIONS =====
+
+def create_video_job(user_id: int, title: str = None) -> int:
+    """Create a new video job and return its ID."""
+    import time
+    import uuid
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        now = int(time.time())
+        job_id = str(uuid.uuid4())
+
+        cursor.execute("""
+            INSERT INTO video_jobs (user_id, job_id, status, title, created_at, updated_at)
+            VALUES (?, ?, 'pending', ?, ?, ?)
+        """, (user_id, job_id, title, now, now))
+
+        return cursor.lastrowid
+
+
+def update_video_job(job_id: int, status: Optional[str] = None, title: Optional[str] = None,
+                    script_json: Optional[str] = None, videos_json: Optional[str] = None,
+                    final_video: Optional[bytes] = None, final_video_mime: Optional[str] = None,
+                    error_message: Optional[str] = None):
+    """Update a video job."""
+    import time
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        updates = ["updated_at = ?"]
+        params = [int(time.time())]
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if title is not None:
+            updates.append("title = ?")
+            params.append(title)
+        if script_json is not None:
+            updates.append("script_json = ?")
+            params.append(script_json)
+        if videos_json is not None:
+            updates.append("videos_json = ?")
+            params.append(videos_json)
+        if final_video is not None:
+            updates.append("final_video = ?")
+            params.append(final_video)
+        if final_video_mime is not None:
+            updates.append("final_video_mime = ?")
+            params.append(final_video_mime)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        query = f"UPDATE video_jobs SET {', '.join(updates)} WHERE id = ?"
+        params.append(job_id)
+        cursor.execute(query, params)
+
+
+def get_video_job(job_id: int, user_id: int = None) -> Optional[Dict[str, Any]]:
+    """Retrieve a video job by ID."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if user_id:
+            cursor.execute("SELECT * FROM video_jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
+        else:
+            cursor.execute("SELECT * FROM video_jobs WHERE id = ?", (job_id,))
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        job = dict(row)
+        if job.get('script_json'):
+            job['script'] = json.loads(job['script_json'])
+        if job.get('videos_json'):
+            job['videos'] = json.loads(job['videos_json'])
+        return job
+
+
+def get_user_video_jobs(user_id: int, limit: int = 20) -> list:
+    """Get recent video jobs for a user."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, job_id, status, title, created_at, updated_at, error_message
+            FROM video_jobs
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (user_id, limit))
+
+        jobs = []
+        for row in cursor.fetchall():
+            jobs.append(dict(row))
+        return jobs
+
+
+# ===== VIDEO SCENE FUNCTIONS =====
+
+def create_video_scene(job_id: int, scene_number: int, prompt: str = None, narration: str = None) -> int:
+    """Create a video scene record."""
+    import time
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO video_scenes (job_id, scene_number, prompt, narration, status, created_at)
+            VALUES (?, ?, ?, ?, 'pending', ?)
+        """, (job_id, scene_number, prompt, narration, int(time.time())))
+
+        return cursor.lastrowid
+
+
+def update_video_scene(scene_id: int, first_frame_image: Optional[bytes] = None,
+                      video_data: Optional[bytes] = None, duration_seconds: Optional[float] = None,
+                      status: Optional[str] = None, error_message: Optional[str] = None):
+    """Update a video scene."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        updates = []
+        params = []
+
+        if first_frame_image is not None:
+            updates.append("first_frame_image = ?")
+            params.append(first_frame_image)
+        if video_data is not None:
+            updates.append("video_data = ?")
+            params.append(video_data)
+        if duration_seconds is not None:
+            updates.append("duration_seconds = ?")
+            params.append(duration_seconds)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        if updates:
+            query = f"UPDATE video_scenes SET {', '.join(updates)} WHERE id = ?"
+            params.append(scene_id)
+            cursor.execute(query, params)
+
+
+def get_video_scenes(job_id: int) -> list:
+    """Get all scenes for a video job."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, scene_number, prompt, narration, duration_seconds, status, error_message
+            FROM video_scenes
+            WHERE job_id = ?
+            ORDER BY scene_number
+        """, (job_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
 
 
 # ===== ADMIN FUNCTIONS =====

@@ -5,12 +5,14 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
 import TranscribeBox from '@/components/TranscribeBox';
+import BioBox from '@/components/BioBox';
+import VideoBuilder from '@/components/VideoBuilder';
 
-type Tab = 'campaign' | 'url' | 'builder' | 'transcribe';
+type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'bio';
 
 interface ConnectionStatus {
   twitter: boolean;
@@ -284,7 +286,9 @@ export default function Home() {
               { id: 'campaign', label: 'Campaign', icon: Megaphone },
               { id: 'url', label: 'URL Post', icon: Link },
               { id: 'builder', label: 'Post Builder', icon: MessageSquare },
-              { id: 'transcribe', label: 'Transcribe', icon: Mic }
+              { id: 'transcribe', label: 'Transcribe', icon: Mic },
+              { id: 'video', label: 'Video', icon: Video },
+              { id: 'bio', label: 'Bio', icon: User }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -380,6 +384,24 @@ export default function Home() {
         {activeTab === 'transcribe' && (
           <div className="max-w-4xl mx-auto">
             <TranscribeBox
+              token={token}
+              showNotification={showNotification}
+            />
+          </div>
+        )}
+
+        {activeTab === 'video' && (
+          <div className="max-w-4xl mx-auto">
+            <VideoBuilder
+              token={token}
+              showNotification={showNotification}
+            />
+          </div>
+        )}
+
+        {activeTab === 'bio' && (
+          <div className="max-w-4xl mx-auto">
+            <BioBox
               token={token}
               showNotification={showNotification}
             />
