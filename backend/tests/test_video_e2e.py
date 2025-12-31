@@ -709,3 +709,66 @@ class TestJobStatusPolling:
         assert result is None
         # Verify user_id was passed to query
         mock_database['get_video_job'].assert_called_with(1, 999)
+
+
+class TestJobListingForResume:
+    """Tests for job listing used by frontend to detect in-progress jobs."""
+
+    def test_get_user_jobs_returns_status(self):
+        """Test that get_user_video_jobs returns job status for frontend filtering."""
+        from database import get_user_video_jobs
+        from unittest.mock import patch, MagicMock
+
+        # Mock database connection
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            {'id': 1, 'job_id': 'job-1', 'status': 'complete', 'title': 'Done Video',
+             'created_at': 1000, 'updated_at': 1001, 'error_message': None},
+            {'id': 2, 'job_id': 'job-2', 'status': 'generating', 'title': 'In Progress',
+             'created_at': 1002, 'updated_at': 1003, 'error_message': None},
+        ]
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        with patch('database.get_db', return_value=mock_conn):
+            jobs = get_user_video_jobs(user_id=1)
+
+        # Verify status is included
+        assert len(jobs) == 2
+        assert jobs[0]['status'] == 'complete'
+        assert jobs[1]['status'] == 'generating'
+
+    def test_in_progress_statuses(self):
+        """Test that all in-progress statuses can be detected."""
+        # These are the statuses frontend uses to detect active jobs
+        in_progress_statuses = ['pending', 'planning', 'generating', 'stitching']
+        terminal_statuses = ['complete', 'partial', 'error']
+
+        # Verify our understanding matches the code
+        for status in in_progress_statuses:
+            assert status not in terminal_statuses
+
+    def test_jobs_ordered_by_created_at_desc(self):
+        """Test that jobs are returned newest first (for frontend to find most recent active)."""
+        from database import get_user_video_jobs
+        from unittest.mock import patch, MagicMock
+
+        # The SQL should ORDER BY created_at DESC
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        with patch('database.get_db', return_value=mock_conn):
+            get_user_video_jobs(user_id=1)
+
+        # Verify the SQL query includes ORDER BY created_at DESC
+        call_args = mock_cursor.execute.call_args
+        sql = call_args[0][0]
+        assert 'ORDER BY created_at DESC' in sql

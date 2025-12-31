@@ -362,52 +362,43 @@ export default function Home() {
           </>
         )}
 
-        {activeTab === 'url' && (
-          <div className="max-w-4xl mx-auto">
-            <URLPostBox
-              token={token}
-              connections={connections}
-              showNotification={showNotification}
-            />
-          </div>
-        )}
+        {/* Keep components mounted but hidden to preserve state across tab switches */}
+        <div className={activeTab === 'url' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <URLPostBox
+            token={token}
+            connections={connections}
+            showNotification={showNotification}
+          />
+        </div>
 
-        {activeTab === 'builder' && (
-          <div className="max-w-6xl mx-auto">
-            <PostBuilder
-              token={token}
-              connections={connections}
-              showNotification={showNotification}
-            />
-          </div>
-        )}
+        <div className={activeTab === 'builder' ? 'max-w-6xl mx-auto' : 'hidden'}>
+          <PostBuilder
+            token={token}
+            connections={connections}
+            showNotification={showNotification}
+          />
+        </div>
 
-        {activeTab === 'transcribe' && (
-          <div className="max-w-4xl mx-auto">
-            <TranscribeBox
-              token={token}
-              showNotification={showNotification}
-            />
-          </div>
-        )}
+        <div className={activeTab === 'transcribe' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <TranscribeBox
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
 
-        {activeTab === 'video' && (
-          <div className="max-w-4xl mx-auto">
-            <VideoBuilder
-              token={token}
-              showNotification={showNotification}
-            />
-          </div>
-        )}
+        <div className={activeTab === 'video' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <VideoBuilder
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
 
-        {activeTab === 'bio' && (
-          <div className="max-w-4xl mx-auto">
-            <BioBox
-              token={token}
-              showNotification={showNotification}
-            />
-          </div>
-        )}
+        <div className={activeTab === 'bio' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <BioBox
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
       </main>
 
       {/* Footer */}

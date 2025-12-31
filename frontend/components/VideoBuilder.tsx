@@ -63,16 +63,8 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Helper to persist active job to localStorage
-  const saveActiveJob = (id: number) => {
-    localStorage.setItem('activeVideoJob', JSON.stringify({
-      jobId: id,
-      startedAt: Date.now()
-    }));
-  };
-
-  const clearActiveJob = () => {
-    localStorage.removeItem('activeVideoJob');
+  // Helper to stop polling
+  const stopPolling = () => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -80,21 +72,21 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
   };
 
   // Resume an in-progress job by polling its status
-  const resumeJob = useCallback(async (savedJobId: number) => {
+  const resumeJob = useCallback(async (activeJobId: number) => {
     if (!token) return;
 
     setPhase('generating');
     setStatusMessage('Reconnecting to job...');
-    setJobId(savedJobId);
+    setJobId(activeJobId);
 
     const pollJob = async () => {
       try {
-        const response = await fetch(`/api/video/jobs/${savedJobId}`, {
+        const response = await fetch(`/api/video/jobs/${activeJobId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
         if (!response.ok) {
-          clearActiveJob();
+          stopPolling();
           setPhase('error');
           setStatusMessage('Job not found');
           return;
@@ -123,7 +115,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
 
         // Handle terminal states
         if (job.status === 'complete' || job.status === 'partial') {
-          clearActiveJob();
+          stopPolling();
           setPhase('complete');
           setStatusMessage(job.status === 'partial' ? 'Video generated (some scenes failed)' : 'Video generation complete!');
           if (job.final_video_base64) {
@@ -131,7 +123,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           }
           showNotification('success', 'Video ready!');
         } else if (job.status === 'error') {
-          clearActiveJob();
+          stopPolling();
           setPhase('error');
           setStatusMessage(job.error_message || 'Generation failed');
           showNotification('error', job.error_message || 'Generation failed');
@@ -161,29 +153,37 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     }
   }, [token, showNotification, phase]);
 
-  // Check for active job on mount
+  // Check for in-progress job from database on mount
   useEffect(() => {
-    const saved = localStorage.getItem('activeVideoJob');
-    if (saved && token) {
-      try {
-        const { jobId: savedJobId, startedAt } = JSON.parse(saved);
-        // Only resume if started within last 24 hours
-        if (Date.now() - startedAt < 24 * 60 * 60 * 1000) {
-          resumeJob(savedJobId);
-        } else {
-          clearActiveJob();
-        }
-      } catch (e) {
-        clearActiveJob();
-      }
-    }
+    const checkForActiveJob = async () => {
+      if (!token) return;
 
-    // Cleanup on unmount
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
+      try {
+        const response = await fetch('/api/video/jobs', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) return;
+
+        const { jobs } = await response.json();
+
+        // Find first in-progress job
+        const activeJob = jobs.find((j: VideoJob) =>
+          ['pending', 'planning', 'generating', 'stitching'].includes(j.status)
+        );
+
+        if (activeJob) {
+          resumeJob(activeJob.id);
+        }
+      } catch (error) {
+        console.error('Failed to check for active job:', error);
       }
     };
+
+    checkForActiveJob();
+
+    // Cleanup on unmount
+    return () => stopPolling();
   }, [token, resumeJob]);
 
   const loadJobHistory = useCallback(async () => {
@@ -298,7 +298,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     switch (type) {
       case 'job_created':
         setJobId(event.job_id as number);
-        saveActiveJob(event.job_id as number);
         break;
 
       case 'planning':
@@ -354,7 +353,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         break;
 
       case 'complete':
-        clearActiveJob();
         setPhase('complete');
         setStatusMessage(event.partial ? 'Video generated (some scenes failed)' : 'Video generation complete!');
         setVideoBase64(event.video_base64 as string);
@@ -366,7 +364,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         break;
 
       case 'error':
-        clearActiveJob();
         setPhase('error');
         setStatusMessage(event.message as string || 'An error occurred');
         showNotification('error', event.message as string || 'Generation failed');
@@ -383,7 +380,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
   };
 
   const handleCancel = () => {
-    clearActiveJob();
+    stopPolling();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
