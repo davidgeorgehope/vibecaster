@@ -651,8 +651,8 @@ def get_video_job_status(job_id: int, user_id: int) -> Optional[Dict]:
         "has_final_video": bool(job.get('final_video'))
     }
 
-    # Include final video base64 if complete
-    if job['status'] == 'complete' and job.get('final_video'):
+    # Include final video base64 if complete or partial
+    if job['status'] in ('complete', 'partial') and job.get('final_video'):
         result['final_video_base64'] = base64.b64encode(job['final_video']).decode('utf-8')
         result['final_video_mime'] = job.get('final_video_mime', 'video/mp4')
 

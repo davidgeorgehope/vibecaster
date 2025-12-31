@@ -61,6 +61,130 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper to persist active job to localStorage
+  const saveActiveJob = (id: number) => {
+    localStorage.setItem('activeVideoJob', JSON.stringify({
+      jobId: id,
+      startedAt: Date.now()
+    }));
+  };
+
+  const clearActiveJob = () => {
+    localStorage.removeItem('activeVideoJob');
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
+
+  // Resume an in-progress job by polling its status
+  const resumeJob = useCallback(async (savedJobId: number) => {
+    if (!token) return;
+
+    setPhase('generating');
+    setStatusMessage('Reconnecting to job...');
+    setJobId(savedJobId);
+
+    const pollJob = async () => {
+      try {
+        const response = await fetch(`/api/video/jobs/${savedJobId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          clearActiveJob();
+          setPhase('error');
+          setStatusMessage('Job not found');
+          return;
+        }
+
+        const job = await response.json();
+
+        // Update title if available
+        if (job.title) setScriptTitle(job.title);
+
+        // Update scenes from job data
+        if (job.scenes && job.scenes.length > 0) {
+          setTotalScenes(job.scenes.length);
+          setScenes(job.scenes.map((s: { scene_number: number; status: string; narration?: string }) => ({
+            scene_number: s.scene_number,
+            narration: s.narration || '',
+            status: s.status as Scene['status']
+          })));
+
+          // Find current scene (first non-complete scene)
+          const currentIdx = job.scenes.findIndex((s: { status: string }) =>
+            s.status !== 'complete' && s.status !== 'error'
+          );
+          setCurrentScene(currentIdx >= 0 ? job.scenes[currentIdx].scene_number : job.scenes.length);
+        }
+
+        // Handle terminal states
+        if (job.status === 'complete' || job.status === 'partial') {
+          clearActiveJob();
+          setPhase('complete');
+          setStatusMessage(job.status === 'partial' ? 'Video generated (some scenes failed)' : 'Video generation complete!');
+          if (job.final_video_base64) {
+            setVideoBase64(job.final_video_base64);
+          }
+          showNotification('success', 'Video ready!');
+        } else if (job.status === 'error') {
+          clearActiveJob();
+          setPhase('error');
+          setStatusMessage(job.error_message || 'Generation failed');
+          showNotification('error', job.error_message || 'Generation failed');
+        } else if (job.status === 'stitching') {
+          setPhase('stitching');
+          setStatusMessage('Combining video segments...');
+        } else if (job.status === 'planning') {
+          setPhase('planning');
+          setStatusMessage('Planning video script...');
+        } else {
+          // Still generating - update status
+          setPhase('generating');
+          const completedScenes = job.scenes?.filter((s: { status: string }) => s.status === 'complete').length || 0;
+          setStatusMessage(`Generating scenes... (${completedScenes}/${job.scenes?.length || 0} complete)`);
+        }
+      } catch (error) {
+        console.error('Failed to poll job:', error);
+      }
+    };
+
+    // Initial poll
+    await pollJob();
+
+    // Continue polling if not in terminal state
+    if (phase !== 'complete' && phase !== 'error') {
+      pollIntervalRef.current = setInterval(pollJob, 5000);
+    }
+  }, [token, showNotification, phase]);
+
+  // Check for active job on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('activeVideoJob');
+    if (saved && token) {
+      try {
+        const { jobId: savedJobId, startedAt } = JSON.parse(saved);
+        // Only resume if started within last 24 hours
+        if (Date.now() - startedAt < 24 * 60 * 60 * 1000) {
+          resumeJob(savedJobId);
+        } else {
+          clearActiveJob();
+        }
+      } catch (e) {
+        clearActiveJob();
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, [token, resumeJob]);
 
   const loadJobHistory = useCallback(async () => {
     if (!token) return;
@@ -174,6 +298,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     switch (type) {
       case 'job_created':
         setJobId(event.job_id as number);
+        saveActiveJob(event.job_id as number);
         break;
 
       case 'planning':
@@ -229,21 +354,36 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         break;
 
       case 'complete':
+        clearActiveJob();
         setPhase('complete');
-        setStatusMessage('Video generation complete!');
+        setStatusMessage(event.partial ? 'Video generated (some scenes failed)' : 'Video generation complete!');
         setVideoBase64(event.video_base64 as string);
         showNotification('success', 'Video generated successfully!');
         break;
 
+      case 'warning':
+        showNotification('info', event.message as string || 'Warning');
+        break;
+
       case 'error':
+        clearActiveJob();
         setPhase('error');
         setStatusMessage(event.message as string || 'An error occurred');
         showNotification('error', event.message as string || 'Generation failed');
+        break;
+
+      case 'scene_delay':
+        setStatusMessage(event.message as string || `Waiting before scene ${event.scene}...`);
+        break;
+
+      case 'scene_progress':
+        setStatusMessage(event.message as string || `Rendering scene ${event.scene}...`);
         break;
     }
   };
 
   const handleCancel = () => {
+    clearActiveJob();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }

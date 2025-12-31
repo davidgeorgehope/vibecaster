@@ -568,3 +568,144 @@ class TestValidVideoBytes:
                 )
 
         assert result is None
+
+
+class TestJobStatusPolling:
+    """Tests for job status polling (for frontend resume functionality)."""
+
+    def test_get_job_status_returns_scene_statuses(self, mock_database):
+        """Test that get_video_job_status returns scene statuses for polling."""
+        from video_generation import get_video_job_status
+
+        # Mock job data
+        mock_database['get_video_job'].return_value = {
+            'id': 1,
+            'job_id': 'test-job-123',
+            'status': 'generating',
+            'title': 'Test Video',
+            'script': '{}',
+            'error_message': None,
+            'created_at': 1000000,
+            'updated_at': 1000001,
+            'final_video': None
+        }
+
+        # Mock scene data with various statuses
+        mock_database['get_video_scenes'].return_value = [
+            {'scene_number': 1, 'status': 'complete', 'narration': 'Scene 1'},
+            {'scene_number': 2, 'status': 'generating_video', 'narration': 'Scene 2'},
+            {'scene_number': 3, 'status': 'pending', 'narration': 'Scene 3'}
+        ]
+
+        result = get_video_job_status(job_id=1, user_id=1)
+
+        assert result is not None
+        assert result['status'] == 'generating'
+        assert result['scenes'] is not None
+        assert len(result['scenes']) == 3
+        assert result['scenes'][0]['status'] == 'complete'
+        assert result['scenes'][1]['status'] == 'generating_video'
+        assert result['scenes'][2]['status'] == 'pending'
+
+    def test_get_job_status_complete_includes_video(self, mock_database):
+        """Test that completed job includes video base64."""
+        from video_generation import get_video_job_status
+
+        mock_database['get_video_job'].return_value = {
+            'id': 1,
+            'job_id': 'test-job-123',
+            'status': 'complete',
+            'title': 'Test Video',
+            'script': '{}',
+            'error_message': None,
+            'created_at': 1000000,
+            'updated_at': 1000001,
+            'final_video': b'fake video bytes here',
+            'final_video_mime': 'video/mp4'
+        }
+        mock_database['get_video_scenes'].return_value = []
+
+        result = get_video_job_status(job_id=1, user_id=1)
+
+        assert result is not None
+        assert result['status'] == 'complete'
+        assert result['has_final_video'] == True
+        assert 'final_video_base64' in result
+        assert result['final_video_mime'] == 'video/mp4'
+
+    def test_get_job_status_partial_includes_video(self, mock_database):
+        """Test that partial job (some scenes failed) includes video."""
+        from video_generation import get_video_job_status
+
+        mock_database['get_video_job'].return_value = {
+            'id': 1,
+            'job_id': 'test-job-123',
+            'status': 'partial',
+            'title': 'Test Video',
+            'script': '{}',
+            'error_message': None,
+            'created_at': 1000000,
+            'updated_at': 1000001,
+            'final_video': b'partial video bytes',
+            'final_video_mime': 'video/mp4'
+        }
+        mock_database['get_video_scenes'].return_value = [
+            {'scene_number': 1, 'status': 'complete', 'narration': 'Scene 1'},
+            {'scene_number': 2, 'status': 'error', 'narration': 'Scene 2'}
+        ]
+
+        result = get_video_job_status(job_id=1, user_id=1)
+
+        assert result is not None
+        assert result['status'] == 'partial'
+        assert result['has_final_video'] == True
+        # Partial status should still include video for download
+        assert 'final_video_base64' in result
+
+    def test_get_job_status_error_no_video(self, mock_database):
+        """Test that error job doesn't include video."""
+        from video_generation import get_video_job_status
+
+        mock_database['get_video_job'].return_value = {
+            'id': 1,
+            'job_id': 'test-job-123',
+            'status': 'error',
+            'title': 'Test Video',
+            'script': '{}',
+            'error_message': 'Generation failed',
+            'created_at': 1000000,
+            'updated_at': 1000001,
+            'final_video': None
+        }
+        mock_database['get_video_scenes'].return_value = []
+
+        result = get_video_job_status(job_id=1, user_id=1)
+
+        assert result is not None
+        assert result['status'] == 'error'
+        assert result['error_message'] == 'Generation failed'
+        assert result['has_final_video'] == False
+        assert 'final_video_base64' not in result
+
+    def test_get_job_status_not_found(self, mock_database):
+        """Test that non-existent job returns None."""
+        from video_generation import get_video_job_status
+
+        mock_database['get_video_job'].return_value = None
+
+        result = get_video_job_status(job_id=999, user_id=1)
+
+        assert result is None
+
+    def test_get_job_status_wrong_user(self, mock_database):
+        """Test that job for different user returns None."""
+        from video_generation import get_video_job_status
+
+        # get_video_job should filter by user_id and return None
+        mock_database['get_video_job'].return_value = None
+
+        result = get_video_job_status(job_id=1, user_id=999)
+
+        assert result is None
+        # Verify user_id was passed to query
+        mock_database['get_video_job'].assert_called_with(1, 999)
