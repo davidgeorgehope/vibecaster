@@ -7,7 +7,7 @@ import os
 # Add backend to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from agents.utils import is_network_error, emit_agent_event, strip_markdown_formatting
+from agents import is_network_error, emit_agent_event, strip_markdown_formatting
 
 
 class TestIsNetworkError:

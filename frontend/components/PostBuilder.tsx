@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, Loader2, Twitter, Linkedin, Image, Trash2, Sparkles, Check, AlertCircle, Search, Brain, Globe, Zap } from 'lucide-react';
+import { MessageSquare, Send, Loader2, Twitter, Linkedin, Image, Trash2, Sparkles, Check, AlertCircle, Search, Brain, Globe, Zap, Video } from 'lucide-react';
 
 interface PostBuilderProps {
   token: string | null;
@@ -59,6 +59,8 @@ export default function PostBuilder({ token, connections, showNotification }: Po
   const [parsedPosts, setParsedPosts] = useState<ParsedPosts>({ x_post: null, linkedin_post: null, source_url: null });
   const [campaignConfig, setCampaignConfig] = useState<CampaignConfig | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [videoBase64, setVideoBase64] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isPosting, setIsPosting] = useState<{ twitter: boolean; linkedin: boolean }>({
     twitter: false,
@@ -140,13 +142,15 @@ export default function PostBuilder({ token, connections, showNotification }: Po
     }
   }, [messages]);
 
-  // Auto-generate image function
-  const generateImageAuto = async (postText: string, visualStyle?: string | null) => {
+  // Auto-generate media (image or video) function
+  const generateMediaAuto = async (postText: string, visualStyle?: string | null, forceMediaType?: 'image' | 'video') => {
     if (!postText || !token || isGeneratingImage) return;
 
+    const targetMediaType = forceMediaType || mediaType;
     setIsGeneratingImage(true);
+
     try {
-      const response = await fetch('/api/chat/generate-image', {
+      const response = await fetch('/api/chat/generate-media', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -154,19 +158,31 @@ export default function PostBuilder({ token, connections, showNotification }: Po
         },
         body: JSON.stringify({
           post_text: postText,
-          visual_style: visualStyle || undefined
+          visual_style: visualStyle || undefined,
+          media_type: targetMediaType
         })
       });
 
       if (response.ok) {
         const data = await response.json();
-        setImageBase64(data.image_base64);
+        if (data.media_type === 'video') {
+          setVideoBase64(data.media_base64);
+          setImageBase64(null);
+        } else {
+          setImageBase64(data.media_base64);
+          setVideoBase64(null);
+        }
       }
     } catch (err) {
-      console.error('Auto image generation failed:', err);
+      console.error('Auto media generation failed:', err);
     } finally {
       setIsGeneratingImage(false);
     }
+  };
+
+  // Legacy alias for backward compatibility
+  const generateImageAuto = (postText: string, visualStyle?: string | null) => {
+    generateMediaAuto(postText, visualStyle, 'image');
   };
 
   const handleSend = async () => {
@@ -268,37 +284,52 @@ export default function PostBuilder({ token, connections, showNotification }: Po
     }
   };
 
-  const handleGenerateImage = async () => {
+  const handleGenerateMedia = async (forceType?: 'image' | 'video') => {
     const postText = parsedPosts.x_post || parsedPosts.linkedin_post;
     if (!postText || !token) return;
 
+    const targetMediaType = forceType || mediaType;
     setIsGeneratingImage(true);
 
     try {
-      const response = await fetch('/api/chat/generate-image', {
+      const response = await fetch('/api/chat/generate-media', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ post_text: postText })
+        body: JSON.stringify({
+          post_text: postText,
+          visual_style: parsedPosts.visual_style || undefined,
+          media_type: targetMediaType
+        })
       });
 
       if (!response.ok) {
         const data = await response.json();
-        throw new Error(data.detail || 'Failed to generate image');
+        throw new Error(data.detail || `Failed to generate ${targetMediaType}`);
       }
 
       const data = await response.json();
-      setImageBase64(data.image_base64);
-      showNotification('success', 'Image generated!');
+      if (data.media_type === 'video') {
+        setVideoBase64(data.media_base64);
+        setImageBase64(null);
+        showNotification('success', 'Video generated!');
+      } else {
+        setImageBase64(data.media_base64);
+        setVideoBase64(null);
+        showNotification('success', 'Image generated!');
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to generate image';
+      const message = err instanceof Error ? err.message : `Failed to generate ${targetMediaType}`;
       showNotification('error', message);
     } finally {
       setIsGeneratingImage(false);
     }
   };
+
+  // Legacy alias
+  const handleGenerateImage = () => handleGenerateMedia('image');
 
   const handlePost = async (platform: 'twitter' | 'linkedin') => {
     if (!token) return;
@@ -679,17 +710,53 @@ export default function PostBuilder({ token, connections, showNotification }: Po
           </div>
         )}
 
-        {/* Image Preview */}
+        {/* Media Preview (Image or Video) */}
         {hasPosts && (
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Image className="w-5 h-5 text-purple-400" />
-                <span className="text-white font-medium">Image</span>
+                {mediaType === 'video' ? (
+                  <Video className="w-5 h-5 text-purple-400" />
+                ) : (
+                  <Image className="w-5 h-5 text-purple-400" />
+                )}
+                <span className="text-white font-medium">Media</span>
+              </div>
+              {/* Media Type Toggle */}
+              <div className="flex gap-1 bg-gray-900/50 rounded-lg p-1">
+                <button
+                  onClick={() => setMediaType('image')}
+                  className={`px-3 py-1 rounded text-sm flex items-center gap-1 transition-colors ${
+                    mediaType === 'image'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Image className="w-3 h-3" />
+                  Image
+                </button>
+                <button
+                  onClick={() => setMediaType('video')}
+                  className={`px-3 py-1 rounded text-sm flex items-center gap-1 transition-colors ${
+                    mediaType === 'video'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Video className="w-3 h-3" />
+                  Video
+                </button>
               </div>
             </div>
 
-            {imageBase64 ? (
+            {/* Video Preview */}
+            {videoBase64 ? (
+              <video
+                src={`data:video/mp4;base64,${videoBase64}`}
+                controls
+                className="w-full rounded-lg mb-3"
+              />
+            ) : imageBase64 ? (
               <img
                 src={`data:image/png;base64,${imageBase64}`}
                 alt="Generated post image"
@@ -697,19 +764,26 @@ export default function PostBuilder({ token, connections, showNotification }: Po
               />
             ) : (
               <button
-                onClick={handleGenerateImage}
+                onClick={() => handleGenerateMedia()}
                 disabled={isGeneratingImage}
                 className="w-full py-8 border-2 border-dashed border-gray-600 rounded-lg hover:border-purple-500 transition-colors flex flex-col items-center justify-center gap-2 text-gray-400 hover:text-purple-400"
               >
                 {isGeneratingImage ? (
                   <>
                     <Loader2 className="w-8 h-8 animate-spin" />
-                    <span className="text-sm">Generating image...</span>
+                    <span className="text-sm">Generating {mediaType}...</span>
+                    {mediaType === 'video' && (
+                      <span className="text-xs text-gray-500">Videos take 2-5 minutes</span>
+                    )}
                   </>
                 ) : (
                   <>
-                    <Image className="w-8 h-8" />
-                    <span className="text-sm">Click to generate image</span>
+                    {mediaType === 'video' ? (
+                      <Video className="w-8 h-8" />
+                    ) : (
+                      <Image className="w-8 h-8" />
+                    )}
+                    <span className="text-sm">Click to generate {mediaType}</span>
                   </>
                 )}
               </button>

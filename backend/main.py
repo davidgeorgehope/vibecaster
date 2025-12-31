@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 import uvicorn
 
@@ -15,7 +16,7 @@ from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, gene
 from transcription import transcribe_media_stream, SUPPORTED_MIME_TYPES
 from author_bio import generate_character_reference, search_author_images, download_image_from_url, validate_image
 from video_generation import generate_video_stream, get_video_job_status
-from database import save_author_bio, get_author_bio, delete_author_bio, get_user_video_jobs
+from database import save_author_bio, get_author_bio, delete_author_bio, get_user_video_jobs, run_cleanup
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from admin import router as admin_router
@@ -69,6 +70,7 @@ scheduler = BackgroundScheduler()
 class SetupRequest(BaseModel):
     user_prompt: str
     schedule_cron: str = "0 9 * * *"  # Default: Daily at 9 AM
+    media_type: str = "image"  # "image" (default) or "video"
 
 
 class CampaignResponse(BaseModel):
@@ -77,6 +79,7 @@ class CampaignResponse(BaseModel):
     visual_style: str
     schedule_cron: str
     last_run: int
+    media_type: str = "image"
 
 
 class GenerateFromURLRequest(BaseModel):
@@ -103,6 +106,12 @@ class ChatRequest(BaseModel):
 class GenerateImageRequest(BaseModel):
     post_text: str
     visual_style: Optional[str] = None
+
+
+class GenerateMediaRequest(BaseModel):
+    post_text: str
+    visual_style: Optional[str] = None
+    media_type: str = "image"  # "image" or "video"
 
 
 # ===== AUTHOR BIO MODELS =====
@@ -216,6 +225,16 @@ def _setup_user_scheduler(user_id: int):
 
 # ===== LIFECYCLE EVENTS =====
 
+def run_cleanup_job():
+    """Background job to cleanup old files."""
+    try:
+        result = run_cleanup(video_job_hours=24, post_history_days=90)
+        if result["video_jobs_deleted"] > 0 or result["post_history_deleted"] > 0:
+            logger.info(f"Cleanup completed: {result['video_jobs_deleted']} video jobs, {result['post_history_deleted']} old posts deleted")
+    except Exception as e:
+        logger.error(f"Cleanup job failed: {e}", exc_info=True)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and scheduler on startup."""
@@ -228,6 +247,18 @@ async def startup_event():
     # Start scheduler
     scheduler.start()
     logger.info("Scheduler started")
+
+    # Add cleanup job (runs every hour)
+    scheduler.add_job(
+        run_cleanup_job,
+        trigger=IntervalTrigger(hours=1),
+        id="cleanup_job",
+        replace_existing=True
+    )
+    logger.info("Cleanup job scheduled (every hour)")
+
+    # Run initial cleanup on startup
+    run_cleanup_job()
 
     # Configure scheduler with existing campaign
     setup_scheduler()
@@ -294,13 +325,17 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
         logger.info(f"Analyzing prompt: {request.user_prompt}")
         refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
 
+        # Validate media_type
+        media_type = request.media_type if request.media_type in ("image", "video") else "image"
+
         # Update campaign in database
         update_campaign(
             user_id=user_id,
             user_prompt=request.user_prompt,
             refined_persona=refined_persona,
             visual_style=visual_style,
-            schedule_cron=request.schedule_cron
+            schedule_cron=request.schedule_cron,
+            media_type=media_type
         )
 
         # Reconfigure scheduler for this user
@@ -313,7 +348,8 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
                 "user_prompt": request.user_prompt,
                 "refined_persona": refined_persona,
                 "visual_style": visual_style,
-                "schedule_cron": request.schedule_cron
+                "schedule_cron": request.schedule_cron,
+                "media_type": media_type
             }
         }
 
@@ -522,6 +558,53 @@ async def chat_generate_image(request: GenerateImageRequest, user_id: int = Depe
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate image: {str(e)}")
+
+
+@app.post("/api/chat/generate-media")
+async def chat_generate_media(request: GenerateMediaRequest, user_id: int = Depends(get_current_user_id)):
+    """
+    Generate media (image or video) for a post builder preview.
+    Set media_type to "video" for 8-second video clips, defaults to "image".
+    """
+    from agents import generate_media_for_post_builder
+
+    try:
+        import concurrent.futures
+        import base64
+
+        # Validate media_type
+        if request.media_type not in ("image", "video"):
+            raise HTTPException(status_code=400, detail="media_type must be 'image' or 'video'")
+
+        # Video takes much longer
+        timeout = 120 if request.media_type == "image" else 600
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                generate_media_for_post_builder,
+                request.post_text,
+                request.visual_style,
+                user_id,
+                request.media_type
+            )
+            media_bytes, mime_type = future.result(timeout=timeout)
+
+        if not media_bytes:
+            raise HTTPException(status_code=500, detail=f"Failed to generate {request.media_type}")
+
+        media_base64 = base64.b64encode(media_bytes).decode('utf-8')
+        return {
+            "media_base64": media_base64,
+            "mime_type": mime_type,
+            "media_type": request.media_type
+        }
+
+    except concurrent.futures.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"{request.media_type.title()} generation timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate {request.media_type}: {str(e)}")
 
 
 # ===== TRANSCRIPTION =====

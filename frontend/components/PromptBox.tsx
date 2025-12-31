@@ -1,16 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Play, Trash2 } from 'lucide-react';
+import { Sparkles, Loader2, Play, Trash2, Image, Video } from 'lucide-react';
 
 interface PromptBoxProps {
-  onActivate: (prompt: string) => Promise<void>;
+  onActivate: (prompt: string, mediaType?: string) => Promise<void>;
   onRunNow: () => Promise<void>;
   token: string | null;
 }
 
 export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProps) {
   const [prompt, setPrompt] = useState('');
+  const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -30,6 +31,9 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
         if (data.user_prompt) {
           setPrompt(data.user_prompt);
           setCampaignConfigured(true);
+          if (data.media_type) {
+            setMediaType(data.media_type);
+          }
         }
       })
       .catch(() => {
@@ -43,7 +47,7 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
 
     setIsLoading(true);
     try {
-      await onActivate(prompt);
+      await onActivate(prompt, mediaType);
       setCampaignConfigured(true);
     } finally {
       setIsLoading(false);
@@ -103,6 +107,44 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
           placeholder="What should I post about? (e.g., 'Post anime OpenTelemetry memes daily')"
           className="w-full h-40 bg-gray-800/50 border border-gray-700 rounded-lg p-4 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 resize-none"
         />
+      </div>
+
+      {/* Media Type Selector */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-400 mb-2">
+          Media Type for Posts
+        </label>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMediaType('image')}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border transition-colors ${
+              mediaType === 'image'
+                ? 'border-purple-500 bg-purple-500/20 text-purple-400'
+                : 'border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600'
+            }`}
+          >
+            <Image className="w-4 h-4" />
+            Image
+          </button>
+          <button
+            type="button"
+            onClick={() => setMediaType('video')}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-lg border transition-colors ${
+              mediaType === 'video'
+                ? 'border-purple-500 bg-purple-500/20 text-purple-400'
+                : 'border-gray-700 bg-gray-800/50 text-gray-400 hover:border-gray-600'
+            }`}
+          >
+            <Video className="w-4 h-4" />
+            Video (8s clip)
+          </button>
+        </div>
+        {mediaType === 'video' && (
+          <p className="mt-2 text-xs text-yellow-500/80">
+            Note: Video generation takes 2-5 minutes per post
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">

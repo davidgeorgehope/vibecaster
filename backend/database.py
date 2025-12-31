@@ -149,6 +149,13 @@ def init_database():
             cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
             print("Migration: Added is_admin column to users table")
 
+        # Migration: Add media_type column to campaign table for video support
+        cursor.execute("PRAGMA table_info(campaign)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'media_type' not in columns:
+            cursor.execute("ALTER TABLE campaign ADD COLUMN media_type TEXT DEFAULT 'image'")
+            print("Migration: Added media_type column to campaign table")
+
         # Set admin flag for the admin email
         cursor.execute("""
             UPDATE users SET is_admin = 1 WHERE email = 'email.djhope@gmail.com'
@@ -219,7 +226,8 @@ def delete_oauth_tokens(user_id: int, service: str):
 
 # Campaign table operations
 def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_persona: Optional[str] = None,
-                   visual_style: Optional[str] = None, schedule_cron: Optional[str] = None, include_links: Optional[bool] = None):
+                   visual_style: Optional[str] = None, schedule_cron: Optional[str] = None,
+                   include_links: Optional[bool] = None, media_type: Optional[str] = None):
     """Update or create campaign configuration for a user."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -248,6 +256,9 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
             if include_links is not None:
                 updates.append("include_links = ?")
                 params.append(1 if include_links else 0)
+            if media_type is not None:
+                updates.append("media_type = ?")
+                params.append(media_type)
 
             if updates:
                 query = f"UPDATE campaign SET {', '.join(updates)} WHERE user_id = ?"
@@ -256,9 +267,10 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
         else:
             # Create new campaign
             cursor.execute("""
-                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron, include_links)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (user_id, user_prompt or "", refined_persona or "", visual_style or "", schedule_cron or "0 9 * * *", 1 if include_links else 0))
+                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron, include_links, media_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, user_prompt or "", refined_persona or "", visual_style or "",
+                  schedule_cron or "0 9 * * *", 1 if include_links else 0, media_type or "image"))
 
 
 def get_campaign(user_id: int) -> Optional[Dict[str, Any]]:
@@ -716,3 +728,73 @@ def get_admin_stats() -> dict:
             "twitter_connections": connections.get("twitter", 0),
             "linkedin_connections": connections.get("linkedin", 0)
         }
+
+
+# ===== CLEANUP FUNCTIONS =====
+
+def cleanup_old_video_jobs(hours: int = 24) -> int:
+    """
+    Delete video jobs and their scenes older than the specified hours.
+    Returns the number of jobs deleted.
+    """
+    import time
+
+    cutoff_time = int(time.time()) - (hours * 60 * 60)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Count jobs to be deleted
+        cursor.execute("""
+            SELECT COUNT(*) FROM video_jobs WHERE created_at < ?
+        """, (cutoff_time,))
+        count = cursor.fetchone()[0]
+
+        if count > 0:
+            # Delete scenes first (in case CASCADE doesn't work on older SQLite)
+            cursor.execute("""
+                DELETE FROM video_scenes WHERE job_id IN (
+                    SELECT id FROM video_jobs WHERE created_at < ?
+                )
+            """, (cutoff_time,))
+
+            # Delete jobs
+            cursor.execute("DELETE FROM video_jobs WHERE created_at < ?", (cutoff_time,))
+
+        return count
+
+
+def cleanup_old_post_history(days: int = 90) -> int:
+    """
+    Delete post history older than the specified days.
+    Returns the number of posts deleted.
+    """
+    import time
+
+    cutoff_time = int(time.time()) - (days * 24 * 60 * 60)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Count posts to be deleted
+        cursor.execute("SELECT COUNT(*) FROM post_history WHERE created_at < ?", (cutoff_time,))
+        count = cursor.fetchone()[0]
+
+        if count > 0:
+            cursor.execute("DELETE FROM post_history WHERE created_at < ?", (cutoff_time,))
+
+        return count
+
+
+def run_cleanup(video_job_hours: int = 24, post_history_days: int = 90) -> dict:
+    """
+    Run all cleanup routines.
+    Returns a dict with counts of deleted items.
+    """
+    video_jobs_deleted = cleanup_old_video_jobs(video_job_hours)
+    posts_deleted = cleanup_old_post_history(post_history_days)
+
+    return {
+        "video_jobs_deleted": video_jobs_deleted,
+        "post_history_deleted": posts_deleted
+    }

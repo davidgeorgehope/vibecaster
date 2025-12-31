@@ -235,21 +235,36 @@ def generate_video_from_image(
     Returns:
         Video bytes (MP4) or None if generation fails
     """
+    tmp_image_path = None
+    tmp_video_path = None
+
     try:
         logger.info(f"🎥 Generating video from first frame...")
 
-        # Load first frame as PIL Image
-        first_frame = Image.open(BytesIO(first_frame_bytes))
+        # Save first frame to temp file (Veo requires file path, not PIL Image)
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
+            tmp_image_path = tmp_img.name
+            tmp_img.write(first_frame_bytes)
+            tmp_img.flush()
+
+        # Load image using types.Image.from_file for proper format
+        first_frame = types.Image.from_file(tmp_image_path)
 
         # Build config with reference images if provided
         config_kwargs = {}
         if reference_images:
             ref_list = []
-            for ref_bytes in reference_images[:3]:  # Max 3 references
-                ref_img = Image.open(BytesIO(ref_bytes))
-                ref_list.append(types.VideoGenerationReferenceImage(
-                    image=ref_img,
-                    reference_type="asset"
+            ref_tmp_paths = []
+            for i, ref_bytes in enumerate(reference_images[:3]):  # Max 3 references
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as ref_tmp:
+                    ref_tmp.write(ref_bytes)
+                    ref_tmp.flush()
+                    ref_tmp_paths.append(ref_tmp.name)
+                ref_img = types.Image.from_file(ref_tmp_paths[-1])
+                ref_list.append(types.RawReferenceImage(
+                    reference_image=ref_img,
+                    reference_id=i,
+                    reference_type="REFERENCE_TYPE_SUBJECT"
                 ))
             config_kwargs["reference_images"] = ref_list
 
@@ -279,15 +294,18 @@ def generate_video_from_image(
         # Download the generated video
         if operation.response and operation.response.generated_videos:
             video = operation.response.generated_videos[0]
+
+            # Save video to temp file
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
+                tmp_video_path = tmp_vid.name
+
+            # Download and save
             client.files.download(file=video.video)
+            video.video.save(tmp_video_path)
 
             # Read video bytes
-            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
-                video.video.save(tmp.name)
-                tmp.flush()
-                with open(tmp.name, 'rb') as f:
-                    video_bytes = f.read()
-                os.unlink(tmp.name)
+            with open(tmp_video_path, 'rb') as f:
+                video_bytes = f.read()
 
             logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
             return video_bytes
@@ -298,6 +316,19 @@ def generate_video_from_image(
     except Exception as e:
         logger.error(f"Error generating video: {e}", exc_info=True)
         return None
+
+    finally:
+        # Clean up temp files
+        if tmp_image_path and os.path.exists(tmp_image_path):
+            try:
+                os.unlink(tmp_image_path)
+            except Exception:
+                pass
+        if tmp_video_path and os.path.exists(tmp_video_path):
+            try:
+                os.unlink(tmp_video_path)
+            except Exception:
+                pass
 
 
 def stitch_videos(video_segments: List[bytes], output_format: str = "mp4") -> Optional[bytes]:

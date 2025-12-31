@@ -1628,17 +1628,34 @@ def run_agent_cycle(user_id: int):
         else:
             logger.info("[4/6] Skipping LinkedIn post generation (not connected)")
 
-        # Step 4: Generate ONE shared image (used for both platforms)
-        shared_image = None
+        # Step 4: Generate ONE shared media (image or video, used for both platforms)
+        shared_media = None
+        media_type = campaign.get("media_type", "image")  # Default to image
+
         if x_post or linkedin_post:
             # Use whichever post is available for image context (prefer X as it's more concise)
             image_context_post = x_post or linkedin_post
-            logger.info("[5/6] Generating shared image for all platforms...")
-            shared_image = generate_image(image_context_post, visual_style, user_prompt, enhanced_context)
-            if shared_image:
-                logger.info(f"Shared image generated ({len(shared_image)} bytes)")
+
+            if media_type == "video":
+                logger.info("[5/6] Generating shared VIDEO for all platforms...")
+                shared_media = generate_video_for_post(image_context_post, visual_style, user_id)
+                if shared_media:
+                    logger.info(f"Shared video generated ({len(shared_media)} bytes)")
+                else:
+                    logger.warning("No video generated - falling back to image")
+                    # Fallback to image if video generation fails
+                    shared_media = generate_image(image_context_post, visual_style, user_prompt, enhanced_context)
             else:
-                logger.warning("No image generated")
+                logger.info("[5/6] Generating shared image for all platforms...")
+                shared_media = generate_image(image_context_post, visual_style, user_prompt, enhanced_context)
+
+            if shared_media:
+                logger.info(f"Shared media generated ({len(shared_media)} bytes)")
+            else:
+                logger.warning("No media generated")
+
+        # Alias for backward compatibility with posting functions
+        shared_image = shared_media
 
         # Step 5: Post to platforms (using shared topics extracted earlier)
         if twitter_tokens and x_post and shared_image:
@@ -2753,3 +2770,75 @@ def generate_image_for_post_builder(post_text: str, visual_style: str = None, us
     except Exception as e:
         logger.error(f"Error generating image for post builder: {e}", exc_info=True)
         return None
+
+
+def generate_video_for_post(post_text: str, visual_style: str = None, user_id: int = None) -> Optional[bytes]:
+    """
+    Generate an 8-second video for a social media post using first-frame approach.
+
+    Args:
+        post_text: The post text to visualize
+        visual_style: Visual style for the image/video
+        user_id: Optional user ID for campaign config fallback
+
+    Returns:
+        Video bytes (MP4) or None
+    """
+    from video_generation import generate_video_from_image
+
+    try:
+        # Step 1: Generate first frame image
+        logger.info("Generating first frame for video...")
+        image_bytes = generate_image_for_post_builder(post_text, visual_style, user_id)
+        if not image_bytes:
+            logger.error("Failed to generate first frame image")
+            return None
+
+        # Step 2: Create motion prompt from post text
+        style_desc = visual_style or "professional, cinematic"
+        motion_prompt = f"Subtle cinematic motion, smooth camera. Style: {style_desc}. Theme: {post_text[:200]}"
+
+        # Step 3: Generate video from first frame
+        logger.info("Generating video from first frame...")
+        video_bytes = generate_video_from_image(
+            first_frame_bytes=image_bytes,
+            video_prompt=motion_prompt
+        )
+
+        if video_bytes:
+            logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
+        else:
+            logger.warning("Video generation returned no bytes")
+
+        return video_bytes
+
+    except Exception as e:
+        logger.error(f"Error generating video for post: {e}", exc_info=True)
+        return None
+
+
+def generate_media_for_post_builder(
+    post_text: str,
+    visual_style: str = None,
+    user_id: int = None,
+    media_type: str = "image"
+) -> tuple[Optional[bytes], str]:
+    """
+    Generate either an image or video for a post.
+
+    Args:
+        post_text: The post text to visualize
+        visual_style: Visual style for the media
+        user_id: Optional user ID for campaign config
+        media_type: "image" (default) or "video"
+
+    Returns:
+        Tuple of (media_bytes, mime_type)
+        mime_type is "image/png" or "video/mp4"
+    """
+    if media_type == "video":
+        video_bytes = generate_video_for_post(post_text, visual_style, user_id)
+        return (video_bytes, "video/mp4")
+    else:
+        image_bytes = generate_image_for_post_builder(post_text, visual_style, user_id)
+        return (image_bytes, "image/png")

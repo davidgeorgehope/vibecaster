@@ -163,7 +163,7 @@ export default function Home() {
     }
   };
 
-  const handleActivateCampaign = async (prompt: string) => {
+  const handleActivateCampaign = async (prompt: string, mediaType: string = 'image') => {
     if (!token) return;
     try {
       const response = await fetch('/api/setup', {
@@ -174,7 +174,8 @@ export default function Home() {
         },
         body: JSON.stringify({
           user_prompt: prompt,
-          schedule_cron: '0 9 * * *' // Daily at 9 AM
+          schedule_cron: '0 9 * * *', // Daily at 9 AM
+          media_type: mediaType
         })
       });
 
