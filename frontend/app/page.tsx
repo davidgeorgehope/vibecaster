@@ -5,11 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
+import TranscribeBox from '@/components/TranscribeBox';
 
-type Tab = 'campaign' | 'url' | 'builder';
+type Tab = 'campaign' | 'url' | 'builder' | 'transcribe';
 
 interface ConnectionStatus {
   twitter: boolean;
@@ -282,7 +283,8 @@ export default function Home() {
             {[
               { id: 'campaign', label: 'Campaign', icon: Megaphone },
               { id: 'url', label: 'URL Post', icon: Link },
-              { id: 'builder', label: 'Post Builder', icon: MessageSquare }
+              { id: 'builder', label: 'Post Builder', icon: MessageSquare },
+              { id: 'transcribe', label: 'Transcribe', icon: Mic }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -370,6 +372,15 @@ export default function Home() {
             <PostBuilder
               token={token}
               connections={connections}
+              showNotification={showNotification}
+            />
+          </div>
+        )}
+
+        {activeTab === 'transcribe' && (
+          <div className="max-w-4xl mx-auto">
+            <TranscribeBox
+              token={token}
               showNotification={showNotification}
             />
           </div>

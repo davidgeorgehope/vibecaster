@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ import uvicorn
 # Import local modules
 from database import init_database, get_campaign, update_campaign, get_connection_status
 from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, generate_from_url_stream, post_url_content, chat_post_builder_stream, parse_generated_posts, generate_image_for_post_builder
+from transcription import transcribe_media_stream, SUPPORTED_MIME_TYPES
 from auth import router as auth_router
 from user_auth import router as user_auth_router
 from admin import router as admin_router
@@ -486,6 +487,62 @@ async def chat_generate_image(request: GenerateImageRequest, user_id: int = Depe
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate image: {str(e)}")
+
+
+# ===== TRANSCRIPTION =====
+
+MAX_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
+
+
+@app.post("/api/transcribe-stream")
+async def transcribe_stream_endpoint(
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Stream transcription and content generation from audio/video files.
+    Uses Server-Sent Events (SSE) for real-time progress updates.
+
+    Returns transcript, summary, and blog post.
+    File is processed in memory and immediately discarded.
+    """
+    # Validate file type
+    content_type = file.content_type or ""
+    if content_type not in SUPPORTED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {content_type}. Supported: audio (mp3, wav, aac, ogg, flac) and video (mp4, webm, mov)"
+        )
+
+    # Read file into memory
+    file_bytes = await file.read()
+
+    # Validate file size
+    if len(file_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+        )
+
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    logger.info(f"[Transcribe] User {user_id} uploading {file.filename} ({len(file_bytes)} bytes)")
+
+    def generate():
+        for chunk in transcribe_media_stream(user_id, file_bytes, file.filename, content_type):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 # ===== MAIN ENTRY POINT =====
