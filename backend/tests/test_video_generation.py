@@ -494,48 +494,6 @@ class TestGenerateVideoFromImage:
         assert result is None
 
 
-class TestStitchVideos:
-    """Tests for stitch_videos function."""
-
-    def test_returns_single_video_unchanged(self):
-        """Test that single video is returned as-is."""
-        from video_generation import stitch_videos
-
-        video = b'single_video_bytes'
-        result = stitch_videos([video])
-
-        assert result == video
-
-    def test_returns_none_for_empty_list(self):
-        """Test that empty list returns None."""
-        from video_generation import stitch_videos
-
-        result = stitch_videos([])
-
-        assert result is None
-
-    @patch('video_generation.subprocess.run')
-    @patch('video_generation.tempfile.TemporaryDirectory')
-    def test_calls_ffmpeg_for_multiple_videos(self, mock_tmpdir, mock_run):
-        """Test that FFmpeg is called for multiple videos."""
-        from video_generation import stitch_videos
-
-        mock_tmpdir.return_value.__enter__ = Mock(return_value='/tmp/test')
-        mock_tmpdir.return_value.__exit__ = Mock(return_value=False)
-
-        mock_run.return_value = Mock(returncode=0)
-
-        with patch('builtins.open', create=True) as mock_open:
-            mock_open.return_value.__enter__ = Mock(return_value=Mock(
-                read=Mock(return_value=b'combined_video'),
-                write=Mock()
-            ))
-            mock_open.return_value.__exit__ = Mock(return_value=False)
-
-            # This test verifies FFmpeg is called
-            # Full integration would need actual file handling
-
-
 class TestGenerateVideoStream:
     """Tests for generate_video_stream function."""
 

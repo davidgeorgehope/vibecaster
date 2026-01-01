@@ -292,8 +292,8 @@ class TestVideoGenerationErrors:
 class TestSceneFailureHandling:
     """Tests for handling scene-level failures."""
 
-    def test_scene_image_failure_continues_to_next_scene(self, mock_database, mock_veo_client):
-        """Test that image generation failure doesn't stop entire pipeline."""
+    def test_scene_image_failure_stops_pipeline(self, mock_database, mock_veo_client):
+        """Test that scene 1 image failure stops pipeline (can't extend non-existent video)."""
         from video_generation import generate_video_stream
 
         # Mock script with 2 scenes
@@ -313,50 +313,29 @@ class TestSceneFailureHandling:
         script_response = Mock()
         script_response.text = json.dumps(mock_script)
 
-        # First image fails, second succeeds
+        # First image fails
         failed_image_response = Mock()
         failed_image_response.candidates = []
-
-        mock_image_part = Mock()
-        mock_image_part.inline_data = Mock()
-        mock_image_part.inline_data.data = create_test_image_bytes()
-        success_image_response = Mock()
-        success_image_response.candidates = [Mock(content=Mock(parts=[mock_image_part]))]
-
-        # Video generation succeeds
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = lambda path: open(path, 'wb').write(create_test_video_bytes())
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
 
         mock_veo_client.models.generate_content.side_effect = [
             script_response,
             failed_image_response,  # Scene 1 image fails
-            success_image_response  # Scene 2 image succeeds
         ]
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
 
-        with patch('video_generation.types.Image.from_file') as mock_from_file:
-            mock_from_file.return_value = Mock()
-            events = list(generate_video_stream(
-                user_id=1,
-                topic="Test Topic",
-                style="educational",
-                target_duration=16
-            ))
+        events = list(generate_video_stream(
+            user_id=1,
+            topic="Test Topic",
+            style="educational",
+            target_duration=16
+        ))
 
         event_types = [json.loads(e.strip())['type'] for e in events]
 
-        # Should have error for scene 1 but continue to scene 2
-        assert 'scene_error' in event_types
-        assert 'scene_complete' in event_types
-        # Should still complete (with partial success)
-        assert 'complete' in event_types or 'stitching' in event_types
+        # With video extension approach, if scene 1 image fails, pipeline stops
+        # because we can't extend a video that doesn't exist
+        assert 'error' in event_types
+        # Should NOT have scene_complete since scene 1 failed and we can't continue
+        assert 'scene_complete' not in event_types
 
     def test_all_scenes_fail_returns_error(self, mock_database, mock_veo_client):
         """Test that if all scenes fail, pipeline returns error."""

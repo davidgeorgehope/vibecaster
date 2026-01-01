@@ -2,17 +2,19 @@
 Video Generation Module - Multi-scene video generation with Veo 3.1
 
 Provides functionality for:
-- Script planning with LLM (scenes, image prompts, video prompts)
+- Script planning with LLM (scenes, narration, video prompts with dialogue)
 - Scene image generation with character reference (Nano Banana Pro)
 - Video generation from first frame (Veo 3.1)
-- Video extension and stitching (FFmpeg)
+- Video extension for scene continuity (Veo 3.1 extend)
 - SSE streaming for progress updates
+
+Note: Audio/dialogue is generated natively by Veo 3.1 when prompts include
+quoted speech like: "The presenter says: \"Welcome to the tutorial.\""
 """
 
 import os
 import time
 import json
-import subprocess
 import tempfile
 from typing import Optional, Dict, Any, List, Generator
 from io import BytesIO
@@ -76,9 +78,19 @@ def plan_video_script(
     num_scenes = min(max(target_duration // DEFAULT_VIDEO_DURATION, 1), MAX_SCENES)
 
     style_instructions = {
-        "educational": "Create an educational explainer video. Use clear, instructive visuals that help explain concepts. The narrator should be informative and engaging.",
-        "storybook": "Create a narrative story with a beginning, middle, and end. Each scene should advance the plot with engaging visuals and storytelling.",
-        "social_media": "Create a short, attention-grabbing video suitable for social media. Make it punchy, visually striking, and memorable."
+        "educational": """Create an educational explainer video with a presenter.
+- The presenter should speak directly to camera, explaining concepts clearly
+- Include dialogue in the video_prompt using quotes: "The presenter says: \\"Let me explain...\\""
+- Use a whiteboard, desk, or professional setting as the backdrop
+- The tone should be informative, engaging, and conversational""",
+        "storybook": """Create a narrative story with spoken narration and character dialogue.
+- Include narrator voiceover in quotes: "The narrator says: \\"Once upon a time...\\""
+- Characters should have dialogue: "The hero exclaims: \\"We must find the treasure!\\""
+- Each scene advances the plot with engaging visuals and storytelling""",
+        "social_media": """Create a short, attention-grabbing video with energetic voiceover.
+- Include punchy voiceover in quotes: "A voice says: \\"You won't believe this!\\""
+- Add sound effect descriptions for impact
+- Make it visually striking and memorable with quick energy"""
     }
 
     character_context = ""
@@ -111,10 +123,10 @@ Return a JSON object with this exact structure:
     "scenes": [
         {{
             "scene_number": 1,
-            "narration": "What is spoken/shown in this scene (2-3 sentences)",
+            "narration": "What is spoken in this scene - the actual words (2-3 sentences)",
             "visual_description": "Detailed description of what appears visually",
             "image_prompt": "Detailed prompt for generating the first frame image (include style, lighting, composition)",
-            "video_prompt": "Motion/action prompt for video generation (describe camera movement, character actions)",
+            "video_prompt": "Video prompt WITH DIALOGUE IN QUOTES. Example: The presenter gestures and says: \\"Welcome! Today we will learn about...\\" Camera slowly zooms in.",
             "include_character": true/false
         }}
     ],
@@ -122,12 +134,15 @@ Return a JSON object with this exact structure:
     "estimated_duration": {num_scenes * DEFAULT_VIDEO_DURATION}
 }}
 
-IMPORTANT:
-- Each scene is exactly {DEFAULT_VIDEO_DURATION} seconds
-- Image prompts should be detailed and specific
-- Video prompts should describe motion and action
-- Keep narration concise but informative
-- Ensure visual continuity between scenes"""
+CRITICAL REQUIREMENTS:
+- The video_prompt MUST include spoken dialogue in quotes using this format:
+  The presenter says: "Actual words they speak here."
+- Use gender-neutral language (they/the presenter) - the reference image determines appearance
+- Each scene is {DEFAULT_VIDEO_DURATION} seconds (scene 1) or 7 seconds (extensions)
+- Scene 1 establishes the setting and character - subsequent scenes EXTEND from it
+- Maintain visual and narrative continuity - scenes flow naturally into each other
+- Keep dialogue natural and conversational, not robotic
+- Include ambient sounds or effects where appropriate: "birds chirping", "keyboard clicking\""""
 
     try:
         logger.info(f"🎬 Planning video script for: {topic}")
@@ -233,10 +248,11 @@ def generate_video_from_image_stream(
 
     Yields:
         ('progress', poll_count, max_polls) during polling
-        ('complete', video_bytes) on success
+        ('complete', video_object, video_bytes) on success - returns both for extension chaining
         ('error', error_message) on failure
 
     NOTE: Use this for SSE streaming to keep Cloudflare connection alive.
+    The video_object can be passed to generate_video_extension_stream() for continuity.
     """
     tmp_image_path = None
     tmp_video_path = None
@@ -307,7 +323,8 @@ def generate_video_from_image_stream(
                 return
 
             logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
-            yield ('complete', video_bytes)
+            # Return both video object (for extension chaining) and bytes (for storage)
+            yield ('complete', video.video, video_bytes)
         else:
             logger.warning("No video in response")
             yield ('error', 'No video in API response')
@@ -330,6 +347,103 @@ def generate_video_from_image_stream(
                 pass
 
 
+def generate_video_extension_stream(
+    previous_video,  # Veo Video object from previous generation
+    video_prompt: str
+):
+    """
+    Extend a video using Veo 3.1 with progress events (generator).
+
+    Uses the last second of the previous video to maintain visual and audio
+    continuity. Each extension adds ~7 seconds to the video.
+
+    Args:
+        previous_video: The Veo Video object from the previous scene's generation
+        video_prompt: Prompt for the extension (should include dialogue in quotes)
+
+    Yields:
+        ('progress', poll_count, max_polls) during polling
+        ('complete', video_object, video_bytes) on success - returns both for chaining
+        ('error', error_message) on failure
+    """
+    tmp_video_path = None
+
+    try:
+        logger.info(f"🔗 Extending video with next scene...")
+
+        # Start video extension
+        operation = client.models.generate_videos(
+            model=VIDEO_MODEL,
+            prompt=video_prompt,
+            video=previous_video  # Pass video object for extension
+        )
+
+        # Poll until complete, yielding progress for SSE keepalive
+        poll_count = 0
+        max_polls = 60  # 10 minutes max
+        while not operation.done and poll_count < max_polls:
+            poll_count += 1
+            logger.info(f"Video extension in progress... (poll {poll_count}/{max_polls})")
+
+            yield ('progress', poll_count, max_polls)
+
+            time.sleep(POLL_INTERVAL)
+            operation = client.operations.get(operation)
+
+        if not operation.done:
+            logger.error(f"Video extension timed out after {poll_count * POLL_INTERVAL} seconds")
+            yield ('error', 'Video extension timed out')
+            return
+
+        # Get the extended video
+        if operation.response and operation.response.generated_videos:
+            video = operation.response.generated_videos[0]
+
+            if not hasattr(video, 'video') or video.video is None:
+                logger.error("Veo API returned video object without video data")
+                yield ('error', 'No video data in response')
+                return
+
+            # Download video bytes for storage
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
+                tmp_video_path = tmp_vid.name
+
+            try:
+                client.files.download(file=video.video)
+                video.video.save(tmp_video_path)
+            except Exception as save_error:
+                logger.error(f"Failed to download/save extended video: {save_error}")
+                yield ('error', f'Failed to download video: {save_error}')
+                return
+
+            with open(tmp_video_path, 'rb') as f:
+                video_bytes = f.read()
+
+            MIN_VIDEO_SIZE = 10000
+            if len(video_bytes) < MIN_VIDEO_SIZE:
+                logger.error(f"Extended video too small ({len(video_bytes)} bytes)")
+                yield ('error', 'Extended video too small')
+                return
+
+            logger.info(f"Video extended successfully ({len(video_bytes)} bytes)")
+            # Return both the video object (for next extension) and bytes (for storage)
+            yield ('complete', video.video, video_bytes)
+        else:
+            logger.warning("No video in extension response")
+            yield ('error', 'No video in API response')
+
+    except Exception as e:
+        logger.error(f"Error extending video: {e}", exc_info=True)
+        yield ('error', str(e))
+
+    finally:
+        if tmp_video_path and os.path.exists(tmp_video_path):
+            try:
+                os.unlink(tmp_video_path)
+            except:
+                pass
+
+
 def generate_video_from_image(
     first_frame_bytes: bytes,
     video_prompt: str
@@ -338,83 +452,15 @@ def generate_video_from_image(
     Generate a video using Veo 3.1 (blocking wrapper).
 
     For SSE streaming with Cloudflare, use generate_video_from_image_stream() instead.
+    Returns just the video bytes (not the video object).
     """
     for event_type, *data in generate_video_from_image_stream(first_frame_bytes, video_prompt):
         if event_type == 'complete':
-            return data[0]
+            # data is (video_object, video_bytes) - return bytes
+            return data[1]
         elif event_type == 'error':
             return None
     return None
-
-
-def stitch_videos(video_segments: List[bytes], output_format: str = "mp4") -> Optional[bytes]:
-    """
-    Stitch multiple video segments into a single video using FFmpeg.
-
-    Args:
-        video_segments: List of video bytes (MP4)
-        output_format: Output format (default: mp4)
-
-    Returns:
-        Combined video bytes or None if stitching fails
-    """
-    if not video_segments:
-        return None
-
-    if len(video_segments) == 1:
-        return video_segments[0]
-
-    try:
-        logger.info(f"🔗 Stitching {len(video_segments)} video segments...")
-
-        # Create temp directory for video files
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Write each segment to a file
-            segment_files = []
-            for i, segment in enumerate(video_segments):
-                segment_path = os.path.join(tmpdir, f"segment_{i:03d}.mp4")
-                with open(segment_path, 'wb') as f:
-                    f.write(segment)
-                segment_files.append(segment_path)
-
-            # Create concat list file
-            concat_list_path = os.path.join(tmpdir, "concat_list.txt")
-            with open(concat_list_path, 'w') as f:
-                for segment_path in segment_files:
-                    f.write(f"file '{segment_path}'\n")
-
-            # Output path
-            output_path = os.path.join(tmpdir, f"output.{output_format}")
-
-            # Run FFmpeg concat
-            cmd = [
-                'ffmpeg', '-y',
-                '-f', 'concat',
-                '-safe', '0',
-                '-i', concat_list_path,
-                '-c', 'copy',  # Copy codec, no re-encoding
-                output_path
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-
-            if result.returncode != 0:
-                logger.error(f"FFmpeg error: {result.stderr}")
-                return None
-
-            # Read output
-            with open(output_path, 'rb') as f:
-                output_bytes = f.read()
-
-            logger.info(f"Videos stitched successfully ({len(output_bytes)} bytes)")
-            return output_bytes
-
-    except subprocess.TimeoutExpired:
-        logger.error("FFmpeg timed out")
-        return None
-    except Exception as e:
-        logger.error(f"Error stitching videos: {e}", exc_info=True)
-        return None
 
 
 def generate_video_stream(
@@ -491,11 +537,16 @@ def generate_video_stream(
                         summary=script.get('summary'),
                         scene_count=len(script.get('scenes', [])))
 
-        # Phase 2: Generate scenes
+        # Phase 2: Generate scenes using video extension chain
+        # Scene 1: Generate from first-frame image
+        # Scenes 2+: Extend from previous video for continuity
         update_video_job(job_id, status="generating")
         scenes = script.get('scenes', [])
-        video_segments = []
-        failed_scenes = []  # Track which scenes failed for partial success warning
+
+        # Track the current video object for extension chaining
+        current_video_object = None
+        final_video_bytes = None
+        total_duration = 0
 
         # Pre-create all scenes in DB so frontend can see total count
         scene_ids = {}
@@ -513,167 +564,174 @@ def generate_video_stream(
             scene_id = scene_ids[scene_num]
 
             # Rate limit protection: delay between scenes (except first)
-            # Veo API has rate limits; 1 min delay to spread out API calls
             if scene_num > 1:
                 logger.info(f"Waiting 1 minute before scene {scene_num} to avoid rate limits...")
                 yield emit_event("scene_delay", scene=scene_num, delay=60,
                                message=f"Waiting 1 minute before scene {scene_num} (rate limit cooldown)...")
                 time.sleep(60)
 
-            # Generate first frame image
-            yield emit_event(f"scene_image",
-                           scene=scene_num,
-                           total=len(scenes),
-                           message=f"Generating image for scene {scene_num}...")
-            update_video_scene(scene_id, status="generating_image")
+            # Scene 1: Generate first frame image and initial video
+            if scene_num == 1:
+                yield emit_event("scene_image",
+                               scene=scene_num,
+                               total=len(scenes),
+                               message=f"Generating image for scene {scene_num}...")
+                update_video_scene(scene_id, status="generating_image")
 
-            image_bytes = generate_scene_image(
-                image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
-                character_reference=character_reference if scene.get('include_character') else None,
-                style=author_bio.get('style', 'real_person') if author_bio else 'real_person'
-            )
+                image_bytes = generate_scene_image(
+                    image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
+                    character_reference=character_reference if scene.get('include_character') else None,
+                    style=author_bio.get('style', 'real_person') if author_bio else 'real_person'
+                )
 
-            if not image_bytes:
-                # Scene 1 failed - can't make video without first scene
-                if scene_num == 1:
+                if not image_bytes:
                     yield emit_event("error", message="First scene image failed - cannot continue")
                     update_video_scene(scene_id, status="error", error_message="Image generation failed")
                     update_video_job(job_id, status="error", error_message="Scene 1 image failed")
                     return
 
-                yield emit_event("scene_error", scene=scene_num, error="Failed to generate image")
-                update_video_scene(scene_id, status="error", error_message="Image generation failed")
-                failed_scenes.append(scene_num)
-                continue
+                update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
 
-            update_video_scene(scene_id, first_frame_image=image_bytes, status="generating_video")
-
-            # Generate video from image with retry logic for quota errors
-            # NOTE: Character consistency is handled by generate_scene_image(), not here.
-            # Veo API doesn't support reference_images with image-to-video mode.
-            video_bytes = None
-            quota_retry_count = 0
-
-            while video_bytes is None and quota_retry_count <= MAX_QUOTA_RETRIES:
+                # Generate initial video from image
                 yield emit_event("scene_video",
                                scene=scene_num,
                                total=len(scenes),
-                               message=f"Generating video for scene {scene_num}..." +
-                                       (f" (retry {quota_retry_count})" if quota_retry_count > 0 else ""))
+                               message=f"Generating video for scene {scene_num}...")
 
-                generation_error = None
-                for event_type, *event_data in generate_video_from_image_stream(
-                    first_frame_bytes=image_bytes,
-                    video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
-                ):
-                    if event_type == 'progress':
-                        poll_count, max_polls = event_data
-                        yield emit_event("scene_progress",
-                                       scene=scene_num,
-                                       total=len(scenes),
-                                       poll=poll_count,
-                                       max_polls=max_polls,
-                                       message=f"Rendering scene {scene_num}... ({poll_count * 10}s)")
-                    elif event_type == 'complete':
-                        video_bytes = event_data[0]
-                    elif event_type == 'error':
-                        generation_error = event_data[0]
-                        break
+                video_bytes = None
+                video_object = None
+                quota_retry_count = 0
 
-                # Handle errors with retry for quota issues
-                if generation_error:
-                    error_msg = str(generation_error)
-                    logger.error(f"Video generation error: {error_msg}")
-
-                    # Quota errors - retry with exponential backoff
-                    if '429' in error_msg or 'RESOURCE_EXHAUSTED' in error_msg:
-                        if quota_retry_count < MAX_QUOTA_RETRIES:
-                            delay = QUOTA_RETRY_DELAYS[quota_retry_count]
-                            quota_retry_count += 1
-                            logger.info(f"Quota exceeded, waiting {delay}s before retry {quota_retry_count}/{MAX_QUOTA_RETRIES}")
-                            yield emit_event("quota_retry",
+                while video_bytes is None and quota_retry_count <= MAX_QUOTA_RETRIES:
+                    generation_error = None
+                    for event_type, *event_data in generate_video_from_image_stream(
+                        first_frame_bytes=image_bytes,
+                        video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
+                    ):
+                        if event_type == 'progress':
+                            poll_count, max_polls = event_data
+                            yield emit_event("scene_progress",
                                            scene=scene_num,
-                                           retry=quota_retry_count,
-                                           max_retries=MAX_QUOTA_RETRIES,
-                                           delay=delay,
-                                           message=f"Quota exceeded - waiting {delay//60}m {delay%60}s before retry {quota_retry_count}/{MAX_QUOTA_RETRIES}...")
-                            time.sleep(delay)
-                            continue  # Retry the video generation
-                        else:
-                            # Max retries exhausted
-                            yield emit_event("error", message="Quota exceeded after max retries - try again later")
-                            update_video_scene(scene_id, status="error", error_message="Quota exceeded after retries")
-                            update_video_job(job_id, status="error", error_message="Quota exceeded after retries")
-                            return
+                                           total=len(scenes),
+                                           poll=poll_count,
+                                           max_polls=max_polls,
+                                           message=f"Rendering scene {scene_num}... ({poll_count * 10}s)")
+                        elif event_type == 'complete':
+                            video_object, video_bytes = event_data[0], event_data[1]
+                        elif event_type == 'error':
+                            generation_error = event_data[0]
+                            break
 
-                    # Scene 1 failed with non-quota error - abort
-                    if scene_num == 1:
-                        yield emit_event("error", message=f"First scene failed: {error_msg[:80]}")
+                    if generation_error:
+                        error_msg = str(generation_error)
+                        if '429' in error_msg or 'RESOURCE_EXHAUSTED' in error_msg:
+                            if quota_retry_count < MAX_QUOTA_RETRIES:
+                                delay = QUOTA_RETRY_DELAYS[quota_retry_count]
+                                quota_retry_count += 1
+                                yield emit_event("quota_retry",
+                                               scene=scene_num,
+                                               retry=quota_retry_count,
+                                               max_retries=MAX_QUOTA_RETRIES,
+                                               delay=delay,
+                                               message=f"Quota exceeded - waiting {delay//60}m {delay%60}s...")
+                                time.sleep(delay)
+                                continue
+                        yield emit_event("error", message=f"Scene 1 failed: {error_msg[:80]}")
                         update_video_scene(scene_id, status="error", error_message=error_msg[:200])
                         update_video_job(job_id, status="error", error_message=f"Scene 1 failed: {error_msg[:100]}")
                         return
 
-                    # Later scenes can fail - continue with partial video
-                    yield emit_event("scene_error", scene=scene_num, error=error_msg[:100])
-                    update_video_scene(scene_id, status="error", error_message=error_msg[:200])
-                    failed_scenes.append(scene_num)
-                    break  # Exit retry loop, move to next scene
+                if not video_bytes or not video_object:
+                    yield emit_event("error", message="Scene 1 video generation failed")
+                    update_video_job(job_id, status="error", error_message="Scene 1 failed")
+                    return
 
-            if video_bytes:
+                current_video_object = video_object
+                final_video_bytes = video_bytes
+                total_duration = DEFAULT_VIDEO_DURATION
                 update_video_scene(scene_id, video_data=video_bytes,
                                  duration_seconds=DEFAULT_VIDEO_DURATION, status="complete")
-                video_segments.append(video_bytes)
                 yield emit_event("scene_complete", scene=scene_num, total=len(scenes))
-            elif scene_num not in failed_scenes:
-                # No video and not already marked as failed (shouldn't happen but just in case)
-                yield emit_event("scene_error", scene=scene_num, error="Video generation returned empty")
-                update_video_scene(scene_id, status="error", error_message="Video generation returned empty")
-                failed_scenes.append(scene_num)
 
-        # Fallback: if in-memory list is empty but DB has completed scenes, retrieve them
-        # This handles cases where some scenes succeeded but later ones failed
-        if not video_segments and job_id:
-            from database import get_completed_scene_videos
-            db_scenes = get_completed_scene_videos(job_id)
-            if db_scenes:
-                video_segments = [video_data for _, video_data in db_scenes]
-                logger.info(f"Retrieved {len(video_segments)} completed scene(s) from database")
-                yield emit_event("info", message=f"Retrieved {len(video_segments)} saved scene(s)")
+            else:
+                # Scenes 2+: Extend from previous video for continuity
+                update_video_scene(scene_id, status="extending_video")
 
-        if not video_segments:
-            yield emit_event("error", message="No video segments generated")
-            update_video_job(job_id, status="error", error_message="No segments generated")
-            return
+                yield emit_event("scene_video",
+                               scene=scene_num,
+                               total=len(scenes),
+                               message=f"Extending video for scene {scene_num}...")
 
-        # Warn about partial success if some scenes failed
-        if failed_scenes:
-            warning_msg = f"Warning: {len(failed_scenes)} scene(s) failed (scenes {', '.join(map(str, failed_scenes))}). Returning partial video."
-            logger.warning(warning_msg)
-            yield emit_event("warning", message=warning_msg)
+                video_bytes = None
+                video_object = None
+                quota_retry_count = 0
 
-        # Phase 3: Stitch videos
-        yield emit_event("stitching", message="Combining video segments...")
-        update_video_job(job_id, status="stitching")
+                while video_bytes is None and quota_retry_count <= MAX_QUOTA_RETRIES:
+                    generation_error = None
+                    for event_type, *event_data in generate_video_extension_stream(
+                        previous_video=current_video_object,
+                        video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
+                    ):
+                        if event_type == 'progress':
+                            poll_count, max_polls = event_data
+                            yield emit_event("scene_progress",
+                                           scene=scene_num,
+                                           total=len(scenes),
+                                           poll=poll_count,
+                                           max_polls=max_polls,
+                                           message=f"Extending scene {scene_num}... ({poll_count * 10}s)")
+                        elif event_type == 'complete':
+                            video_object, video_bytes = event_data[0], event_data[1]
+                        elif event_type == 'error':
+                            generation_error = event_data[0]
+                            break
 
-        final_video = stitch_videos(video_segments)
+                    if generation_error:
+                        error_msg = str(generation_error)
+                        if '429' in error_msg or 'RESOURCE_EXHAUSTED' in error_msg:
+                            if quota_retry_count < MAX_QUOTA_RETRIES:
+                                delay = QUOTA_RETRY_DELAYS[quota_retry_count]
+                                quota_retry_count += 1
+                                yield emit_event("quota_retry",
+                                               scene=scene_num,
+                                               retry=quota_retry_count,
+                                               max_retries=MAX_QUOTA_RETRIES,
+                                               delay=delay,
+                                               message=f"Quota exceeded - waiting {delay//60}m {delay%60}s...")
+                                time.sleep(delay)
+                                continue
+                        yield emit_event("error", message=f"Scene {scene_num} extension failed: {error_msg[:80]}")
+                        update_video_scene(scene_id, status="error", error_message=error_msg[:200])
+                        update_video_job(job_id, status="error", error_message=f"Scene {scene_num} failed: {error_msg[:100]}")
+                        return
 
-        if final_video:
-            status = "partial" if failed_scenes else "complete"
-            update_video_job(job_id, status=status,
-                           final_video=final_video, final_video_mime="video/mp4")
+                if not video_bytes or not video_object:
+                    yield emit_event("error", message=f"Scene {scene_num} extension failed")
+                    update_video_job(job_id, status="error", error_message=f"Scene {scene_num} failed")
+                    return
 
-            # Return base64 encoded video for immediate preview
-            video_base64 = base64.b64encode(final_video).decode('utf-8')
+                # Update chain for next extension
+                current_video_object = video_object
+                final_video_bytes = video_bytes  # Extended video includes all previous scenes
+                total_duration += 7  # Extensions add ~7 seconds
+                update_video_scene(scene_id, video_data=video_bytes,
+                                 duration_seconds=7, status="complete")
+                yield emit_event("scene_complete", scene=scene_num, total=len(scenes))
+
+        # Final video is already combined by Veo extension - no stitching needed
+        if final_video_bytes:
+            update_video_job(job_id, status="complete",
+                           final_video=final_video_bytes, final_video_mime="video/mp4")
+
+            video_base64 = base64.b64encode(final_video_bytes).decode('utf-8')
             yield emit_event("complete",
                            job_id=job_id,
                            title=script.get('title'),
-                           duration=len(video_segments) * DEFAULT_VIDEO_DURATION,
-                           video_base64=video_base64,
-                           partial=bool(failed_scenes),
-                           failed_scenes=failed_scenes if failed_scenes else None)
+                           duration=total_duration,
+                           video_base64=video_base64)
         else:
-            yield emit_event("error", message="Failed to stitch videos")
-            update_video_job(job_id, status="error", error_message="Stitching failed")
+            yield emit_event("error", message="No video generated")
+            update_video_job(job_id, status="error", error_message="No video generated")
 
     except Exception as e:
         logger.error(f"Video generation error: {e}", exc_info=True)

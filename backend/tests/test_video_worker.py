@@ -263,10 +263,8 @@ class TestVideoStreamWithJobId:
     @patch('video_generation.plan_video_script')
     @patch('video_generation.generate_scene_image')
     @patch('video_generation.generate_video_from_image_stream')
-    @patch('video_generation.stitch_videos')
     def test_skips_job_creation_when_job_id_provided(
         self,
-        mock_stitch,
         mock_video_stream,
         mock_image,
         mock_plan,
@@ -288,8 +286,9 @@ class TestVideoStreamWithJobId:
         }
         mock_create_scene.return_value = 1
         mock_image.return_value = b"fake_image"
-        mock_video_stream.return_value = iter([("complete", b"fake_video")])
-        mock_stitch.return_value = b"final_video"
+        # New format: returns (video_object, video_bytes)
+        mock_video_obj = MagicMock()
+        mock_video_stream.return_value = iter([("complete", mock_video_obj, b"fake_video")])
 
         # Run with job_id provided
         events = list(generate_video_stream(
