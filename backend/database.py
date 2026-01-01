@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
 import os
@@ -130,6 +131,17 @@ def init_database():
                 duration_seconds REAL,
                 status TEXT DEFAULT 'pending',
                 error_message TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES video_jobs(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create video_job_events table for SSE event replay
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS video_job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                event_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY (job_id) REFERENCES video_jobs(id) ON DELETE CASCADE
             )
@@ -621,6 +633,61 @@ def get_completed_scene_videos(job_id: int) -> list:
         """, (job_id,))
 
         return [(row['scene_number'], row['video_data']) for row in cursor.fetchall()]
+
+
+# ===== VIDEO JOB EVENTS (for background worker SSE) =====
+
+def save_job_event(job_id: int, event_json: str) -> int:
+    """Save a job event for SSE replay on reconnection.
+
+    Returns the event ID.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO video_job_events (job_id, event_json, created_at)
+            VALUES (?, ?, ?)
+        """, (job_id, event_json, int(time.time())))
+        return cursor.lastrowid
+
+
+def get_job_events_since(job_id: int, last_event_id: int = 0) -> list:
+    """Get all events for a job after the given event ID.
+
+    Returns list of (event_id, event_json) tuples ordered by ID.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, event_json
+            FROM video_job_events
+            WHERE job_id = ? AND id > ?
+            ORDER BY id ASC
+        """, (job_id, last_event_id))
+        return [(row['id'], row['event_json']) for row in cursor.fetchall()]
+
+
+def cleanup_job_events(job_id: int) -> int:
+    """Delete all events for a completed job.
+
+    Returns number of deleted rows.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM video_job_events WHERE job_id = ?", (job_id,))
+        return cursor.rowcount
+
+
+def cleanup_old_job_events(hours: int = 24) -> int:
+    """Delete events older than specified hours.
+
+    Returns number of deleted rows.
+    """
+    cutoff = int(time.time()) - (hours * 3600)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM video_job_events WHERE created_at < ?", (cutoff,))
+        return cursor.rowcount
 
 
 # ===== ADMIN FUNCTIONS =====

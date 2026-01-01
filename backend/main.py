@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -932,18 +933,82 @@ async def video_generate_stream_endpoint(
 ):
     """
     Stream video generation with progress updates.
-    Uses Server-Sent Events (SSE) for real-time feedback.
+
+    Video generation runs in a background thread. This endpoint:
+    1. Creates the job in database
+    2. Starts background worker
+    3. Polls database for events and streams them via SSE
+
+    If client disconnects, background job continues. Client can reconnect
+    via polling GET /api/video/jobs/{job_id}.
     """
-    def generate():
-        for event in generate_video_stream(
-            user_id=user_id,
-            topic=request.topic,
-            style=request.style,
-            target_duration=request.target_duration,
-            user_prompt=request.user_prompt or ""
-        ):
-            yield f"data: {event}\n\n"
-        yield "data: [DONE]\n\n"
+    from database import create_video_job, get_job_events_since
+    from video_worker import start_video_job, is_job_running
+    import json
+    import time as time_module
+
+    # Create job upfront so we have an ID
+    job_id = create_video_job(user_id, title=request.topic[:100])
+
+    # Start background worker
+    started = start_video_job(
+        job_id=job_id,
+        user_id=user_id,
+        topic=request.topic,
+        style=request.style,
+        target_duration=request.target_duration,
+        user_prompt=request.user_prompt or ""
+    )
+
+    if not started:
+        raise HTTPException(status_code=409, detail="Job already running")
+
+    async def generate():
+        # Emit job_created immediately (before worker has a chance to)
+        job_created_event = json.dumps({
+            "type": "job_created",
+            "job_id": job_id,
+            "timestamp": time_module.time()
+        })
+        yield f"data: {job_created_event}\n\n"
+
+        last_event_id = 0
+        no_event_count = 0
+
+        while True:
+            # Poll database for new events
+            events = get_job_events_since(job_id, last_event_id)
+
+            if events:
+                no_event_count = 0
+                for event_id, event_json in events:
+                    yield f"data: {event_json}\n\n"
+                    last_event_id = event_id
+
+                    # Check for terminal events
+                    if '"type": "complete"' in event_json or '"type": "error"' in event_json:
+                        yield "data: [DONE]\n\n"
+                        return
+            else:
+                no_event_count += 1
+                # Send keepalive every ~10 seconds to prevent Cloudflare timeout
+                if no_event_count % 10 == 0:
+                    keepalive = json.dumps({
+                        "type": "keepalive",
+                        "timestamp": time_module.time()
+                    })
+                    yield f"data: {keepalive}\n\n"
+
+                # If job is no longer running and no new events, it may have crashed
+                if not is_job_running(job_id) and no_event_count > 5:
+                    # Check if we have a terminal event we might have missed
+                    final_events = get_job_events_since(job_id, last_event_id)
+                    for event_id, event_json in final_events:
+                        yield f"data: {event_json}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+            await asyncio.sleep(1)  # Poll every 1 second
 
     return StreamingResponse(
         generate(),

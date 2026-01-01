@@ -423,7 +423,8 @@ def generate_video_stream(
     style: str = "educational",
     target_duration: int = 30,
     author_bio: Optional[Dict] = None,
-    user_prompt: str = ""
+    user_prompt: str = "",
+    job_id: Optional[int] = None
 ) -> Generator[str, None, None]:
     """
     Full video generation pipeline with SSE progress streaming.
@@ -444,6 +445,7 @@ def generate_video_stream(
         target_duration: Target duration in seconds
         author_bio: Optional author bio with character reference
         user_prompt: Additional context
+        job_id: Optional pre-created job ID (for background worker)
 
     Yields:
         SSE event strings
@@ -454,8 +456,6 @@ def generate_video_stream(
     )
     import base64
 
-    job_id = None
-
     try:
         # Load author bio if not provided
         if not author_bio:
@@ -465,9 +465,11 @@ def generate_video_stream(
         if author_bio and author_bio.get('reference_image'):
             character_reference = author_bio['reference_image']
 
-        # Create job
-        job_id = create_video_job(user_id, title=topic[:100])
-        yield emit_event("job_created", job_id=job_id)
+        # Create job (or use provided job_id from background worker)
+        if job_id is None:
+            job_id = create_video_job(user_id, title=topic[:100])
+            yield emit_event("job_created", job_id=job_id)
+        # If job_id was provided, job_created event is emitted by the endpoint
 
         # Phase 1: Plan script
         yield emit_event("planning", message="Planning video script...")
@@ -511,12 +513,12 @@ def generate_video_stream(
             scene_id = scene_ids[scene_num]
 
             # Rate limit protection: delay between scenes (except first)
-            # Veo API has 10-20 RPM limit; 2 min delay to avoid hitting limits on scene 3+
+            # Veo API has rate limits; 1 min delay to spread out API calls
             if scene_num > 1:
-                logger.info(f"Waiting 2 minutes before scene {scene_num} to avoid rate limits...")
-                yield emit_event("scene_delay", scene=scene_num, delay=120,
-                               message=f"Waiting 2 minutes before scene {scene_num} (rate limit cooldown)...")
-                time.sleep(120)
+                logger.info(f"Waiting 1 minute before scene {scene_num} to avoid rate limits...")
+                yield emit_event("scene_delay", scene=scene_num, delay=60,
+                               message=f"Waiting 1 minute before scene {scene_num} (rate limit cooldown)...")
+                time.sleep(60)
 
             # Generate first frame image
             yield emit_event(f"scene_image",
