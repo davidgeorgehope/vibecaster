@@ -15,7 +15,7 @@ interface VideoScene {
 interface VideoJob {
   id: number;
   job_id: string;
-  status: 'pending' | 'planning' | 'generating' | 'stitching' | 'complete' | 'partial' | 'error';
+  status: 'pending' | 'planning' | 'generating' | 'complete' | 'partial' | 'error';
   title: string;
   created_at: number;
   updated_at: number;

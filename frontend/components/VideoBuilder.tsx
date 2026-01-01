@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Video, Send, Loader2, Play, Download, History, AlertCircle, Check, Image, Film, Scissors, Sparkles } from 'lucide-react';
+import { Video, Send, Loader2, Play, Download, History, AlertCircle, Check, Image, Film, Sparkles } from 'lucide-react';
 
 interface VideoBuilderProps {
   token: string | null;
@@ -24,7 +24,7 @@ interface VideoJob {
   error_message?: string;
 }
 
-type GenerationPhase = 'idle' | 'planning' | 'generating' | 'stitching' | 'complete' | 'error';
+type GenerationPhase = 'idle' | 'planning' | 'generating' | 'complete' | 'error';
 
 const STYLE_OPTIONS = [
   { value: 'educational', label: 'Educational', description: 'Clear, instructive explainer' },
@@ -132,9 +132,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           setPhase('error');
           setStatusMessage(job.error_message || 'Generation failed');
           showNotification('error', job.error_message || 'Generation failed');
-        } else if (job.status === 'stitching') {
-          setPhase('stitching');
-          setStatusMessage('Combining video segments...');
         } else if (job.status === 'planning') {
           setPhase('planning');
           setStatusMessage('Planning video script...');
@@ -175,7 +172,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         // Find first in-progress job that was updated recently (within 30 min)
         const thirtyMinutesAgo = Date.now() / 1000 - 30 * 60;
         const activeJob = jobs.find((j: VideoJob) =>
-          ['pending', 'planning', 'generating', 'stitching'].includes(j.status) &&
+          ['pending', 'planning', 'generating'].includes(j.status) &&
           j.updated_at > thirtyMinutesAgo
         );
 
@@ -335,12 +332,19 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         ));
         break;
 
-      case 'scene_video':
-        setStatusMessage(`Generating video for scene ${event.scene}/${event.total}...`);
+      case 'scene_video': {
+        const sceneNum = event.scene as number;
+        const isExtension = sceneNum > 1;
+        setStatusMessage(
+          isExtension
+            ? `Extending video with scene ${sceneNum}/${event.total}...`
+            : `Generating video for scene ${sceneNum}/${event.total}...`
+        );
         setScenes(prev => prev.map(s =>
-          s.scene_number === event.scene ? { ...s, status: 'generating_video' } : s
+          s.scene_number === sceneNum ? { ...s, status: 'generating_video' } : s
         ));
         break;
+      }
 
       case 'scene_complete':
         setScenes(prev => prev.map(s =>
@@ -352,11 +356,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         setScenes(prev => prev.map(s =>
           s.scene_number === event.scene ? { ...s, status: 'error' } : s
         ));
-        break;
-
-      case 'stitching':
-        setPhase('stitching');
-        setStatusMessage(event.message as string || 'Combining video segments...');
         break;
 
       case 'complete':
@@ -640,7 +639,6 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
             <div className="flex items-center gap-3">
               {phase === 'planning' && <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />}
               {phase === 'generating' && <Film className="w-5 h-5 text-purple-400" />}
-              {phase === 'stitching' && <Scissors className="w-5 h-5 text-purple-400 animate-pulse" />}
               {phase === 'complete' && <Check className="w-5 h-5 text-green-400" />}
               {phase === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
               <span className={`font-medium ${
@@ -694,10 +692,10 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
               </div>
               <div className="flex justify-between text-xs text-gray-500 mt-1">
                 <span className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-purple-500" /> Image
+                  <div className="w-2 h-2 rounded-full bg-purple-500" /> First Frame
                 </span>
                 <span className="flex items-center gap-1">
-                  <div className="w-2 h-2 rounded-full bg-pink-500" /> Video
+                  <div className="w-2 h-2 rounded-full bg-pink-500" /> Extending
                 </span>
                 <span className="flex items-center gap-1">
                   <div className="w-2 h-2 rounded-full bg-green-500" /> Done
@@ -733,8 +731,9 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           <div className="text-sm text-gray-300">
             <p className="font-medium text-purple-300 mb-1">About Video Generation</p>
             <p>
-              Videos are generated using Veo 3.1 with 8-second scenes. Each scene includes a first-frame image
-              for visual consistency. Set up your author bio in the Bio tab for character reference.
+              Videos are generated using Veo 3.1 with native audio. Scene 1 creates an 8-second base video,
+              then each additional scene extends it by ~7 seconds for seamless continuity.
+              Set up your author bio for character reference.
             </p>
           </div>
         </div>
