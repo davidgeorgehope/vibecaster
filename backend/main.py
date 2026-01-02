@@ -181,6 +181,7 @@ class VideoGenerateRequest(BaseModel):
     style: str = "educational"  # educational, storybook, social_media
     target_duration: int = 30  # Target duration in seconds
     user_prompt: Optional[str] = None
+    aspect_ratio: str = "16:9"  # "16:9" (landscape) or "9:16" (portrait)
 
 
 # ===== SCHEDULER MANAGEMENT =====
@@ -957,7 +958,8 @@ async def video_generate_stream_endpoint(
         topic=request.topic,
         style=request.style,
         target_duration=request.target_duration,
-        user_prompt=request.user_prompt or ""
+        user_prompt=request.user_prompt or "",
+        aspect_ratio=request.aspect_ratio
     )
 
     if not started:

@@ -39,10 +39,16 @@ const DURATION_OPTIONS = [
   { value: 48, label: '~48 seconds', scenes: 6 },
 ];
 
+const ASPECT_RATIO_OPTIONS = [
+  { value: '16:9', label: '16:9', description: 'Landscape (YouTube, Desktop)' },
+  { value: '9:16', label: '9:16', description: 'Portrait (TikTok, Reels)' },
+];
+
 export default function VideoBuilder({ token, showNotification }: VideoBuilderProps) {
   const [topic, setTopic] = useState('');
   const [style, setStyle] = useState('educational');
   const [duration, setDuration] = useState(24);
+  const [aspectRatio, setAspectRatio] = useState('16:9');
   const [additionalPrompt, setAdditionalPrompt] = useState('');
 
   const [phase, setPhase] = useState<GenerationPhase>('idle');
@@ -271,7 +277,8 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           topic,
           style,
           target_duration: duration,
-          user_prompt: additionalPrompt || null
+          user_prompt: additionalPrompt || null,
+          aspect_ratio: aspectRatio
         }),
         signal: abortControllerRef.current.signal
       });
@@ -569,11 +576,11 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           />
         </div>
 
-        {/* Style & Duration */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Style, Duration & Aspect Ratio */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">Style</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2">
               {STYLE_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -607,6 +614,27 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
                 >
                   <div className="font-medium text-sm">{opt.label}</div>
                   <div className="text-xs text-gray-500">{opt.scenes} scenes</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Aspect Ratio</label>
+            <div className="grid grid-cols-1 gap-2">
+              {ASPECT_RATIO_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setAspectRatio(opt.value)}
+                  disabled={isGenerating}
+                  className={`p-3 rounded-lg border text-center transition-all ${
+                    aspectRatio === opt.value
+                      ? 'border-purple-500 bg-purple-500/20 text-white'
+                      : 'border-gray-700 bg-gray-800/50 text-gray-300 hover:border-gray-600'
+                  } disabled:opacity-50`}
+                >
+                  <div className="font-medium text-sm">{opt.label}</div>
+                  <div className="text-xs text-gray-500">{opt.description}</div>
                 </button>
               ))}
             </div>

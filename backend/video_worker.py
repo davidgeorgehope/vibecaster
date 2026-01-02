@@ -22,7 +22,8 @@ def start_video_job(
     topic: str,
     style: str = "educational",
     target_duration: int = 30,
-    user_prompt: str = ""
+    user_prompt: str = "",
+    aspect_ratio: str = "16:9"
 ) -> bool:
     """
     Start video generation in a background thread.
@@ -37,7 +38,7 @@ def start_video_job(
 
         thread = threading.Thread(
             target=_run_video_job,
-            args=(job_id, user_id, topic, style, target_duration, user_prompt),
+            args=(job_id, user_id, topic, style, target_duration, user_prompt, aspect_ratio),
             daemon=True,
             name=f"video-job-{job_id}"
         )
@@ -53,14 +54,15 @@ def _run_video_job(
     topic: str,
     style: str,
     target_duration: int,
-    user_prompt: str
+    user_prompt: str,
+    aspect_ratio: str = "16:9"
 ):
     """Worker function that runs in background thread."""
     from video_generation import generate_video_stream
     from database import save_job_event, update_video_job
 
     try:
-        logger.info(f"Background job {job_id} starting generation")
+        logger.info(f"Background job {job_id} starting generation (aspect_ratio={aspect_ratio})")
 
         for event_json in generate_video_stream(
             user_id=user_id,
@@ -68,7 +70,8 @@ def _run_video_job(
             style=style,
             target_duration=target_duration,
             user_prompt=user_prompt,
-            job_id=job_id  # Pass existing job_id to skip creation
+            job_id=job_id,  # Pass existing job_id to skip creation
+            aspect_ratio=aspect_ratio
         ):
             # Persist event to database for SSE consumers
             save_job_event(job_id, event_json)

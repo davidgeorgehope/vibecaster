@@ -368,19 +368,27 @@ def generate_image_for_post_builder(post_text: str, visual_style: str = None, us
         return None
 
 
-def generate_video_for_post(post_text: str, visual_style: str = None, user_id: int = None) -> Optional[bytes]:
+def generate_video_for_post(
+    post_text: str,
+    visual_style: str = None,
+    user_id: int = None,
+    aspect_ratio: str = "16:9"
+) -> Optional[bytes]:
     """
     Generate an 8-second video for a social media post using first-frame approach.
+
+    Uses Veo 3.1 prompt refinement for better quality and realism.
 
     Args:
         post_text: The post text to visualize
         visual_style: Visual style for the image/video
         user_id: Optional user ID for campaign config fallback
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - default 16:9
 
     Returns:
         Video bytes (MP4) or None
     """
-    from video_generation import generate_video_from_image
+    from video_generation import generate_video_from_image, refine_video_prompt
 
     try:
         # Step 1: Generate first frame image
@@ -390,15 +398,26 @@ def generate_video_for_post(post_text: str, visual_style: str = None, user_id: i
             logger.error("Failed to generate first frame image")
             return None
 
-        # Step 2: Create motion prompt from post text
+        # Step 2: Create and refine motion prompt using Veo 3.1 best practices
         style_desc = visual_style or "professional, cinematic"
-        motion_prompt = f"Subtle cinematic motion, smooth camera. Style: {style_desc}. Theme: {post_text[:200]}"
+        base_prompt = f"Subtle cinematic motion, smooth camera movement. Style: {style_desc}. Content: {post_text[:300]}"
+
+        # Refine prompt for Veo 3.1 with realism techniques
+        logger.info("Refining video prompt for Veo 3.1...")
+        refined_prompt = refine_video_prompt(
+            video_prompt=base_prompt,
+            scene_number=1,
+            total_scenes=1,
+            style="social_media",
+            aspect_ratio=aspect_ratio
+        )
 
         # Step 3: Generate video from first frame
         logger.info("Generating video from first frame...")
         video_bytes = generate_video_from_image(
             first_frame_bytes=image_bytes,
-            video_prompt=motion_prompt
+            video_prompt=refined_prompt,
+            aspect_ratio=aspect_ratio
         )
 
         if video_bytes:

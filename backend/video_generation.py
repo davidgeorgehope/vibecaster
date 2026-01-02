@@ -166,10 +166,113 @@ CRITICAL REQUIREMENTS:
         raise
 
 
+def refine_video_prompt(
+    video_prompt: str,
+    scene_number: int,
+    total_scenes: int,
+    style: str,
+    aspect_ratio: str = "16:9"
+) -> str:
+    """
+    Use LLM with thinking to refine video prompts for Veo 3.1 best practices.
+
+    Transforms raw prompts into structured format optimized for Veo 3.1:
+    [Cinematography] + [Subject] + [Action] + [Context] + [Style & Ambiance]
+
+    Also adds realism techniques to avoid AI sheen/plastic look.
+
+    Args:
+        video_prompt: Raw video prompt from script planning
+        scene_number: Current scene number (1-indexed)
+        total_scenes: Total number of scenes
+        style: Visual style (educational, storybook, social_media)
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait)
+
+    Returns:
+        Refined, Veo 3.1 optimized prompt
+    """
+    # Build aspect ratio guidance
+    if aspect_ratio == "9:16":
+        composition_guidance = """VERTICAL (9:16) COMPOSITION:
+- Frame subjects in portrait orientation with vertical emphasis
+- Keep main subject centered or rule-of-thirds for vertical viewing
+- Use medium shots to full body - avoid extreme wide shots that lose detail
+- Consider mobile-first viewing: faces should be prominent"""
+    else:
+        composition_guidance = """HORIZONTAL (16:9) COMPOSITION:
+- Frame subjects with horizontal emphasis, cinematic widescreen feel
+- Use rule-of-thirds positioning with breathing room on sides
+- Wide shots and establishing shots work well in this format
+- Consider desktop/TV viewing: can include more environmental context"""
+
+    prompt = f"""You are a professional video director optimizing prompts for Google's Veo 3.1 AI video model.
+
+ORIGINAL PROMPT:
+{video_prompt}
+
+SCENE CONTEXT:
+- Scene {scene_number} of {total_scenes}
+- Style: {style}
+- Aspect Ratio: {aspect_ratio}
+
+{composition_guidance}
+
+YOUR TASK: Rewrite this prompt following Veo 3.1 best practices.
+
+## STRUCTURE (follow this order):
+1. CINEMATOGRAPHY: ONE shot type (close-up, medium shot, wide shot), ONE camera movement (slow pan, gentle dolly, static), ONE lens description (35mm, wide-angle, etc.)
+2. SUBJECT: Who/what is the focus - be specific about appearance
+3. ACTION: What is happening - clear, simple verbs
+4. CONTEXT: Environment, setting, background
+5. STYLE & AMBIANCE: Lighting, mood, color palette
+
+## DIALOGUE FORMAT (CRITICAL):
+If there's spoken dialogue, format it as: Character says: "Words here."
+Example: The presenter says: "Welcome to today's tutorial."
+NOT: "The presenter says 'Welcome'"
+
+## REALISM REQUIREMENTS (MUST INCLUDE):
+Add these to avoid the AI look:
+- "natural skin texture with subtle pores, no plastic sheen"
+- "subtle film grain, minor imperfections"
+- "specular highlights controlled, matte surfaces where appropriate"
+- "no oversaturation, no soap opera effect, no over-sharpening"
+
+## RULES:
+- Keep it to ONE camera move, ONE shot type, ONE lighting setup (no competing instructions)
+- Maintain continuity with previous scenes (consistent lighting, palette)
+- Be specific but concise - aim for 50-100 words
+- Include ambient sounds if appropriate (separate sentence)
+
+OUTPUT: Write ONLY the refined prompt. No explanations or meta-commentary."""
+
+    try:
+        logger.info(f"🎬 Refining video prompt for scene {scene_number}...")
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.5,  # Lower temp for more consistent structure
+                thinking_config=types.ThinkingConfig(thinking_level="HIGH")
+            )
+        )
+
+        refined = response.text.strip()
+        logger.info(f"📝 Refined prompt: {refined[:150]}...")
+        return refined
+
+    except Exception as e:
+        logger.error(f"Error refining video prompt: {e}", exc_info=True)
+        # Fallback to original prompt if refinement fails
+        return video_prompt
+
+
 def generate_scene_image(
     image_prompt: str,
     character_reference: Optional[bytes] = None,
-    style: str = "real_person"
+    style: str = "real_person",
+    aspect_ratio: str = "16:9"
 ) -> Optional[bytes]:
     """
     Generate a scene's first frame using Nano Banana Pro.
@@ -178,6 +281,7 @@ def generate_scene_image(
         image_prompt: Detailed prompt for the image
         character_reference: Optional reference image bytes for character consistency
         style: Visual style for the image
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait) for composition guidance
 
     Returns:
         Image bytes (PNG) or None if generation fails
@@ -190,7 +294,13 @@ def generate_scene_image(
         "3d_render": ", 3D rendered, cinematic lighting, high detail"
     }
 
-    full_prompt = image_prompt + style_suffix.get(style, style_suffix["real_person"])
+    # Add aspect ratio guidance to prompt
+    if aspect_ratio == "9:16":
+        aspect_guidance = ", vertical portrait composition (9:16 aspect ratio), mobile-friendly framing"
+    else:
+        aspect_guidance = ", horizontal widescreen composition (16:9 aspect ratio), cinematic framing"
+
+    full_prompt = image_prompt + style_suffix.get(style, style_suffix["real_person"]) + aspect_guidance
 
     try:
         logger.info(f"🖼️ Generating scene image...")
@@ -241,10 +351,16 @@ def generate_scene_image(
 
 def generate_video_from_image_stream(
     first_frame_bytes: bytes,
-    video_prompt: str
+    video_prompt: str,
+    aspect_ratio: str = "16:9"
 ):
     """
     Generate a video using Veo 3.1 with progress events (generator).
+
+    Args:
+        first_frame_bytes: PNG bytes of the first frame image
+        video_prompt: The video generation prompt
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait)
 
     Yields:
         ('progress', poll_count, max_polls) during polling
@@ -268,11 +384,12 @@ def generate_video_from_image_stream(
 
         first_frame = types.Image.from_file(location=tmp_image_path)
 
-        # Start video generation
+        # Start video generation with aspect ratio
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=video_prompt,
-            image=first_frame
+            image=first_frame,
+            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
         )
 
         # Poll until complete, yielding progress for SSE keepalive
@@ -349,7 +466,8 @@ def generate_video_from_image_stream(
 
 def generate_video_extension_stream(
     previous_video,  # Veo Video object from previous generation
-    video_prompt: str
+    video_prompt: str,
+    aspect_ratio: str = "16:9"
 ):
     """
     Extend a video using Veo 3.1 with progress events (generator).
@@ -360,6 +478,7 @@ def generate_video_extension_stream(
     Args:
         previous_video: The Veo Video object from the previous scene's generation
         video_prompt: Prompt for the extension (should include dialogue in quotes)
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - must match original
 
     Yields:
         ('progress', poll_count, max_polls) during polling
@@ -371,11 +490,12 @@ def generate_video_extension_stream(
     try:
         logger.info(f"🔗 Extending video with next scene...")
 
-        # Start video extension
+        # Start video extension with aspect ratio
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=video_prompt,
-            video=previous_video  # Pass video object for extension
+            video=previous_video,  # Pass video object for extension
+            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
         )
 
         # Poll until complete, yielding progress for SSE keepalive
@@ -446,7 +566,8 @@ def generate_video_extension_stream(
 
 def generate_video_from_image(
     first_frame_bytes: bytes,
-    video_prompt: str
+    video_prompt: str,
+    aspect_ratio: str = "16:9"
 ) -> Optional[bytes]:
     """
     Generate a video using Veo 3.1 (blocking wrapper).
@@ -454,7 +575,9 @@ def generate_video_from_image(
     For SSE streaming with Cloudflare, use generate_video_from_image_stream() instead.
     Returns just the video bytes (not the video object).
     """
-    for event_type, *data in generate_video_from_image_stream(first_frame_bytes, video_prompt):
+    for event_type, *data in generate_video_from_image_stream(
+        first_frame_bytes, video_prompt, aspect_ratio
+    ):
         if event_type == 'complete':
             # data is (video_object, video_bytes) - return bytes
             return data[1]
@@ -470,7 +593,8 @@ def generate_video_stream(
     target_duration: int = 30,
     author_bio: Optional[Dict] = None,
     user_prompt: str = "",
-    job_id: Optional[int] = None
+    job_id: Optional[int] = None,
+    aspect_ratio: str = "16:9"
 ) -> Generator[str, None, None]:
     """
     Full video generation pipeline with SSE progress streaming.
@@ -492,6 +616,7 @@ def generate_video_stream(
         author_bio: Optional author bio with character reference
         user_prompt: Additional context
         job_id: Optional pre-created job ID (for background worker)
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - locked for all scenes
 
     Yields:
         SSE event strings
@@ -581,7 +706,8 @@ def generate_video_stream(
                 image_bytes = generate_scene_image(
                     image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
                     character_reference=character_reference if scene.get('include_character') else None,
-                    style=author_bio.get('style', 'real_person') if author_bio else 'real_person'
+                    style=author_bio.get('style', 'real_person') if author_bio else 'real_person',
+                    aspect_ratio=aspect_ratio
                 )
 
                 if not image_bytes:
@@ -598,6 +724,18 @@ def generate_video_stream(
                                total=len(scenes),
                                message=f"Generating video for scene {scene_num}...")
 
+                # Refine the video prompt for Veo 3.1 best practices + realism
+                raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
+                yield emit_event("refining_prompt", scene=scene_num,
+                               message=f"Refining prompt for scene {scene_num}...")
+                refined_prompt = refine_video_prompt(
+                    video_prompt=raw_prompt,
+                    scene_number=scene_num,
+                    total_scenes=len(scenes),
+                    style=style,
+                    aspect_ratio=aspect_ratio
+                )
+
                 video_bytes = None
                 video_object = None
                 quota_retry_count = 0
@@ -606,7 +744,8 @@ def generate_video_stream(
                     generation_error = None
                     for event_type, *event_data in generate_video_from_image_stream(
                         first_frame_bytes=image_bytes,
-                        video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
+                        video_prompt=refined_prompt,
+                        aspect_ratio=aspect_ratio
                     ):
                         if event_type == 'progress':
                             poll_count, max_polls = event_data
@@ -662,6 +801,18 @@ def generate_video_stream(
                                total=len(scenes),
                                message=f"Extending video for scene {scene_num}...")
 
+                # Refine the video prompt for Veo 3.1 best practices + realism
+                raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
+                yield emit_event("refining_prompt", scene=scene_num,
+                               message=f"Refining prompt for scene {scene_num}...")
+                refined_prompt = refine_video_prompt(
+                    video_prompt=raw_prompt,
+                    scene_number=scene_num,
+                    total_scenes=len(scenes),
+                    style=style,
+                    aspect_ratio=aspect_ratio
+                )
+
                 video_bytes = None
                 video_object = None
                 quota_retry_count = 0
@@ -670,7 +821,8 @@ def generate_video_stream(
                     generation_error = None
                     for event_type, *event_data in generate_video_extension_stream(
                         previous_video=current_video_object,
-                        video_prompt=scene.get('video_prompt', scene.get('visual_description', ''))
+                        video_prompt=refined_prompt,
+                        aspect_ratio=aspect_ratio
                     ):
                         if event_type == 'progress':
                             poll_count, max_polls = event_data
