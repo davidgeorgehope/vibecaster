@@ -62,6 +62,8 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isPollingRef = useRef(false); // Prevent overlapping polls
+  const hasNotifiedCompleteRef = useRef(false); // Prevent duplicate notifications
 
   // Helper to stop polling
   const stopPolling = () => {
@@ -69,17 +71,26 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
+    isPollingRef.current = false;
   };
 
   // Resume an in-progress job by polling its status
   const resumeJob = useCallback(async (activeJobId: number) => {
     if (!token) return;
 
+    // Reset notification flag for new job
+    hasNotifiedCompleteRef.current = false;
+
     setPhase('generating');
     setStatusMessage('Reconnecting to job...');
     setJobId(activeJobId);
 
-    const pollJob = async () => {
+    // Returns true if job is in terminal state (should stop polling)
+    const pollJob = async (): Promise<boolean> => {
+      // Prevent overlapping polls
+      if (isPollingRef.current) return false;
+      isPollingRef.current = true;
+
       try {
         const response = await fetch(`/api/video/jobs/${activeJobId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
@@ -89,7 +100,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           stopPolling();
           setPhase('error');
           setStatusMessage('Job not found');
-          return;
+          return true; // Terminal state
         }
 
         const job = await response.json();
@@ -126,12 +137,22 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           if (job.final_video_base64) {
             setVideoBase64(job.final_video_base64);
           }
-          showNotification('success', 'Video ready!');
+          // Only show notification once
+          if (!hasNotifiedCompleteRef.current) {
+            hasNotifiedCompleteRef.current = true;
+            showNotification('success', 'Video ready!');
+          }
+          return true; // Terminal state
         } else if (job.status === 'error') {
           stopPolling();
           setPhase('error');
           setStatusMessage(job.error_message || 'Generation failed');
-          showNotification('error', job.error_message || 'Generation failed');
+          // Only show notification once
+          if (!hasNotifiedCompleteRef.current) {
+            hasNotifiedCompleteRef.current = true;
+            showNotification('error', job.error_message || 'Generation failed');
+          }
+          return true; // Terminal state
         } else if (job.status === 'planning') {
           setPhase('planning');
           setStatusMessage('Planning video script...');
@@ -141,19 +162,23 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           const completedScenes = job.scenes?.filter((s: { status: string }) => s.status === 'complete').length || 0;
           setStatusMessage(`Generating scenes... (${completedScenes}/${job.scenes?.length || 0} complete)`);
         }
+        return false; // Not in terminal state
       } catch (error) {
         console.error('Failed to poll job:', error);
+        return false; // Keep polling on transient errors
+      } finally {
+        isPollingRef.current = false;
       }
     };
 
-    // Initial poll
-    await pollJob();
+    // Initial poll - check return value to decide if we should continue polling
+    const isDone = await pollJob();
 
-    // Continue polling if not in terminal state
-    if (phase !== 'complete' && phase !== 'error') {
+    // Only continue polling if not in terminal state
+    if (!isDone) {
       pollIntervalRef.current = setInterval(pollJob, 5000);
     }
-  }, [token, showNotification, phase]);
+  }, [token, showNotification]);
 
   // Check for in-progress job from database on mount
   useEffect(() => {

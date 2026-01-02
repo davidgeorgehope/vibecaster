@@ -50,6 +50,16 @@ is_docker_process() {
     return 1  # false, not docker
 }
 
+# Helper function to check if a PID belongs to vibecaster (by checking cwd)
+is_vibecaster_process() {
+    local pid=$1
+    local proc_cwd=$(readlink -f /proc/$pid/cwd 2>/dev/null)
+    if [[ "$proc_cwd" == "$BASE_DIR"* ]]; then
+        return 0  # true, is vibecaster
+    fi
+    return 1  # false, not vibecaster
+}
+
 # Helper function to safely kill a process (skips Docker)
 safe_kill() {
     local pid=$1
@@ -95,19 +105,22 @@ else
     echo -e "${YELLOW}Backend not running (no PID file)${NC}"
 fi
 
-# Also kill any non-Docker process on the backend port that might have been missed
-BACKEND_PORT_PIDS=$(lsof -ti :$BACKEND_PORT 2>/dev/null)
-for pid in $BACKEND_PORT_PIDS; do
-    if ! is_docker_process $pid; then
-        echo -e "${YELLOW}Found process on port $BACKEND_PORT (PID: $pid), killing...${NC}"
-        safe_kill $pid TERM
+# Also kill any vibecaster process on the backend port that might have been missed
+# Use fuser which is more reliable than lsof
+BACKEND_PORT_PID=$(fuser $BACKEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$BACKEND_PORT_PID" ]; then
+    if ! is_docker_process $BACKEND_PORT_PID && is_vibecaster_process $BACKEND_PORT_PID; then
+        echo -e "${YELLOW}Found vibecaster process on port $BACKEND_PORT (PID: $BACKEND_PORT_PID), killing...${NC}"
+        safe_kill $BACKEND_PORT_PID TERM
         sleep 2
-        if kill -0 $pid 2>/dev/null; then
-            safe_kill $pid 9
+        if kill -0 $BACKEND_PORT_PID 2>/dev/null; then
+            safe_kill $BACKEND_PORT_PID 9
         fi
         STOPPED=1
+    elif ! is_docker_process $BACKEND_PORT_PID; then
+        echo -e "${YELLOW}Skipping non-vibecaster process on port $BACKEND_PORT (PID: $BACKEND_PORT_PID)${NC}"
     fi
-done
+fi
 
 # Stop Frontend
 if [ -f "$PIDS_DIR/frontend.pid" ]; then
@@ -144,16 +157,19 @@ else
     echo -e "${YELLOW}Frontend not running (no PID file)${NC}"
 fi
 
-# Also kill any non-Docker process on the frontend port that might have been missed
-FRONTEND_PORT_PIDS=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
-for pid in $FRONTEND_PORT_PIDS; do
-    if ! is_docker_process $pid; then
-        echo -e "${YELLOW}Found process on port $FRONTEND_PORT (PID: $pid), killing...${NC}"
-        pkill -9 -P $pid 2>/dev/null || true
-        safe_kill $pid 9
+# Also kill any vibecaster process on the frontend port that might have been missed
+# Use fuser which is more reliable than lsof
+FRONTEND_PORT_PID=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$FRONTEND_PORT_PID" ]; then
+    if ! is_docker_process $FRONTEND_PORT_PID && is_vibecaster_process $FRONTEND_PORT_PID; then
+        echo -e "${YELLOW}Found vibecaster process on port $FRONTEND_PORT (PID: $FRONTEND_PORT_PID), killing...${NC}"
+        pkill -9 -P $FRONTEND_PORT_PID 2>/dev/null || true
+        safe_kill $FRONTEND_PORT_PID 9
         STOPPED=1
+    elif ! is_docker_process $FRONTEND_PORT_PID; then
+        echo -e "${YELLOW}Skipping non-vibecaster process on port $FRONTEND_PORT (PID: $FRONTEND_PORT_PID)${NC}"
     fi
-done
+fi
 
 # Also kill any lingering Next.js or uvicorn processes related to vibecaster
 echo -e "${GREEN}Checking for lingering Node/Python processes...${NC}"
@@ -185,33 +201,36 @@ if [ ! -z "$UVICORN_PIDS" ]; then
     STOPPED=1
 fi
 
-# Final verification - check our specific ports (not hardcoded 3000/8001)
+# Final verification - check our specific ports (only kill vibecaster processes)
 echo -e "${GREEN}Final verification...${NC}"
 sleep 1
 
-# Check frontend port
-STILL_ON_FRONTEND=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
-for pid in $STILL_ON_FRONTEND; do
-    if ! is_docker_process $pid; then
-        echo -e "${RED}⚠️  Port $FRONTEND_PORT still in use by PID: $pid${NC}"
-        echo -e "${RED}   Force killing...${NC}"
-        safe_kill $pid 9
-    else
+# Check frontend port - only kill if it's a vibecaster process (use fuser)
+STILL_ON_FRONTEND=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$STILL_ON_FRONTEND" ]; then
+    if is_docker_process $STILL_ON_FRONTEND; then
         echo -e "${YELLOW}   Port $FRONTEND_PORT in use by Docker (ignoring)${NC}"
-    fi
-done
-
-# Check backend port
-STILL_ON_BACKEND=$(lsof -ti :$BACKEND_PORT 2>/dev/null)
-for pid in $STILL_ON_BACKEND; do
-    if ! is_docker_process $pid; then
-        echo -e "${RED}⚠️  Port $BACKEND_PORT still in use by PID: $pid${NC}"
-        echo -e "${RED}   Force killing...${NC}"
-        safe_kill $pid 9
+    elif is_vibecaster_process $STILL_ON_FRONTEND; then
+        echo -e "${RED}⚠️  Vibecaster still on port $FRONTEND_PORT (PID: $STILL_ON_FRONTEND), force killing...${NC}"
+        pkill -9 -P $STILL_ON_FRONTEND 2>/dev/null || true
+        safe_kill $STILL_ON_FRONTEND 9
     else
-        echo -e "${YELLOW}   Port $BACKEND_PORT in use by Docker (ignoring)${NC}"
+        echo -e "${YELLOW}   Port $FRONTEND_PORT in use by non-vibecaster process (PID: $STILL_ON_FRONTEND) - not killing${NC}"
     fi
-done
+fi
+
+# Check backend port - only kill if it's a vibecaster process (use fuser)
+STILL_ON_BACKEND=$(fuser $BACKEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$STILL_ON_BACKEND" ]; then
+    if is_docker_process $STILL_ON_BACKEND; then
+        echo -e "${YELLOW}   Port $BACKEND_PORT in use by Docker (ignoring)${NC}"
+    elif is_vibecaster_process $STILL_ON_BACKEND; then
+        echo -e "${RED}⚠️  Vibecaster still on port $BACKEND_PORT (PID: $STILL_ON_BACKEND), force killing...${NC}"
+        safe_kill $STILL_ON_BACKEND 9
+    else
+        echo -e "${YELLOW}   Port $BACKEND_PORT in use by non-vibecaster process (PID: $STILL_ON_BACKEND) - not killing${NC}"
+    fi
+fi
 
 # Clean up port files
 rm -f "$PIDS_DIR/frontend.port" "$PIDS_DIR/backend.port"

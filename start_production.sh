@@ -28,30 +28,39 @@ echo -e "${GREEN}║   Vibecaster Production Startup        ║${NC}"
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
 echo ""
 
+# Helper function to check if a PID belongs to vibecaster (by checking cwd)
+is_vibecaster_process() {
+    local pid=$1
+    local proc_cwd=$(readlink -f /proc/$pid/cwd 2>/dev/null)
+    if [[ "$proc_cwd" == "$BASE_DIR"* ]]; then
+        return 0  # true, is vibecaster
+    fi
+    return 1  # false, not vibecaster
+}
+
 # Proactively stop any existing Vibecaster processes
 # This ensures clean startup even if stop script wasn't run or processes became orphaned
 echo -e "${GREEN}[0/5] Cleaning up any existing processes...${NC}"
 
-# Kill any existing Vibecaster Next.js processes (be specific to avoid killing unrelated Next.js)
-EXISTING_NEXT=$(ps aux | grep -E "next (start|server)" | grep vibecaster | grep -v grep | awk '{print $2}')
-if [ ! -z "$EXISTING_NEXT" ]; then
-    echo -e "   ${YELLOW}Found existing Vibecaster Next.js processes, stopping...${NC}"
-    for pid in $EXISTING_NEXT; do
+# Kill any existing Vibecaster Next.js processes (check by cwd, not grep)
+EXISTING_NEXT=$(ps aux | grep -E "next|next-server" | grep -v grep | awk '{print $2}')
+for pid in $EXISTING_NEXT; do
+    if is_vibecaster_process $pid; then
+        echo -e "   ${YELLOW}Found existing Vibecaster Next.js process (PID: $pid), stopping...${NC}"
         pkill -9 -P $pid 2>/dev/null || true
         kill -9 $pid 2>/dev/null || true
-    done
-    sleep 2
-fi
+    fi
+done
 
-# Kill any existing uvicorn processes for vibecaster
-EXISTING_UVICORN=$(ps aux | grep "uvicorn main:app" | grep vibecaster | grep -v grep | awk '{print $2}')
-if [ ! -z "$EXISTING_UVICORN" ]; then
-    echo -e "   ${YELLOW}Found existing uvicorn processes, stopping...${NC}"
-    for pid in $EXISTING_UVICORN; do
+# Kill any existing uvicorn processes for vibecaster (check by cwd)
+EXISTING_UVICORN=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
+for pid in $EXISTING_UVICORN; do
+    if is_vibecaster_process $pid; then
+        echo -e "   ${YELLOW}Found existing Vibecaster uvicorn process (PID: $pid), stopping...${NC}"
         kill -9 $pid 2>/dev/null || true
-    done
-    sleep 1
-fi
+    fi
+done
+sleep 1
 
 # Clean up stale PID files
 rm -f "$PIDS_DIR/backend.pid" "$PIDS_DIR/frontend.pid" 2>/dev/null
@@ -134,12 +143,12 @@ if [ -f "/etc/nginx/sites-enabled/vibecaster" ]; then
     echo -e "   ${GREEN}Nginx reverse proxy detected${NC}"
 fi
 
-# Function to find available port
+# Function to find available port (use fuser - more reliable than lsof)
 find_port() {
     local start_port=$1
     local max_port=65535
     for port in $(seq $start_port $max_port); do
-        if ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+        if ! fuser $port/tcp >/dev/null 2>&1; then
             echo $port
             return 0
         fi
@@ -147,10 +156,10 @@ find_port() {
     echo "0"
 }
 
-# Function to check if a port is available
+# Function to check if a port is available (use fuser - more reliable than lsof)
 is_port_available() {
     local port=$1
-    if ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+    if ! fuser $port/tcp >/dev/null 2>&1; then
         return 0  # Available
     else
         return 1  # In use
@@ -233,10 +242,10 @@ echo -e "   ✅ Backend started (PID: $BACKEND_PID)"
 echo -e "      Logs: $LOGS_DIR/backend.log"
 echo -e "      URL: http://localhost:$BACKEND_PORT"
 
-# Wait for backend to be ready (check port is listening)
+# Wait for backend to be ready (check port is listening using fuser)
 echo -e "   Waiting for backend to be ready..."
 for i in {1..30}; do
-    if lsof -Pi :$BACKEND_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+    if fuser $BACKEND_PORT/tcp >/dev/null 2>&1; then
         echo -e "   ✅ Backend is listening on port $BACKEND_PORT"
         break
     fi
@@ -252,22 +261,28 @@ done
 echo -e "${GREEN}[5/5] Starting Frontend (Production Mode)...${NC}"
 cd "$FRONTEND_DIR"
 
-# Verify no lingering Next.js processes on target port
-LINGERING_NEXT_PID=$(lsof -ti :$FRONTEND_PORT 2>/dev/null)
-if [ ! -z "$LINGERING_NEXT_PID" ]; then
-    echo -e "${YELLOW}   Found process on port $FRONTEND_PORT, cleaning up...${NC}"
-    for pid in $LINGERING_NEXT_PID; do
-        pkill -9 -P $pid 2>/dev/null || true
-        kill -9 $pid 2>/dev/null || true
-    done
-    sleep 2
+# Verify no lingering vibecaster Next.js processes on target port (use fuser)
+LINGERING_NEXT_PID=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$LINGERING_NEXT_PID" ]; then
+    if is_vibecaster_process $LINGERING_NEXT_PID; then
+        echo -e "${YELLOW}   Found lingering vibecaster process on port $FRONTEND_PORT (PID: $LINGERING_NEXT_PID), cleaning up...${NC}"
+        pkill -9 -P $LINGERING_NEXT_PID 2>/dev/null || true
+        kill -9 $LINGERING_NEXT_PID 2>/dev/null || true
+        sleep 2
+    else
+        echo -e "${RED}❌ Port $FRONTEND_PORT is in use by non-vibecaster process (PID: $LINGERING_NEXT_PID)${NC}"
+        echo -e "   This port was supposed to be available. Something else started using it."
+        echo -e "   Please check what's running on port $FRONTEND_PORT and either stop it or run this script again."
+        fuser -v $FRONTEND_PORT/tcp 2>&1 || ss -tlnp "sport = :$FRONTEND_PORT"
+        exit 1
+    fi
 fi
 
 # Double-check port is free right before starting
 if ! is_port_available $FRONTEND_PORT; then
-    echo -e "${RED}❌ Port $FRONTEND_PORT became unavailable!${NC}"
+    echo -e "${RED}❌ Port $FRONTEND_PORT is not available!${NC}"
     echo -e "   Checking what's using it:"
-    lsof -i :$FRONTEND_PORT || netstat -tuln | grep :$FRONTEND_PORT
+    fuser -v $FRONTEND_PORT/tcp 2>&1 || ss -tlnp "sport = :$FRONTEND_PORT"
     exit 1
 fi
 
@@ -377,12 +392,12 @@ else
 fi
 
 # Update PID files with actual process IDs (in case they differ from nohup PID)
-ACTUAL_BACKEND_PID=$(lsof -ti :$BACKEND_PORT 2>/dev/null | head -1)
-ACTUAL_FRONTEND_PID=$(lsof -ti :$FRONTEND_PORT 2>/dev/null | head -1)
-if [ ! -z "$ACTUAL_BACKEND_PID" ]; then
+ACTUAL_BACKEND_PID=$(fuser $BACKEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+ACTUAL_FRONTEND_PID=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
+if [ -n "$ACTUAL_BACKEND_PID" ]; then
     echo $ACTUAL_BACKEND_PID > "$PIDS_DIR/backend.pid"
 fi
-if [ ! -z "$ACTUAL_FRONTEND_PID" ]; then
+if [ -n "$ACTUAL_FRONTEND_PID" ]; then
     echo $ACTUAL_FRONTEND_PID > "$PIDS_DIR/frontend.pid"
 fi
 

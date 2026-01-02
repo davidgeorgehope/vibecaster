@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Download, X, ChevronDown, ChevronRight, AlertCircle, CheckCircle, Clock, Loader2, ListTodo } from 'lucide-react';
 
 interface VideoScene {
@@ -80,25 +80,49 @@ export default function JobsPanel({ token, showNotification }: JobsPanelProps) {
   }, [fetchJobs]);
 
   // Poll for updates when there are in-progress jobs
+  // Use refs to avoid re-triggering the effect when jobs/expandedJobId change
+  const hasInProgressRef = useRef(false);
+  const expandedJobIdRef = useRef<number | null>(null);
+
+  // Keep refs in sync with state
   useEffect(() => {
-    const hasInProgress = jobs.some(j =>
+    hasInProgressRef.current = jobs.some(j =>
+      ['pending', 'planning', 'generating', 'stitching'].includes(j.status)
+    );
+  }, [jobs]);
+
+  useEffect(() => {
+    expandedJobIdRef.current = expandedJobId;
+  }, [expandedJobId]);
+
+  useEffect(() => {
+    // Check initial state
+    const initialHasInProgress = jobs.some(j =>
       ['pending', 'planning', 'generating', 'stitching'].includes(j.status)
     );
 
-    if (!hasInProgress) return;
+    if (!initialHasInProgress) return;
 
     const interval = setInterval(() => {
+      // Check if we should still be polling (jobs may have completed)
+      if (!hasInProgressRef.current) {
+        clearInterval(interval);
+        return;
+      }
+
       fetchJobs();
       // Also refresh expanded job details
-      if (expandedJobId) {
-        fetchJobDetails(expandedJobId).then(details => {
+      if (expandedJobIdRef.current) {
+        fetchJobDetails(expandedJobIdRef.current).then(details => {
           if (details) setExpandedJobDetails(details);
         });
       }
     }, 5000);  // Poll every 5s for faster job updates
 
     return () => clearInterval(interval);
-  }, [jobs, fetchJobs, expandedJobId, fetchJobDetails]);
+  // Only depend on token and the functions (which are stable due to useCallback)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, fetchJobs, fetchJobDetails]);
 
   const handleExpand = async (jobId: number) => {
     if (expandedJobId === jobId) {
