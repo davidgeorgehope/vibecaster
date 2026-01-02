@@ -70,6 +70,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isPollingRef = useRef(false); // Prevent overlapping polls
   const hasNotifiedCompleteRef = useRef(false); // Prevent duplicate notifications
+  const currentJobIdRef = useRef<number | null>(null); // Track job ID for stream error recovery
 
   // Helper to stop polling
   const stopPolling = () => {
@@ -263,6 +264,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     setTotalScenes(0);
     setVideoBase64(null);
     setJobId(null);
+    currentJobIdRef.current = null;
 
     abortControllerRef.current = new AbortController();
 
@@ -320,7 +322,12 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
       if ((error as Error).name === 'AbortError') {
         setPhase('idle');
         setStatusMessage('Cancelled');
+      } else if (currentJobIdRef.current) {
+        // Network error but job was created - fall back to polling
+        showNotification('info', 'Connection interrupted - monitoring progress...');
+        resumeJob(currentJobIdRef.current);
       } else {
+        // Job never started - show error
         setPhase('error');
         setStatusMessage((error as Error).message);
         showNotification('error', (error as Error).message);
@@ -334,6 +341,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     switch (type) {
       case 'job_created':
         setJobId(event.job_id as number);
+        currentJobIdRef.current = event.job_id as number;
         break;
 
       case 'planning':

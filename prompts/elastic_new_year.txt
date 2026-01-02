@@ -1,0 +1,92 @@
+ELASTIC NEW YEAR VIDEO - 3 SCENE VERSION
+=========================================
+
+Use Video Builder with ~24 seconds (3 scenes)
+Scene 1 = 8 sec, Scene 2 = +7 sec extension, Scene 3 = +7 sec extension
+
+---
+
+## FULL PROMPT (paste into "Additional Context" field):
+
+Setting: Cozy living room, New Year's Eve. Stone fireplace with roaring fire. Snow through frosted window. Warm orange/amber lighting. Pixar-style 3D animation for mascots.
+
+CHARACTERS (must stay consistent):
+- DAVID: 42yo British man, short brown hair, burgundy sweater, leather armchair, white mug of tea. Dry British humor.
+- ELKY: 4ft cartoon elk, upright, tan fur, big antlers, red scarf, friendly face, stands by David.
+- LOGGY: 2ft cartoon wooden log, bark texture, dot eyes, rosy cheeks, green woolly hat, stick limbs. In corner, scared of fire.
+
+SCENE 1: David and Elky greet camera. David says: "Happy New Year from Elastic!" Elky waves.
+
+SCENE 2: Camera reveals Loggy in corner, trembling, staring at fireplace with cartoon sweat drops. David notices.
+
+SCENE 3: David looks at fire, looks at Loggy, realization. David says: "Ah. Right. Perhaps we'll celebrate outside."
+
+Style: Warm cozy lighting, crackling fire ambience, Pixar animation style for mascots.
+
+--- OR USE STORYBOOK STYLE ---
+
+Setting: Cozy living room, New Year's Eve. Stone fireplace with roaring fire. Snow through frosted window. Warm orange/amber lighting. Pixar-style 3D animation for mascots.
+
+CHARACTERS (must stay consistent):
+- DAVID: 42yo British man, short brown hair, burgundy sweater, leather armchair, white mug of tea. Dry British humor.
+- ELKY: 4ft cartoon elk, upright, tan fur, big antlers, red scarf, friendly face, stands by David.
+- LOGGY: 2ft cartoon wooden log, bark texture, dot eyes, rosy cheeks, green woolly hat, stick limbs. In corner, scared of fire.
+
+SCENE 1: David and Elky greet camera. David says: "Happy New Year from Elastic!" Elky waves.
+
+SCENE 2: Camera reveals Loggy in corner, trembling, staring at fireplace with cartoon sweat drops. David notices.
+
+SCENE 3: David looks at fire, looks at Loggy, realization. David says: "Ah. Right. Perhaps we'll celebrate outside."
+
+Style: Storybook. Warm cozy lighting, crackling fire ambience, Pixar animation style for mascots.
+
+---
+
+## OR USE THESE AS INDIVIDUAL SCENE PROMPTS:
+
+### SCENE 1 - The Greeting (8 sec)
+
+Medium shot, static camera, 35mm lens, warm amber lighting.
+
+Cozy living room with stone fireplace and roaring fire. Snow visible through window.
+
+DAVID (42yo British man, short brown hair, burgundy sweater) sits in leather armchair holding white mug. ELKY (4ft friendly cartoon elk, tan fur, big antlers, red scarf) stands beside him.
+
+David smiles warmly at camera. David says: "Happy New Year from Elastic!"
+Elky waves a hoof cheerfully.
+
+Crackling fire ambience. Natural skin texture, subtle film grain.
+
+
+### SCENE 2 - The Reveal (7 sec extension)
+
+Medium shot, gentle pan right, same warm lighting.
+
+Same cozy living room. Camera reveals corner of room.
+
+LOGGY (2ft cartoon wooden log, bark texture, dot eyes, green woolly hat, stick limbs) stands in far corner, trembling, staring at the roaring fireplace with wide worried eyes. Cartoon sweat drops on face.
+
+DAVID (burgundy sweater, in armchair) turns and notices Loggy.
+
+Crackling fire continues.
+
+
+### SCENE 3 - The Punchline (7 sec extension)
+
+Medium close-up on David, static camera, same warm lighting.
+
+Same living room. DAVID (42yo British man, burgundy sweater) looks at the fireplace, then back toward Loggy in the corner. Realization dawns on his face.
+
+David says with dry British understatement: "Ah. Right. Perhaps we'll celebrate outside."
+
+Subtle smile. Natural skin texture, film grain.
+
+---
+
+## TIPS:
+
+- ONE simple action per scene (don't pack multiple actions)
+- Repeat character descriptions each scene
+- Keep dialogue SHORT (2-4 seconds of speech max)
+- "says:" format for dialogue
+- Extensions continue from last frame, so don't contradict previous scene
