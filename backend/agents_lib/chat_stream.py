@@ -402,6 +402,9 @@ def generate_video_for_post(
         style_desc = visual_style or "professional, cinematic"
         base_prompt = f"Subtle cinematic motion, smooth camera movement. Style: {style_desc}. Content: {post_text[:300]}"
 
+        # Build full context for character/setting consistency
+        full_context = f"Visual Style: {style_desc}\n\nPost Content:\n{post_text}"
+
         # Refine prompt for Veo 3.1 with realism techniques
         logger.info("Refining video prompt for Veo 3.1...")
         refined_prompt = refine_video_prompt(
@@ -409,7 +412,8 @@ def generate_video_for_post(
             scene_number=1,
             total_scenes=1,
             style="social_media",
-            aspect_ratio=aspect_ratio
+            aspect_ratio=aspect_ratio,
+            full_context=full_context
         )
 
         # Step 3: Generate video from first frame

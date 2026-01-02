@@ -171,80 +171,68 @@ def refine_video_prompt(
     scene_number: int,
     total_scenes: int,
     style: str,
-    aspect_ratio: str = "16:9"
+    aspect_ratio: str = "16:9",
+    full_context: str = ""
 ) -> str:
     """
-    Use LLM with thinking to refine video prompts for Veo 3.1 best practices.
+    Use LLM with thinking to ENHANCE video prompts for Veo 3.1 best practices.
 
-    Transforms raw prompts into structured format optimized for Veo 3.1:
-    [Cinematography] + [Subject] + [Action] + [Context] + [Style & Ambiance]
-
-    Also adds realism techniques to avoid AI sheen/plastic look.
+    CRITICAL: Preserves ALL character names, descriptions, story elements, and dialogue.
+    Only ADDS cinematography and realism techniques - does NOT rewrite content.
 
     Args:
-        video_prompt: Raw video prompt from script planning
+        video_prompt: Scene-specific video prompt
         scene_number: Current scene number (1-indexed)
         total_scenes: Total number of scenes
         style: Visual style (educational, storybook, social_media)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait)
+        full_context: Original user prompt with character/setting descriptions for consistency
 
     Returns:
-        Refined, Veo 3.1 optimized prompt
+        Enhanced prompt with original content preserved
     """
     # Build aspect ratio guidance
     if aspect_ratio == "9:16":
-        composition_guidance = """VERTICAL (9:16) COMPOSITION:
-- Frame subjects in portrait orientation with vertical emphasis
-- Keep main subject centered or rule-of-thirds for vertical viewing
-- Use medium shots to full body - avoid extreme wide shots that lose detail
-- Consider mobile-first viewing: faces should be prominent"""
+        composition_note = "vertical 9:16 portrait framing for mobile"
     else:
-        composition_guidance = """HORIZONTAL (16:9) COMPOSITION:
-- Frame subjects with horizontal emphasis, cinematic widescreen feel
-- Use rule-of-thirds positioning with breathing room on sides
-- Wide shots and establishing shots work well in this format
-- Consider desktop/TV viewing: can include more environmental context"""
+        composition_note = "horizontal 16:9 widescreen framing"
 
-    prompt = f"""You are a professional video director optimizing prompts for Google's Veo 3.1 AI video model.
+    # Include full context if provided for character/setting consistency
+    context_section = ""
+    if full_context:
+        context_section = f"""
+FULL STORY CONTEXT (for character/setting consistency - MUST maintain these details):
+{full_context[:2000]}
 
-ORIGINAL PROMPT:
+"""
+
+    prompt = f"""You are enhancing a video prompt for Veo 3.1. Your job is to ADD technical details while PRESERVING the original content exactly.
+
+{context_section}SCENE {scene_number} OF {total_scenes} - PROMPT TO ENHANCE:
 {video_prompt}
 
-SCENE CONTEXT:
-- Scene {scene_number} of {total_scenes}
-- Style: {style}
-- Aspect Ratio: {aspect_ratio}
+## CRITICAL RULES - READ CAREFULLY:
 
-{composition_guidance}
+1. **PRESERVE EVERYTHING**: Keep ALL character names, descriptions, appearances, dialogue, actions, and story elements EXACTLY as written. Do NOT generalize "David" to "a man" or "Elky" to "an elk". Keep specific details.
 
-YOUR TASK: Rewrite this prompt following Veo 3.1 best practices.
+2. **ADD CINEMATOGRAPHY** (prepend to prompt):
+   - ONE shot type: medium shot, wide shot, close-up, etc.
+   - ONE camera movement: static, slow pan, gentle dolly, etc.
+   - Framing: {composition_note}
 
-## STRUCTURE (follow this order):
-1. CINEMATOGRAPHY: ONE shot type (close-up, medium shot, wide shot), ONE camera movement (slow pan, gentle dolly, static), ONE lens description (35mm, wide-angle, etc.)
-2. SUBJECT: Who/what is the focus - be specific about appearance
-3. ACTION: What is happening - clear, simple verbs
-4. CONTEXT: Environment, setting, background
-5. STYLE & AMBIANCE: Lighting, mood, color palette
+3. **ADD REALISM** (append to prompt):
+   - "natural skin texture, no plastic sheen"
+   - "subtle film grain"
+   - "specular highlights controlled"
 
-## DIALOGUE FORMAT (CRITICAL):
-If there's spoken dialogue, format it as: Character says: "Words here."
-Example: The presenter says: "Welcome to today's tutorial."
-NOT: "The presenter says 'Welcome'"
+4. **DIALOGUE FORMAT**: If dialogue exists, keep it as: Character says: "exact words"
 
-## REALISM REQUIREMENTS (MUST INCLUDE):
-Add these to avoid the AI look:
-- "natural skin texture with subtle pores, no plastic sheen"
-- "subtle film grain, minor imperfections"
-- "specular highlights controlled, matte surfaces where appropriate"
-- "no oversaturation, no soap opera effect, no over-sharpening"
+5. **KEEP IT CONCISE**: The enhanced prompt should be 80-150 words max.
 
-## RULES:
-- Keep it to ONE camera move, ONE shot type, ONE lighting setup (no competing instructions)
-- Maintain continuity with previous scenes (consistent lighting, palette)
-- Be specific but concise - aim for 50-100 words
-- Include ambient sounds if appropriate (separate sentence)
+## WHAT TO OUTPUT:
+[Cinematography: shot type, camera movement, framing] + [ORIGINAL scene content preserved exactly] + [Realism notes]
 
-OUTPUT: Write ONLY the refined prompt. No explanations or meta-commentary."""
+OUTPUT the enhanced prompt only. No explanations."""
 
     try:
         logger.info(f"🎬 Refining video prompt for scene {scene_number}...")
@@ -733,7 +721,8 @@ def generate_video_stream(
                     scene_number=scene_num,
                     total_scenes=len(scenes),
                     style=style,
-                    aspect_ratio=aspect_ratio
+                    aspect_ratio=aspect_ratio,
+                    full_context=user_prompt  # Pass original user prompt for character/setting consistency
                 )
 
                 video_bytes = None
@@ -810,7 +799,8 @@ def generate_video_stream(
                     scene_number=scene_num,
                     total_scenes=len(scenes),
                     style=style,
-                    aspect_ratio=aspect_ratio
+                    aspect_ratio=aspect_ratio,
+                    full_context=user_prompt  # Pass original user prompt for character/setting consistency
                 )
 
                 video_bytes = None
