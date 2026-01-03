@@ -455,7 +455,8 @@ def generate_video_from_image_stream(
 def generate_video_extension_stream(
     previous_video,  # Veo Video object from previous generation
     video_prompt: str,
-    aspect_ratio: str = "16:9"
+    aspect_ratio: str = "16:9",
+    character_reference: Optional[bytes] = None
 ):
     """
     Extend a video using Veo 3.1 with progress events (generator).
@@ -467,6 +468,7 @@ def generate_video_extension_stream(
         previous_video: The Veo Video object from the previous scene's generation
         video_prompt: Prompt for the extension (should include dialogue in quotes)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - must match original
+        character_reference: Optional reference image bytes for character consistency
 
     Yields:
         ('progress', poll_count, max_polls) during polling
@@ -478,12 +480,19 @@ def generate_video_extension_stream(
     try:
         logger.info(f"🔗 Extending video with next scene...")
 
-        # Start video extension with aspect ratio
+        # Build config with optional reference image for character consistency
+        config_kwargs = {"aspect_ratio": aspect_ratio}
+        if character_reference:
+            ref_image = types.Image.from_file(location=BytesIO(character_reference))
+            config_kwargs["reference_images"] = [ref_image]
+            logger.info("Including character reference image for consistency")
+
+        # Start video extension with aspect ratio and optional reference
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=video_prompt,
             video=previous_video,  # Pass video object for extension
-            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
+            config=types.GenerateVideosConfig(**config_kwargs)
         )
 
         # Poll until complete, yielding progress for SSE keepalive
@@ -812,7 +821,8 @@ def generate_video_stream(
                     for event_type, *event_data in generate_video_extension_stream(
                         previous_video=current_video_object,
                         video_prompt=refined_prompt,
-                        aspect_ratio=aspect_ratio
+                        aspect_ratio=aspect_ratio,
+                        character_reference=character_reference if scene.get('include_character') else None
                     ):
                         if event_type == 'progress':
                             poll_count, max_polls = event_data
