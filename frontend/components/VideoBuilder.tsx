@@ -319,6 +319,13 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         }
       }
     } catch (error) {
+      console.error('[VideoBuilder] Stream error:', {
+        error,
+        errorName: (error as Error).name,
+        errorMessage: (error as Error).message,
+        currentJobIdRef: currentJobIdRef.current
+      });
+
       if ((error as Error).name === 'AbortError') {
         setPhase('idle');
         setStatusMessage('Cancelled');
@@ -327,7 +334,29 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         showNotification('info', 'Connection interrupted - monitoring progress...');
         resumeJob(currentJobIdRef.current);
       } else {
-        // Job never started - show error
+        // Job ID unknown - check for recent job before giving up
+        console.log('[VideoBuilder] No job ID, checking for recent job...');
+        try {
+          const response = await fetch('/api/video/jobs', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (response.ok) {
+            const { jobs } = await response.json();
+            const recentJob = jobs.find((j: VideoJob) =>
+              ['pending', 'planning', 'generating'].includes(j.status) &&
+              (Date.now() / 1000 - j.created_at) < 30
+            );
+            if (recentJob) {
+              console.log('[VideoBuilder] Found recent job:', recentJob.id);
+              showNotification('info', 'Connection interrupted - monitoring progress...');
+              resumeJob(recentJob.id);
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('[VideoBuilder] Failed to check for recent job:', e);
+        }
+        // No recent job found - show error
         setPhase('error');
         setStatusMessage((error as Error).message);
         showNotification('error', (error as Error).message);
