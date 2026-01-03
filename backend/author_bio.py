@@ -114,6 +114,129 @@ Generate a single, high-quality portrait image."""
         return None
 
 
+def generate_character_references_batch(
+    characters: List[Dict[str, Any]],
+    global_style: str = "storybook"
+) -> Dict[str, bytes]:
+    """
+    Generate reference images for multiple characters (up to 3).
+
+    Creates consistent reference portraits for each character that can be
+    passed to Veo 3.1 for visual consistency across video scenes.
+
+    Args:
+        characters: List of character dicts with:
+            - id: unique identifier
+            - name: display name
+            - description: visual description
+            - style: character-specific style (pixar_3d, storybook_human, etc.)
+            - priority: 1-3 (lower = higher priority)
+        global_style: Overall video style for consistency
+
+    Returns:
+        Dict mapping character_id -> image bytes
+    """
+    # Style prompts for different character types
+    style_prompts = {
+        "photorealistic": "photorealistic portrait photograph, professional headshot, natural lighting, high quality",
+        "storybook_human": "storybook illustration style, warm lighting, slightly stylized but recognizable human, painterly quality",
+        "pixar_3d": "Pixar-style 3D animated character, expressive features, professional CG quality, soft lighting",
+        "anime": "anime style portrait, detailed expressive eyes, clean lines, professional illustration",
+        "cartoon_2d": "2D cartoon character, clean lines, expressive, suitable for animation",
+    }
+
+    # Global style hints to maintain visual consistency
+    global_hints = {
+        "storybook": "warm cozy lighting, painterly illustration quality",
+        "pixar": "Pixar/Disney 3D animation quality, soft shadows",
+        "photorealistic": "cinematic lighting, photorealistic quality",
+        "anime": "anime aesthetic, clean cel-shaded look",
+        "cartoon": "bright colors, clean cartoon style",
+    }
+
+    references = {}
+
+    # Generate references for ALL characters (each scene will use up to 3)
+    # Sort by priority for generation order, but don't limit total count
+    sorted_chars = sorted(characters, key=lambda c: c.get('priority', 99))
+
+    for char in sorted_chars:
+        char_id = char.get('id', '')
+        char_name = char.get('name', 'Character')
+        char_desc = char.get('description', '')
+        char_style = char.get('style', 'storybook_human')
+
+        if not char_id or not char_desc:
+            logger.warning(f"Skipping character with missing id or description: {char}")
+            continue
+
+        style_desc = style_prompts.get(char_style, style_prompts['storybook_human'])
+        global_hint = global_hints.get(global_style, global_hints['storybook'])
+
+        prompt = f"""Create a character reference portrait for video generation:
+
+Character Name: {char_name}
+Character Description: {char_desc}
+
+Visual Style: {style_desc}
+Overall Aesthetic: {global_hint}
+
+Requirements:
+- Clear, well-lit view showing the character's full design and distinctive features
+- Neutral background that doesn't distract from the character
+- Character facing slightly toward camera with a natural expression
+- High quality, detailed image suitable for use as a video generation reference
+- Maintain all specific visual details mentioned in the description (clothing, accessories, colors)
+
+Generate a single, high-quality character reference portrait."""
+
+        try:
+            logger.info(f"🎨 Generating reference for {char_name} ({char_style})...")
+
+            response = client.models.generate_content(
+                model=IMAGE_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
+                )
+            )
+
+            # Extract image from response
+            image_bytes = None
+            if hasattr(response, 'candidates'):
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
+                                    image_bytes = part.inline_data.data
+                                    break
+                            if hasattr(part, 'as_image'):
+                                try:
+                                    image = part.as_image()
+                                    if image and hasattr(image, 'save'):
+                                        img_byte_arr = BytesIO()
+                                        image.save(img_byte_arr, format='PNG')
+                                        image_bytes = img_byte_arr.getvalue()
+                                        break
+                                except Exception:
+                                    pass
+                    if image_bytes:
+                        break
+
+            if image_bytes:
+                references[char_id] = image_bytes
+                logger.info(f"✅ Reference generated for {char_name} ({len(image_bytes)} bytes)")
+            else:
+                logger.warning(f"❌ No image generated for {char_name}")
+
+        except Exception as e:
+            logger.error(f"Error generating reference for {char_name}: {e}", exc_info=True)
+
+    logger.info(f"Generated {len(references)}/{len(characters)} character references")
+    return references
+
+
 def generate_image_with_reference(
     prompt: str,
     reference_image: bytes,

@@ -55,6 +55,91 @@ def emit_event(event_type: str, **kwargs) -> str:
     return json.dumps(event) + "\n"
 
 
+def extract_characters_from_prompt(user_prompt: str) -> Dict[str, Any]:
+    """
+    Analyze user prompt and extract character definitions for reference generation.
+
+    Uses LLM to identify recurring characters that would benefit from
+    reference images to maintain visual consistency across scenes.
+
+    Args:
+        user_prompt: The full user prompt describing the video
+
+    Returns:
+        Dict with:
+        - characters: List of character dicts (id, name, description, style, priority)
+        - scene_characters: Map of scene number to character IDs
+        - global_style: Overall visual style
+        - needs_references: Whether reference generation is recommended
+    """
+    prompt = f"""Analyze this video prompt and extract character information for reference image generation.
+
+User Prompt:
+{user_prompt}
+
+Return a JSON object with:
+
+1. "characters": Array of up to 3 main recurring characters. Each character needs:
+   - "id": lowercase identifier (e.g., "david", "elky")
+   - "name": display name
+   - "description": detailed visual description for image generation (appearance, clothing, distinctive features)
+   - "style": one of "photorealistic", "storybook_human", "pixar_3d", "anime", "cartoon_2d"
+   - "priority": 1-3 (1 = most important/screen time)
+
+2. "scene_characters": Object mapping scene numbers to arrays of character IDs appearing in each scene.
+   Example: {{"1": ["david", "elky"], "2": ["david", "loggy"]}}
+
+3. "global_style": The overall visual style - one of "photorealistic", "storybook", "pixar", "anime", "cartoon"
+
+4. "needs_references": boolean - true if there are 2+ distinct characters with detailed visual descriptions
+   that would benefit from reference images for consistency. false for simple videos with no specific characters.
+
+Rules:
+- Include ALL distinct characters with clear visual descriptions (no limit)
+- Each scene can use up to 3 character references, so prioritize appropriately
+- Prioritize characters that appear in multiple scenes (lower priority number = more important)
+- For mixed styles (e.g., realistic human + cartoon mascots), note each character's individual style
+- If the prompt is simple (e.g., "explain quantum physics" with no character details), set needs_references: false
+
+Return ONLY valid JSON, no other text."""
+
+    try:
+        logger.info("🔍 Analyzing prompt for character extraction...")
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
+
+        if hasattr(response, 'text') and response.text:
+            result = json.loads(response.text)
+
+            characters = result.get('characters', [])
+            needs_refs = result.get('needs_references', False)
+
+            logger.info(f"Character analysis: {len(characters)} characters found, needs_references={needs_refs}")
+
+            if characters:
+                for char in characters:
+                    logger.info(f"  - {char.get('name')} ({char.get('style')}): {char.get('description', '')[:50]}...")
+
+            return result
+
+        logger.warning("No text in character extraction response")
+        return {"characters": [], "scene_characters": {}, "global_style": "storybook", "needs_references": False}
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse character extraction JSON: {e}")
+        return {"characters": [], "scene_characters": {}, "global_style": "storybook", "needs_references": False}
+    except Exception as e:
+        logger.error(f"Error extracting characters: {e}", exc_info=True)
+        return {"characters": [], "scene_characters": {}, "global_style": "storybook", "needs_references": False}
+
+
 def plan_video_script(
     topic: str,
     style: str,
@@ -258,7 +343,7 @@ OUTPUT the enhanced prompt only. No explanations."""
 
 def generate_scene_image(
     image_prompt: str,
-    character_reference: Optional[bytes] = None,
+    character_references: Optional[List[bytes]] = None,
     style: str = "real_person",
     aspect_ratio: str = "16:9"
 ) -> Optional[bytes]:
@@ -267,7 +352,7 @@ def generate_scene_image(
 
     Args:
         image_prompt: Detailed prompt for the image
-        character_reference: Optional reference image bytes for character consistency
+        character_references: Optional list of reference image bytes for character consistency (max 3)
         style: Visual style for the image
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait) for composition guidance
 
@@ -295,11 +380,17 @@ def generate_scene_image(
 
         contents = [full_prompt]
 
-        # Add character reference if provided
-        if character_reference:
-            ref_image = Image.open(BytesIO(character_reference))
-            contents.insert(0, "Use this character reference for consistency:")
-            contents.insert(1, ref_image)
+        # Add character references if provided (max 3)
+        if character_references:
+            refs_to_use = character_references[:3]
+            if len(refs_to_use) == 1:
+                contents.insert(0, "Use this character reference for consistency:")
+            else:
+                contents.insert(0, f"Use these {len(refs_to_use)} character references for consistency:")
+            for i, ref in enumerate(refs_to_use):
+                ref_image = Image.open(BytesIO(ref))
+                contents.insert(1 + i, ref_image)
+            logger.info(f"Including {len(refs_to_use)} character reference(s) in scene image")
 
         response = client.models.generate_content(
             model=IMAGE_MODEL,
@@ -456,7 +547,7 @@ def generate_video_extension_stream(
     previous_video,  # Veo Video object from previous generation
     video_prompt: str,
     aspect_ratio: str = "16:9",
-    character_reference: Optional[bytes] = None
+    character_references: Optional[List[bytes]] = None
 ):
     """
     Extend a video using Veo 3.1 with progress events (generator).
@@ -468,7 +559,7 @@ def generate_video_extension_stream(
         previous_video: The Veo Video object from the previous scene's generation
         video_prompt: Prompt for the extension (should include dialogue in quotes)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - must match original
-        character_reference: Optional reference image bytes for character consistency
+        character_references: Optional list of reference image bytes for character consistency (max 3)
 
     Yields:
         ('progress', poll_count, max_polls) during polling
@@ -480,12 +571,15 @@ def generate_video_extension_stream(
     try:
         logger.info(f"🔗 Extending video with next scene...")
 
-        # Build config with optional reference image for character consistency
+        # Build config with optional reference images for character consistency
         config_kwargs = {"aspect_ratio": aspect_ratio}
-        if character_reference:
-            ref_image = types.Image.from_file(location=BytesIO(character_reference))
-            config_kwargs["reference_images"] = [ref_image]
-            logger.info("Including character reference image for consistency")
+        if character_references:
+            ref_images = [
+                types.Image.from_file(location=BytesIO(ref))
+                for ref in character_references[:3]  # Veo max is 3
+            ]
+            config_kwargs["reference_images"] = ref_images
+            logger.info(f"Including {len(ref_images)} character reference(s) for consistency")
 
         # Start video extension with aspect ratio and optional reference
         operation = client.models.generate_videos(
@@ -622,6 +716,7 @@ def generate_video_stream(
         create_video_job, update_video_job, create_video_scene,
         update_video_scene, get_author_bio
     )
+    from author_bio import generate_character_references_batch
     import base64
 
     try:
@@ -629,15 +724,47 @@ def generate_video_stream(
         if not author_bio:
             author_bio = get_author_bio(user_id)
 
-        character_reference = None
+        # Legacy single character reference (from author bio)
+        legacy_character_reference = None
         if author_bio and author_bio.get('reference_image'):
-            character_reference = author_bio['reference_image']
+            legacy_character_reference = author_bio['reference_image']
 
         # Create job (or use provided job_id from background worker)
         if job_id is None:
             job_id = create_video_job(user_id, title=topic[:100])
             yield emit_event("job_created", job_id=job_id)
         # If job_id was provided, job_created event is emitted by the endpoint
+
+        # Phase 0: Analyze prompt for multi-character references
+        yield emit_event("analyzing", message="Analyzing characters...")
+
+        char_analysis = extract_characters_from_prompt(user_prompt)
+        characters = char_analysis.get('characters', [])
+        scene_characters = char_analysis.get('scene_characters', {})
+        global_style = char_analysis.get('global_style', 'storybook')
+        needs_references = char_analysis.get('needs_references', False)
+
+        # Dict mapping character_id -> image bytes
+        character_references = {}
+
+        if needs_references and characters:
+            yield emit_event("generating_references",
+                           message=f"Generating {len(characters)} character reference(s)...",
+                           characters=[c.get('name') for c in characters])
+
+            character_references = generate_character_references_batch(
+                characters=characters,
+                global_style=global_style
+            )
+
+            yield emit_event("references_ready",
+                           count=len(character_references),
+                           characters=list(character_references.keys()))
+            logger.info(f"Generated {len(character_references)} character references")
+        elif legacy_character_reference:
+            # Fallback to legacy single author reference
+            character_references = {"author": legacy_character_reference}
+            logger.info("Using legacy author reference image")
 
         # Phase 1: Plan script
         yield emit_event("planning", message="Planning video script...")
@@ -681,9 +808,33 @@ def generate_video_stream(
                 narration=scene.get('narration')
             )
 
+        # Helper to get references for a specific scene
+        def get_scene_references(scene_num: int, scene: dict) -> List[bytes]:
+            """Get character references relevant to a specific scene."""
+            # First try scene_characters from char_analysis
+            scene_key = str(scene_num)
+            char_ids = scene_characters.get(scene_key, [])
+
+            if char_ids and character_references:
+                refs = [character_references[cid] for cid in char_ids if cid in character_references]
+                if refs:
+                    return refs[:3]  # Max 3
+
+            # Fallback: if scene has include_character flag and we have any references
+            if scene.get('include_character') and character_references:
+                return list(character_references.values())[:3]
+
+            # No references for this scene
+            return []
+
         for scene in scenes:
             scene_num = scene['scene_number']
             scene_id = scene_ids[scene_num]
+
+            # Get references for this specific scene
+            scene_refs = get_scene_references(scene_num, scene)
+            if scene_refs:
+                logger.info(f"Scene {scene_num}: using {len(scene_refs)} character reference(s)")
 
             # Rate limit protection: delay between scenes (except first)
             if scene_num > 1:
@@ -702,7 +853,7 @@ def generate_video_stream(
 
                 image_bytes = generate_scene_image(
                     image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
-                    character_reference=character_reference if scene.get('include_character') else None,
+                    character_references=scene_refs if scene_refs else None,
                     style=author_bio.get('style', 'real_person') if author_bio else 'real_person',
                     aspect_ratio=aspect_ratio
                 )
@@ -822,7 +973,7 @@ def generate_video_stream(
                         previous_video=current_video_object,
                         video_prompt=refined_prompt,
                         aspect_ratio=aspect_ratio,
-                        character_reference=character_reference if scene.get('include_character') else None
+                        character_references=scene_refs if scene_refs else None
                     ):
                         if event_type == 'progress':
                             poll_count, max_polls = event_data

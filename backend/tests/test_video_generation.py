@@ -160,7 +160,7 @@ class TestGenerateSceneImage:
 
         result = generate_scene_image(
             image_prompt="Character in a scene",
-            character_reference=reference,
+            character_references=[reference],  # Now takes a list
             style="real_person"
         )
 
@@ -169,7 +169,7 @@ class TestGenerateSceneImage:
         # Verify contents includes reference
         call_args = mock_client.models.generate_content.call_args
         contents = call_args.kwargs['contents']
-        assert len(contents) > 1  # Prompt + reference
+        assert len(contents) > 1  # Prompt + reference(s)
 
 
 class TestGenerateVideoFromImage:
