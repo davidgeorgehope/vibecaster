@@ -657,8 +657,7 @@ def generate_video_from_image_stream(
 def generate_video_extension_stream(
     previous_video,  # Veo Video object from previous generation
     video_prompt: str,
-    aspect_ratio: str = "16:9",
-    character_references: Optional[List[bytes]] = None
+    aspect_ratio: str = "16:9"
 ):
     """
     Extend a video using Veo 3.1 with progress events (generator).
@@ -666,11 +665,13 @@ def generate_video_extension_stream(
     Uses the last second of the previous video to maintain visual and audio
     continuity. Each extension adds ~7 seconds to the video.
 
+    Note: Veo API does NOT support reference_images with video extension mode.
+    Character consistency relies on the video chain continuity from previous scene.
+
     Args:
         previous_video: The Veo Video object from the previous scene's generation
         video_prompt: Prompt for the extension (should include dialogue in quotes)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - must match original
-        character_references: Optional list of reference image bytes for character consistency (max 3)
 
     Yields:
         ('progress', poll_count, max_polls) during polling
@@ -678,26 +679,16 @@ def generate_video_extension_stream(
         ('error', error_message) on failure
     """
     tmp_video_path = None
-    tmp_ref_paths = []  # Track temp files for cleanup
 
     try:
         logger.info(f"🔗 Extending video with next scene...")
 
-        # Build config with optional reference images for character consistency
+        # NOTE: Veo API does NOT support reference_images with video extension mode
+        # Reference images only work with "ingredients to video" mode (no first frame, no previous video)
+        # Character consistency in extensions relies on the video chain continuity from previous scene
         config_kwargs = {"aspect_ratio": aspect_ratio}
-        if character_references:
-            # Write reference images to temp files (from_file expects a path, not BytesIO)
-            ref_images = []
-            for ref in character_references[:3]:  # Veo max is 3
-                tmp_ref = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                tmp_ref.write(ref)
-                tmp_ref.close()
-                tmp_ref_paths.append(tmp_ref.name)
-                ref_images.append(types.Image.from_file(location=tmp_ref.name))
-            config_kwargs["reference_images"] = ref_images
-            logger.info(f"Including {len(ref_images)} character reference(s) for consistency")
 
-        # Start video extension with aspect ratio and optional reference
+        # Start video extension with aspect ratio
         operation = client.models.generate_videos(
             model=VIDEO_MODEL,
             prompt=video_prompt,
@@ -770,13 +761,6 @@ def generate_video_extension_stream(
                 os.unlink(tmp_video_path)
             except:
                 pass
-        # Cleanup temp reference image files
-        for tmp_ref_path in tmp_ref_paths:
-            if os.path.exists(tmp_ref_path):
-                try:
-                    os.unlink(tmp_ref_path)
-                except:
-                    pass
 
 
 def generate_video_from_image(
@@ -1111,8 +1095,7 @@ def generate_video_stream(
                     for event_type, *event_data in generate_video_extension_stream(
                         previous_video=current_video_object,
                         video_prompt=refined_prompt,
-                        aspect_ratio=aspect_ratio,
-                        character_references=scene_refs if scene_refs else None
+                        aspect_ratio=aspect_ratio
                     ):
                         if event_type == 'progress':
                             poll_count, max_polls = event_data
