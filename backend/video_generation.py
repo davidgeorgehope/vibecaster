@@ -567,6 +567,7 @@ def generate_video_extension_stream(
         ('error', error_message) on failure
     """
     tmp_video_path = None
+    tmp_ref_paths = []  # Track temp files for cleanup
 
     try:
         logger.info(f"🔗 Extending video with next scene...")
@@ -574,10 +575,14 @@ def generate_video_extension_stream(
         # Build config with optional reference images for character consistency
         config_kwargs = {"aspect_ratio": aspect_ratio}
         if character_references:
-            ref_images = [
-                types.Image.from_file(location=BytesIO(ref))
-                for ref in character_references[:3]  # Veo max is 3
-            ]
+            # Write reference images to temp files (from_file expects a path, not BytesIO)
+            ref_images = []
+            for ref in character_references[:3]:  # Veo max is 3
+                tmp_ref = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                tmp_ref.write(ref)
+                tmp_ref.close()
+                tmp_ref_paths.append(tmp_ref.name)
+                ref_images.append(types.Image.from_file(location=tmp_ref.name))
             config_kwargs["reference_images"] = ref_images
             logger.info(f"Including {len(ref_images)} character reference(s) for consistency")
 
@@ -648,11 +653,19 @@ def generate_video_extension_stream(
         yield ('error', str(e))
 
     finally:
+        # Cleanup temp video file
         if tmp_video_path and os.path.exists(tmp_video_path):
             try:
                 os.unlink(tmp_video_path)
             except:
                 pass
+        # Cleanup temp reference image files
+        for tmp_ref_path in tmp_ref_paths:
+            if os.path.exists(tmp_ref_path):
+                try:
+                    os.unlink(tmp_ref_path)
+                except:
+                    pass
 
 
 def generate_video_from_image(
