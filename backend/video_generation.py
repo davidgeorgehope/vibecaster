@@ -140,12 +140,110 @@ Return ONLY valid JSON, no other text."""
         return {"characters": [], "scene_characters": {}, "global_style": "storybook", "needs_references": False}
 
 
+def search_video_topic(topic: str, user_prompt: str = "") -> Dict[str, Any]:
+    """
+    Search for content about a video topic using Google Search grounding.
+
+    Uses Gemini's native search grounding to find accurate, current information
+    about the topic that can be used to create an informed video script.
+
+    Args:
+        topic: The main topic for the video
+        user_prompt: Additional context from the user
+
+    Returns:
+        Dict with:
+        - content: Summarized content from search
+        - key_points: List of key points to cover
+        - sources: List of source URLs
+        - search_successful: Whether search returned useful results
+    """
+    search_prompt = f"""Research this topic thoroughly for an educational video:
+
+TOPIC: {topic}
+
+{f'ADDITIONAL CONTEXT: {user_prompt}' if user_prompt else ''}
+
+Your task:
+1. Find accurate, current information about this topic
+2. Identify the key concepts that need to be explained
+3. Find specific examples, syntax, or technical details if applicable
+4. Note any recent updates or best practices
+
+Provide:
+1. A comprehensive summary of the topic (2-3 paragraphs)
+2. Key points that should be covered in a video explanation (bullet points)
+3. Specific examples, code snippets, or technical details if relevant
+4. Any important caveats or common misconceptions to address
+
+Focus on accuracy and educational value. This will be used to script a video explanation."""
+
+    try:
+        logger.info(f"🔍 Searching for content about: {topic[:50]}...")
+
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=search_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.5,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            )
+        )
+
+        # Extract URLs from grounding metadata
+        sources = []
+        if hasattr(response, 'candidates') and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'grounding_metadata'):
+                metadata = candidate.grounding_metadata
+                if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                    for chunk in metadata.grounding_chunks:
+                        if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
+                            url = chunk.web.uri
+                            if url and url not in sources:
+                                sources.append(url)
+
+        content = response.text if hasattr(response, 'text') and response.text else ""
+
+        if content:
+            logger.info(f"✅ Search found content from {len(sources)} sources")
+            # Parse key points from the response (simple extraction)
+            lines = content.split('\n')
+            key_points = [line.strip('- •').strip() for line in lines
+                         if line.strip().startswith(('-', '•', '*')) and len(line.strip()) > 10]
+
+            return {
+                "content": content,
+                "key_points": key_points[:10],  # Cap at 10 key points
+                "sources": sources[:5],  # Cap at 5 sources
+                "search_successful": True
+            }
+        else:
+            logger.warning("Search returned no content")
+            return {
+                "content": "",
+                "key_points": [],
+                "sources": [],
+                "search_successful": False
+            }
+
+    except Exception as e:
+        logger.error(f"Error searching video topic: {e}", exc_info=True)
+        return {
+            "content": "",
+            "key_points": [],
+            "sources": [],
+            "search_successful": False
+        }
+
+
 def plan_video_script(
     topic: str,
     style: str,
     target_duration: int,
     author_bio: Optional[Dict] = None,
-    user_prompt: str = ""
+    user_prompt: str = "",
+    grounded_content: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Use LLM with thinking to plan a video script.
@@ -156,6 +254,7 @@ def plan_video_script(
         target_duration: Target video duration in seconds
         author_bio: Optional author bio for character reference
         user_prompt: Additional context from user
+        grounded_content: Optional search results with accurate content about the topic
 
     Returns:
         Script with scenes, each containing narration and prompts
@@ -189,6 +288,18 @@ Character Reference:
 Include this character appropriately in scenes if relevant to the content.
 """
 
+    # Add grounded content if available
+    research_context = ""
+    if grounded_content and grounded_content.get('search_successful'):
+        research_context = f"""
+RESEARCHED CONTENT (use this for accuracy):
+{grounded_content.get('content', '')}
+
+Sources: {', '.join(grounded_content.get('sources', [])[:3])}
+
+IMPORTANT: Base the video script on this researched content. Ensure technical accuracy.
+"""
+
     prompt = f"""You are a video script planner. Create a detailed script for a video about:
 
 Topic: {topic}
@@ -198,7 +309,7 @@ Style: {style_instructions.get(style, style_instructions['educational'])}
 Target Duration: ~{target_duration} seconds ({num_scenes} scenes of {DEFAULT_VIDEO_DURATION} seconds each)
 
 {character_context}
-
+{research_context}
 {f'Additional Context: {user_prompt}' if user_prompt else ''}
 
 Return a JSON object with this exact structure:
@@ -748,7 +859,21 @@ def generate_video_stream(
             yield emit_event("job_created", job_id=job_id)
         # If job_id was provided, job_created event is emitted by the endpoint
 
-        # Phase 0: Analyze prompt for multi-character references
+        # Phase 0a: Search for content about the topic (for educational accuracy)
+        yield emit_event("searching", message="Researching topic...")
+
+        grounded_content = search_video_topic(topic=topic, user_prompt=user_prompt)
+
+        if grounded_content.get('search_successful'):
+            yield emit_event("search_complete",
+                           message=f"Found content from {len(grounded_content.get('sources', []))} sources",
+                           sources=grounded_content.get('sources', [])[:3])
+        else:
+            yield emit_event("search_complete",
+                           message="No grounded content found, using general knowledge",
+                           sources=[])
+
+        # Phase 0b: Analyze prompt for multi-character references
         yield emit_event("analyzing", message="Analyzing characters...")
 
         char_analysis = extract_characters_from_prompt(user_prompt)
@@ -788,7 +913,8 @@ def generate_video_stream(
             style=style,
             target_duration=target_duration,
             author_bio=author_bio,
-            user_prompt=user_prompt
+            user_prompt=user_prompt,
+            grounded_content=grounded_content
         )
 
         update_video_job(job_id, title=script.get('title', topic[:100]),
