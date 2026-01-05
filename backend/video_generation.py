@@ -85,6 +85,7 @@ Return a JSON object with:
    - "description": detailed visual description for image generation (appearance, clothing, distinctive features)
    - "style": one of "photorealistic", "storybook_human", "pixar_3d", "anime", "cartoon_2d"
    - "priority": 1-3 (1 = most important/screen time)
+   - "voice_style": description of how they speak (accent, tone, mannerisms). Examples: "British accent, dry understated humor", "energetic American broadcaster voice", "soft gentle narrator tone". Extract from any personality/nationality hints in the description.
 
 2. "scene_characters": Object mapping scene numbers to arrays of character IDs appearing in each scene.
    Example: {{"1": ["david", "elky"], "2": ["david", "loggy"]}}
@@ -368,7 +369,8 @@ def refine_video_prompt(
     total_scenes: int,
     style: str,
     aspect_ratio: str = "16:9",
-    full_context: str = ""
+    full_context: str = "",
+    characters: Optional[List[Dict]] = None
 ) -> str:
     """
     Use LLM with thinking to ENHANCE video prompts for Veo 3.1 best practices.
@@ -383,6 +385,7 @@ def refine_video_prompt(
         style: Visual style (educational, storybook, social_media)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait)
         full_context: Original user prompt with character/setting descriptions for consistency
+        characters: Optional list of character dicts with voice_style info
 
     Returns:
         Enhanced prompt with original content preserved
@@ -402,9 +405,25 @@ FULL STORY CONTEXT (for character/setting consistency - MUST maintain these deta
 
 """
 
+    # Build voice style section for character accents/mannerisms
+    voice_section = ""
+    if characters:
+        voice_lines = []
+        for char in characters:
+            name = char.get('name', '')
+            voice = char.get('voice_style', '')
+            if name and voice:
+                voice_lines.append(f"- {name}: {voice}")
+        if voice_lines:
+            voice_section = f"""
+CHARACTER VOICE STYLES (MUST include these when characters speak):
+{chr(10).join(voice_lines)}
+
+"""
+
     prompt = f"""You are enhancing a video prompt for Veo 3.1. Your job is to ADD technical details while PRESERVING the original content exactly.
 
-{context_section}SCENE {scene_number} OF {total_scenes} - PROMPT TO ENHANCE:
+{context_section}{voice_section}SCENE {scene_number} OF {total_scenes} - PROMPT TO ENHANCE:
 {video_prompt}
 
 ## CRITICAL RULES - READ CAREFULLY:
@@ -421,12 +440,13 @@ FULL STORY CONTEXT (for character/setting consistency - MUST maintain these deta
    - "subtle film grain"
    - "specular highlights controlled"
 
-4. **DIALOGUE FORMAT**: If dialogue exists, keep it as: Character says: "exact words"
+4. **DIALOGUE FORMAT**: When a character speaks, include their voice style: "[Name] speaks with [voice_style]: \"exact words\""
+   Example: "David speaks with a British accent, dry delivery: \"Welcome to today's tutorial.\""
 
 5. **KEEP IT CONCISE**: The enhanced prompt should be 80-150 words max.
 
 ## WHAT TO OUTPUT:
-[Cinematography: shot type, camera movement, framing] + [ORIGINAL scene content preserved exactly] + [Realism notes]
+[Cinematography: shot type, camera movement, framing] + [ORIGINAL scene content with voice styles added to dialogue] + [Realism notes]
 
 OUTPUT the enhanced prompt only. No explanations."""
 
@@ -1005,7 +1025,8 @@ def generate_video_stream(
                     total_scenes=len(scenes),
                     style=style,
                     aspect_ratio=aspect_ratio,
-                    full_context=user_prompt  # Pass original user prompt for character/setting consistency
+                    full_context=user_prompt,  # Pass original user prompt for character/setting consistency
+                    characters=characters  # Pass character info for voice styles
                 )
 
                 video_bytes = None
@@ -1083,7 +1104,8 @@ def generate_video_stream(
                     total_scenes=len(scenes),
                     style=style,
                     aspect_ratio=aspect_ratio,
-                    full_context=user_prompt  # Pass original user prompt for character/setting consistency
+                    full_context=user_prompt,  # Pass original user prompt for character/setting consistency
+                    characters=characters  # Pass character info for voice styles
                 )
 
                 video_bytes = None
