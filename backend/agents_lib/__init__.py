@@ -79,6 +79,13 @@ from .chat_stream import (
     ORCHESTRATOR_SYSTEM_PROMPT,
     ORCHESTRATOR_TOOLS,
 )
+from .video_posting import (
+    upload_video_to_twitter,
+    upload_video_to_linkedin,
+    upload_video_to_youtube,
+    post_video_to_platforms,
+    refresh_youtube_token,
+)
 
 __all__ = [
     # Config
@@ -159,4 +166,10 @@ __all__ = [
     'generate_media_for_post_builder',
     'ORCHESTRATOR_SYSTEM_PROMPT',
     'ORCHESTRATOR_TOOLS',
+    # Video Posting
+    'upload_video_to_twitter',
+    'upload_video_to_linkedin',
+    'upload_video_to_youtube',
+    'post_video_to_platforms',
+    'refresh_youtube_token',
 ]

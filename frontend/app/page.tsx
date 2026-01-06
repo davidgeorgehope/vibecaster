@@ -5,19 +5,21 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
 import TranscribeBox from '@/components/TranscribeBox';
 import BioBox from '@/components/BioBox';
 import VideoBuilder from '@/components/VideoBuilder';
 import JobsPanel from '@/components/JobsPanel';
+import VideoPostBox from '@/components/VideoPostBox';
 
-type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'bio' | 'jobs';
+type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs';
 
 interface ConnectionStatus {
   twitter: boolean;
   linkedin: boolean;
+  youtube: boolean;
 }
 
 export default function Home() {
@@ -25,7 +27,8 @@ export default function Home() {
   const router = useRouter();
   const [connections, setConnections] = useState<ConnectionStatus>({
     twitter: false,
-    linkedin: false
+    linkedin: false,
+    youtube: false
   });
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'info';
@@ -88,7 +91,14 @@ export default function Home() {
       }
       // Clean up URL
       window.history.replaceState({}, '', '/');
-    } else if (status === 'twitter_error' || status === 'linkedin_error') {
+    } else if (status === 'youtube_connected') {
+      showNotification('success', 'Successfully connected to YouTube!');
+      if (token) {
+        loadConnectionStatus();
+      }
+      // Clean up URL
+      window.history.replaceState({}, '', '/');
+    } else if (status === 'twitter_error' || status === 'linkedin_error' || status === 'youtube_error') {
       showNotification('error', `Failed to connect: ${error || 'Unknown error'}`);
       window.history.replaceState({}, '', '/');
     }
@@ -161,6 +171,41 @@ export default function Home() {
       }
     } catch (error) {
       showNotification('error', 'Failed to disconnect from LinkedIn');
+    }
+  };
+
+  const handleYouTubeConnect = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/api/auth/youtube/login', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await response.json();
+      if (data.auth_url) {
+        window.location.href = data.auth_url;
+      }
+    } catch (error) {
+      showNotification('error', 'Failed to initiate YouTube connection');
+    }
+  };
+
+  const handleYouTubeDisconnect = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/api/auth/youtube/disconnect', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        showNotification('success', 'Disconnected from YouTube');
+        loadConnectionStatus();
+      }
+    } catch (error) {
+      showNotification('error', 'Failed to disconnect from YouTube');
     }
   };
 
@@ -290,6 +335,7 @@ export default function Home() {
               { id: 'builder', label: 'Post Builder', icon: MessageSquare },
               { id: 'transcribe', label: 'Transcribe', icon: Mic },
               { id: 'video', label: 'Video', icon: Video },
+              { id: 'video-post', label: 'Video Post', icon: Upload },
               { id: 'bio', label: 'Bio', icon: User },
               { id: 'jobs', label: 'Jobs', icon: ListTodo }
             ].map(tab => (
@@ -331,7 +377,15 @@ export default function Home() {
                 onDisconnect={handleLinkedInDisconnect}
               />
 
-              {/* Box 3: Campaign Prompt */}
+              {/* Box 3: YouTube Connection */}
+              <ConnectionBox
+                service="youtube"
+                connected={connections.youtube}
+                onConnect={handleYouTubeConnect}
+                onDisconnect={handleYouTubeDisconnect}
+              />
+
+              {/* Campaign Prompt */}
               <div className="lg:col-span-3">
                 <PromptBox
                   onActivate={handleActivateCampaign}
@@ -391,6 +445,14 @@ export default function Home() {
         <div className={activeTab === 'video' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <VideoBuilder
             token={token}
+            showNotification={showNotification}
+          />
+        </div>
+
+        <div className={activeTab === 'video-post' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <VideoPostBox
+            token={token}
+            connections={connections}
             showNotification={showNotification}
           />
         </div>

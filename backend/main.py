@@ -706,6 +706,252 @@ async def transcribe_stream_endpoint(
     )
 
 
+# ===== VIDEO POST ENDPOINTS =====
+
+class PostVideoRequest(BaseModel):
+    video_base64: str
+    x_post: Optional[str] = None
+    linkedin_post: Optional[str] = None
+    youtube_title: Optional[str] = None
+    youtube_description: Optional[str] = None
+    platforms: list[str]
+
+
+def generate_video_posts_from_transcript(transcript: str, user_id: int) -> dict:
+    """Generate promotional posts for X, LinkedIn, and YouTube from transcript."""
+    from agents_lib import client, LLM_MODEL
+    import json
+
+    # Get campaign for persona context
+    campaign = get_campaign(user_id)
+    persona = campaign.get("refined_persona", "") if campaign else ""
+
+    # Generate all posts in one call for efficiency
+    prompt = f"""Based on this video transcript, generate promotional posts for social media.
+
+TRANSCRIPT:
+{transcript[:8000]}  # Limit transcript length
+
+{f'AUTHOR PERSONA: {persona}' if persona else ''}
+
+Generate the following (output as JSON):
+1. x_post: A tweet to promote this video (max 280 chars, engaging, with relevant hashtags)
+2. linkedin_post: A professional LinkedIn post promoting this video (3-5 paragraphs, include key insights)
+3. youtube_title: An SEO-friendly title for this video (max 100 chars, compelling)
+4. youtube_description: A YouTube video description (2-3 paragraphs, include key topics, timestamps if applicable)
+
+Output ONLY valid JSON with these four fields. No other text."""
+
+    try:
+        response = client.models.generate_content(
+            model=LLM_MODEL,
+            contents=[prompt],
+            config={
+                "response_mime_type": "application/json"
+            }
+        )
+        result = json.loads(response.text)
+        return result
+    except Exception as e:
+        logger.error(f"Error generating video posts: {e}")
+        # Fallback to simple generation
+        return {
+            "x_post": transcript[:250] + "...",
+            "linkedin_post": transcript[:1000],
+            "youtube_title": "Video",
+            "youtube_description": transcript[:500]
+        }
+
+
+@app.post("/api/generate-video-post-stream")
+async def generate_video_post_stream_endpoint(
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Stream video transcription and promotional post generation.
+
+    Flow:
+    1. Transcribe video using Gemini
+    2. Generate X post, LinkedIn post, YouTube title/description
+    3. Return video bytes for posting
+
+    Uses SSE for real-time progress updates.
+    """
+    import json
+    import time
+    import base64
+
+    # Validate file type - only video
+    content_type = file.content_type or ""
+    video_types = {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}
+    if content_type not in video_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only video files allowed. Supported: mp4, webm, mov. Got: {content_type}"
+        )
+
+    # Read file into memory
+    file_bytes = await file.read()
+
+    # Validate file size (200MB max)
+    if len(file_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+        )
+
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    logger.info(f"[VideoPost] User {user_id} uploading {file.filename} ({len(file_bytes)} bytes)")
+
+    def generate():
+        transcript = None
+
+        try:
+            # Step 1: Emit processing started
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time.time()})}\n\n"
+
+            # Step 2: Transcribe video - reuse transcription logic
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time.time()})}\n\n"
+
+            from google import genai
+            from google.genai import types
+            import os
+
+            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+            LLM_MODEL = "gemini-3-pro-preview"
+            INLINE_SIZE_LIMIT = 20 * 1024 * 1024
+
+            uploaded_file = None
+            try:
+                if len(file_bytes) > INLINE_SIZE_LIMIT:
+                    uploaded_file = client.files.upload(
+                        file=file_bytes,
+                        config=types.UploadFileConfig(
+                            display_name=file.filename,
+                            mime_type=content_type
+                        )
+                    )
+                    media_part = uploaded_file
+                else:
+                    media_part = types.Part.from_bytes(data=file_bytes, mime_type=content_type)
+
+                transcript_response = client.models.generate_content(
+                    model=LLM_MODEL,
+                    contents=[
+                        "Generate a complete, accurate, verbatim transcript of this video. "
+                        "Include all spoken words exactly as said.",
+                        media_part
+                    ]
+                )
+                transcript = transcript_response.text.strip()
+                logger.info(f"[VideoPost] Transcript generated: {len(transcript)} chars")
+
+            finally:
+                if uploaded_file:
+                    try:
+                        client.files.delete(name=uploaded_file.name)
+                    except Exception:
+                        pass
+
+            # Yield transcript
+            yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time.time()})}\n\n"
+
+            # Step 3: Generate promotional posts
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'generating_posts', 'message': 'Creating promotional posts...', 'timestamp': time.time()})}\n\n"
+
+            posts = generate_video_posts_from_transcript(transcript, user_id)
+
+            # Yield X post
+            if posts.get("x_post"):
+                yield f"data: {json.dumps({'type': 'x_post', 'x_post': posts['x_post'], 'timestamp': time.time()})}\n\n"
+
+            # Yield LinkedIn post
+            if posts.get("linkedin_post"):
+                yield f"data: {json.dumps({'type': 'linkedin_post', 'linkedin_post': posts['linkedin_post'], 'timestamp': time.time()})}\n\n"
+
+            # Yield YouTube title/description
+            if posts.get("youtube_title"):
+                yield f"data: {json.dumps({'type': 'youtube', 'title': posts['youtube_title'], 'description': posts.get('youtube_description', ''), 'timestamp': time.time()})}\n\n"
+
+            # Step 4: Return video as base64 for posting
+            video_base64 = base64.b64encode(file_bytes).decode('utf-8')
+            yield f"data: {json.dumps({'type': 'video_ready', 'video_base64': video_base64, 'mime_type': content_type, 'timestamp': time.time()})}\n\n"
+
+            # Complete
+            yield f"data: {json.dumps({'type': 'complete', 'timestamp': time.time()})}\n\n"
+
+        except Exception as e:
+            logger.error(f"[VideoPost] Error for user {user_id}: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'timestamp': time.time()})}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.post("/api/post-video")
+async def post_video_endpoint(
+    request: PostVideoRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Post video to selected platforms.
+
+    Args:
+        video_base64: Base64 encoded video
+        x_post: Text for X/Twitter post
+        linkedin_post: Text for LinkedIn post
+        youtube_title: Title for YouTube video
+        youtube_description: Description for YouTube video
+        platforms: List of platforms ['twitter', 'linkedin', 'youtube']
+    """
+    from agents_lib import post_video_to_platforms
+    import base64
+
+    try:
+        # Validate platforms
+        valid_platforms = ['twitter', 'linkedin', 'youtube']
+        for platform in request.platforms:
+            if platform not in valid_platforms:
+                raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
+
+        # Decode video
+        try:
+            video_bytes = base64.b64decode(request.video_base64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid video_base64 encoding")
+
+        # Post to platforms
+        result = post_video_to_platforms(
+            user_id=user_id,
+            video_bytes=video_bytes,
+            x_post=request.x_post,
+            linkedin_post=request.linkedin_post,
+            youtube_title=request.youtube_title,
+            youtube_description=request.youtube_description,
+            platforms=request.platforms
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error posting video: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to post video: {str(e)}")
+
+
 # ===== AUTHOR BIO ENDPOINTS =====
 
 @app.get("/api/author-bio")

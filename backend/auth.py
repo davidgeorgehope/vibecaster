@@ -32,6 +32,11 @@ LINKEDIN_CLIENT_ID = os.getenv("LINKEDIN_CLIENT_ID")
 LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET")
 LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/linkedin/callback")
 
+# YouTube/Google Configuration
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+YOUTUBE_REDIRECT_URI = os.getenv("YOUTUBE_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/youtube/callback")
+
 
 # ===== TWITTER/X OAUTH =====
 
@@ -237,6 +242,117 @@ async def linkedin_disconnect(user_id: int = Depends(get_current_user_id)):
     try:
         delete_oauth_tokens(user_id, "linkedin")
         return {"success": True, "message": "LinkedIn disconnected"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== YOUTUBE/GOOGLE OAUTH =====
+
+@router.get("/youtube/login")
+async def youtube_login(user_id: int = Depends(get_current_user_id)):
+    """Initiate YouTube OAuth flow using Google OAuth 2.0."""
+    try:
+        # Generate state for CSRF protection
+        state = secrets.token_urlsafe(32)
+        oauth_states[state] = {"service": "youtube", "user_id": user_id, "timestamp": time.time()}
+
+        # YouTube/Google OAuth URL with youtube.upload scope
+        scopes = [
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly"
+        ]
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?"
+            f"response_type=code&"
+            f"client_id={GOOGLE_CLIENT_ID}&"
+            f"redirect_uri={YOUTUBE_REDIRECT_URI}&"
+            f"state={state}&"
+            f"scope={' '.join(scopes)}&"
+            f"access_type=offline&"
+            f"prompt=consent"
+        )
+
+        return {"auth_url": auth_url}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to initiate YouTube OAuth: {str(e)}")
+
+
+@router.get("/youtube/callback")
+async def youtube_callback(code: str = Query(...), state: str = Query(None), error: str = Query(None)):
+    """Handle YouTube/Google OAuth callback."""
+    try:
+        # Check for error from Google
+        if error:
+            logger.warning(f"YouTube OAuth error: {error}")
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error={error}")
+
+        # Validate state
+        if not state or state not in oauth_states:
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error=Invalid state")
+
+        # Get user_id from state
+        state_data = oauth_states.pop(state)
+        user_id = state_data.get("user_id")
+
+        if not user_id:
+            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error=User not authenticated")
+
+        # Exchange code for access token
+        token_url = "https://oauth2.googleapis.com/token"
+        token_data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": YOUTUBE_REDIRECT_URI,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET
+        }
+
+        token_response = requests.post(token_url, data=token_data)
+        token_response.raise_for_status()
+        tokens = token_response.json()
+
+        # Get YouTube channel info to verify access
+        headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+        channel_response = requests.get(
+            "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+            headers=headers
+        )
+
+        platform_user_id = None
+        if channel_response.ok:
+            channel_data = channel_response.json()
+            if channel_data.get("items"):
+                platform_user_id = channel_data["items"][0]["id"]
+                logger.info(f"YouTube channel connected: {platform_user_id}")
+
+        # Save tokens to database
+        save_oauth_tokens(
+            user_id=user_id,
+            service="youtube",
+            access_token=tokens["access_token"],
+            refresh_token=tokens.get("refresh_token"),
+            platform_user_id=platform_user_id,
+            expires_at=int(time.time()) + tokens.get("expires_in", 3600)
+        )
+
+        logger.info(f"Successfully saved YouTube tokens for user {user_id}")
+
+        # Redirect back to frontend with success
+        return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_connected")
+
+    except Exception as e:
+        logger.error(f"YouTube OAuth error: {str(e)}", exc_info=True)
+        error_msg = str(e)[:200]
+        return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error={error_msg}")
+
+
+@router.post("/youtube/disconnect")
+async def youtube_disconnect(user_id: int = Depends(get_current_user_id)):
+    """Disconnect YouTube account."""
+    try:
+        delete_oauth_tokens(user_id, "youtube")
+        return {"success": True, "message": "YouTube disconnected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

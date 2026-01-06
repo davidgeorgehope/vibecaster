@@ -4,11 +4,17 @@ import { useState } from 'react';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
 interface ConnectionBoxProps {
-  service: 'twitter' | 'linkedin';
+  service: 'twitter' | 'linkedin' | 'youtube';
   connected: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
 }
+
+const SERVICE_CONFIG = {
+  twitter: { name: 'X (Twitter)', color: 'from-blue-500 to-blue-700' },
+  linkedin: { name: 'LinkedIn', color: 'from-blue-600 to-blue-800' },
+  youtube: { name: 'YouTube', color: 'from-red-500 to-red-700' }
+};
 
 export default function ConnectionBox({
   service,
@@ -18,8 +24,8 @@ export default function ConnectionBox({
 }: ConnectionBoxProps) {
   const [isLoading, setIsLoading] = useState(false);
 
-  const serviceName = service === 'twitter' ? 'X (Twitter)' : 'LinkedIn';
-  const serviceColor = service === 'twitter' ? 'from-blue-500 to-blue-700' : 'from-blue-600 to-blue-800';
+  const serviceName = SERVICE_CONFIG[service].name;
+  const serviceColor = SERVICE_CONFIG[service].color;
 
   const handleAction = async () => {
     setIsLoading(true);

@@ -310,7 +310,8 @@ def get_connection_status(user_id: int) -> Dict[str, bool]:
 
         return {
             "twitter": "twitter" in connected_services,
-            "linkedin": "linkedin" in connected_services
+            "linkedin": "linkedin" in connected_services,
+            "youtube": "youtube" in connected_services
         }
 
 
@@ -821,7 +822,8 @@ def get_admin_stats() -> dict:
             "posts_today": posts_today,
             "total_posts": total_posts,
             "twitter_connections": connections.get("twitter", 0),
-            "linkedin_connections": connections.get("linkedin", 0)
+            "linkedin_connections": connections.get("linkedin", 0),
+            "youtube_connections": connections.get("youtube", 0)
         }
 
 
