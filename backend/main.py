@@ -670,6 +670,10 @@ UPLOAD_EXPIRY_SECONDS = 30 * 60  # 30 minutes
 # Store partial uploads: {upload_id: {chunks: {index: bytes}, filename, content_type, total_size, created_at}}
 pending_uploads: Dict[str, dict] = {}
 
+# Store processed videos for posting: {video_ref: {bytes, content_type, created_at, user_id}}
+# This avoids sending huge base64 strings to the browser
+processed_videos: Dict[str, dict] = {}
+
 
 class UploadInitRequest(BaseModel):
     filename: str
@@ -678,8 +682,10 @@ class UploadInitRequest(BaseModel):
 
 
 def cleanup_stale_uploads():
-    """Remove uploads older than UPLOAD_EXPIRY_SECONDS."""
+    """Remove uploads and processed videos older than UPLOAD_EXPIRY_SECONDS."""
     now = time_module.time()
+
+    # Clean up pending uploads
     expired = [
         upload_id for upload_id, data in pending_uploads.items()
         if now - data.get('created_at', 0) > UPLOAD_EXPIRY_SECONDS
@@ -687,7 +693,17 @@ def cleanup_stale_uploads():
     for upload_id in expired:
         del pending_uploads[upload_id]
         logger.info(f"[ChunkedUpload] Cleaned up expired upload: {upload_id}")
-    return len(expired)
+
+    # Clean up processed videos (same expiry)
+    expired_videos = [
+        video_ref for video_ref, data in processed_videos.items()
+        if now - data.get('created_at', 0) > UPLOAD_EXPIRY_SECONDS
+    ]
+    for video_ref in expired_videos:
+        del processed_videos[video_ref]
+        logger.info(f"[VideoPost] Cleaned up expired video: {video_ref}")
+
+    return len(expired) + len(expired_videos)
 
 
 @app.post("/api/upload/init")
@@ -844,41 +860,68 @@ async def upload_complete_endpoint(
 
 @app.post("/api/transcribe-stream")
 async def transcribe_stream_endpoint(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Stream transcription and content generation from audio/video files.
     Uses Server-Sent Events (SSE) for real-time progress updates.
 
+    Accepts either:
+    - file: Direct file upload (for small files)
+    - upload_id: Reference to a chunked upload (for large files up to 500MB)
+
     Returns transcript, summary, and blog post.
-    File is processed in memory and immediately discarded.
     """
-    # Validate file type
-    content_type = file.content_type or ""
-    if content_type not in SUPPORTED_MIME_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {content_type}. Supported: audio (mp3, wav, aac, ogg, flac) and video (mp4, webm, mov)"
-        )
+    # Get file bytes from either direct upload or chunked upload
+    if upload_id:
+        # Retrieve from chunked upload
+        if upload_id not in pending_uploads:
+            raise HTTPException(status_code=404, detail="Upload not found or expired")
 
-    # Read file into memory
-    file_bytes = await file.read()
+        upload_data = pending_uploads[upload_id]
+        if upload_data['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
 
-    # Validate file size
-    if len(file_bytes) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
-        )
+        if 'file_bytes' not in upload_data:
+            raise HTTPException(status_code=400, detail="Upload not complete. Call /api/upload/complete first")
 
-    if len(file_bytes) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
+        file_bytes = upload_data['file_bytes']
+        content_type = upload_data['content_type']
+        filename = upload_data['filename']
 
-    logger.info(f"[Transcribe] User {user_id} uploading {file.filename} ({len(file_bytes)} bytes)")
+        # Clean up the pending upload
+        del pending_uploads[upload_id]
+        logger.info(f"[Transcribe] User {user_id} processing chunked upload {upload_id}: {filename} ({len(file_bytes)} bytes)")
+
+    elif file:
+        # Direct file upload
+        content_type = file.content_type or ""
+        if content_type not in SUPPORTED_MIME_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {content_type}. Supported: audio (mp3, wav, aac, ogg, flac) and video (mp4, webm, mov)"
+            )
+
+        file_bytes = await file.read()
+        filename = file.filename
+
+        if len(file_bytes) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+            )
+
+        if len(file_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        logger.info(f"[Transcribe] User {user_id} uploading {filename} ({len(file_bytes)} bytes)")
+    else:
+        raise HTTPException(status_code=400, detail="Either file or upload_id is required")
 
     def generate():
-        for chunk in transcribe_media_stream(user_id, file_bytes, file.filename, content_type):
+        for chunk in transcribe_media_stream(user_id, file_bytes, filename, content_type):
             yield f"data: {chunk}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -896,7 +939,7 @@ async def transcribe_stream_endpoint(
 # ===== VIDEO POST ENDPOINTS =====
 
 class PostVideoRequest(BaseModel):
-    video_base64: str
+    video_ref: str  # Reference to server-stored video
     x_post: Optional[str] = None
     linkedin_post: Optional[str] = None
     youtube_title: Optional[str] = None
@@ -1037,30 +1080,15 @@ async def generate_video_post_stream_endpoint(
             # Step 1: Emit processing started
             yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time.time()})}\n\n"
 
-            # Step 2: Transcribe video - reuse transcription logic
+            # Step 2: Transcribe video using shared Gemini utilities
             yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time.time()})}\n\n"
 
-            from google import genai
-            from google.genai import types
-            import os
-
-            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-            LLM_MODEL = "gemini-3-pro-preview"
-            INLINE_SIZE_LIMIT = 20 * 1024 * 1024
+            from transcription import upload_to_gemini, cleanup_gemini_file, client, LLM_MODEL
 
             uploaded_file = None
             try:
-                if len(file_bytes) > INLINE_SIZE_LIMIT:
-                    uploaded_file = client.files.upload(
-                        file=file_bytes,
-                        config=types.UploadFileConfig(
-                            display_name=filename,
-                            mime_type=content_type
-                        )
-                    )
-                    media_part = uploaded_file
-                else:
-                    media_part = types.Part.from_bytes(data=file_bytes, mime_type=content_type)
+                # Upload to Gemini (handles temp file, wait for ACTIVE, etc.)
+                media_part, uploaded_file = upload_to_gemini(file_bytes, filename, content_type)
 
                 transcript_response = client.models.generate_content(
                     model=LLM_MODEL,
@@ -1074,11 +1102,7 @@ async def generate_video_post_stream_endpoint(
                 logger.info(f"[VideoPost] Transcript generated: {len(transcript)} chars")
 
             finally:
-                if uploaded_file:
-                    try:
-                        client.files.delete(name=uploaded_file.name)
-                    except Exception:
-                        pass
+                cleanup_gemini_file(uploaded_file)
 
             # Yield transcript
             yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time.time()})}\n\n"
@@ -1104,16 +1128,29 @@ async def generate_video_post_stream_endpoint(
             if posts.get("blog_post"):
                 yield f"data: {json.dumps({'type': 'blog_post', 'blog_post': posts['blog_post'], 'timestamp': time.time()})}\n\n"
 
-            # Step 4: Return video as base64 for posting
-            video_base64 = base64.b64encode(file_bytes).decode('utf-8')
-            yield f"data: {json.dumps({'type': 'video_ready', 'video_base64': video_base64, 'mime_type': content_type, 'timestamp': time.time()})}\n\n"
+            # Step 4: Store video for posting (avoid sending huge base64 to browser)
+            video_ref = str(uuid.uuid4())
+            processed_videos[video_ref] = {
+                'bytes': file_bytes,
+                'content_type': content_type,
+                'created_at': time.time(),
+                'user_id': user_id
+            }
+            logger.info(f"[VideoPost] Stored video {video_ref} for user {user_id} ({len(file_bytes)} bytes)")
+            yield f"data: {json.dumps({'type': 'video_ready', 'video_ref': video_ref, 'mime_type': content_type, 'size_bytes': len(file_bytes), 'timestamp': time.time()})}\n\n"
 
             # Complete
             yield f"data: {json.dumps({'type': 'complete', 'timestamp': time.time()})}\n\n"
 
         except Exception as e:
-            logger.error(f"[VideoPost] Error for user {user_id}: {e}", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'timestamp': time.time()})}\n\n"
+            # Truncate error message to avoid sending huge binary data
+            error_msg = str(e)[:500] if len(str(e)) > 500 else str(e)
+            # Don't log binary garbage
+            if len(str(e)) > 1000:
+                logger.error(f"[VideoPost] Error for user {user_id}: {type(e).__name__} (message truncated, {len(str(e))} chars)")
+            else:
+                logger.error(f"[VideoPost] Error for user {user_id}: {error_msg}")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -1137,7 +1174,7 @@ async def post_video_endpoint(
     Post video to selected platforms.
 
     Args:
-        video_base64: Base64 encoded video
+        video_ref: Reference to server-stored video
         x_post: Text for X/Twitter post
         linkedin_post: Text for LinkedIn post
         youtube_title: Title for YouTube video
@@ -1145,7 +1182,6 @@ async def post_video_endpoint(
         platforms: List of platforms ['twitter', 'linkedin', 'youtube']
     """
     from agents_lib import post_video_to_platforms
-    import base64
 
     try:
         # Validate platforms
@@ -1154,11 +1190,16 @@ async def post_video_endpoint(
             if platform not in valid_platforms:
                 raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
 
-        # Decode video
-        try:
-            video_bytes = base64.b64decode(request.video_base64)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid video_base64 encoding")
+        # Retrieve video from server storage
+        if request.video_ref not in processed_videos:
+            raise HTTPException(status_code=404, detail="Video not found or expired. Please regenerate.")
+
+        video_data = processed_videos[request.video_ref]
+        if video_data['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+
+        video_bytes = video_data['bytes']
+        logger.info(f"[PostVideo] Retrieved video {request.video_ref} for user {user_id}")
 
         # Post to platforms
         result = post_video_to_platforms(

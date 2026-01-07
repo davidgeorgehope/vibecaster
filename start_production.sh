@@ -1,234 +1,95 @@
 #!/bin/bash
 
 # Vibecaster Production Startup Script
-# This script starts both frontend and backend in production mode
-
-# Don't use set -e as it can cause issues with background processes
-# set -e  # Exit on error
+# Starts frontend (port 3001) and backend (port 8001)
 
 # Colors for output
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Base directory
+# Fixed ports - nginx is configured for these
+FRONTEND_PORT=3001
+BACKEND_PORT=8001
+
+# Directories
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$BASE_DIR/backend"
 FRONTEND_DIR="$BASE_DIR/frontend"
 LOGS_DIR="$BASE_DIR/logs"
 PIDS_DIR="$BASE_DIR/pids"
 
-# Create directories for logs and PIDs
-mkdir -p "$LOGS_DIR"
-mkdir -p "$PIDS_DIR"
+mkdir -p "$LOGS_DIR" "$PIDS_DIR"
 
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   Vibecaster Production Startup        ║${NC}"
-echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
 
-# Helper function to check if a PID belongs to vibecaster (by checking cwd)
+# Helper to check if process belongs to vibecaster
 is_vibecaster_process() {
     local pid=$1
     local proc_cwd=$(readlink -f /proc/$pid/cwd 2>/dev/null)
-    if [[ "$proc_cwd" == "$BASE_DIR"* ]]; then
-        return 0  # true, is vibecaster
-    fi
-    return 1  # false, not vibecaster
+    [[ "$proc_cwd" == "$BASE_DIR"* ]]
 }
 
-# Proactively stop any existing Vibecaster processes
-# This ensures clean startup even if stop script wasn't run or processes became orphaned
-echo -e "${GREEN}[0/5] Cleaning up any existing processes...${NC}"
+# Cleanup existing processes
+echo -e "${GREEN}[1/5] Cleaning up existing processes...${NC}"
 
-# Kill any existing Vibecaster Next.js processes (check by cwd, not grep)
-EXISTING_NEXT=$(ps aux | grep -E "next|next-server" | grep -v grep | awk '{print $2}')
-for pid in $EXISTING_NEXT; do
+for pid in $(ps aux | grep -E "next|next-server" | grep -v grep | awk '{print $2}'); do
     if is_vibecaster_process $pid; then
-        echo -e "   ${YELLOW}Found existing Vibecaster Next.js process (PID: $pid), stopping...${NC}"
         pkill -9 -P $pid 2>/dev/null || true
         kill -9 $pid 2>/dev/null || true
     fi
 done
 
-# Kill any existing uvicorn processes for vibecaster (check by cwd)
-EXISTING_UVICORN=$(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}')
-for pid in $EXISTING_UVICORN; do
+for pid in $(ps aux | grep "uvicorn main:app" | grep -v grep | awk '{print $2}'); do
     if is_vibecaster_process $pid; then
-        echo -e "   ${YELLOW}Found existing Vibecaster uvicorn process (PID: $pid), stopping...${NC}"
         kill -9 $pid 2>/dev/null || true
     fi
 done
 sleep 1
-
-# Clean up stale PID files
 rm -f "$PIDS_DIR/backend.pid" "$PIDS_DIR/frontend.pid" 2>/dev/null
+echo -e "   ✅ Done"
 
-echo -e "   ✅ Cleanup complete"
-
-# ===== BACKEND SETUP =====
-echo -e "${GREEN}[1/4] Setting up Backend...${NC}"
+# Backend setup
+echo -e "${GREEN}[2/5] Setting up Backend...${NC}"
 cd "$BACKEND_DIR"
 
-# Check for .env file
 if [ ! -f ".env" ]; then
-    echo -e "${RED}❌ ERROR: .env file not found in backend/${NC}"
-    echo "   Please create .env from .env.example with your credentials"
+    echo -e "${RED}❌ .env file not found in backend/${NC}"
     exit 1
 fi
 
-# Verify ENVIRONMENT is not set to development in .env
-if grep -q "^ENVIRONMENT=development" .env; then
-    echo -e "${YELLOW}⚠️  WARNING: ENVIRONMENT=development found in .env${NC}"
-    echo "   For production, this should be set to 'production'"
-    read -p "   Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# Setup virtual environment
-# Check if venv exists AND is valid (has activate script)
 if [ ! -f "venv/bin/activate" ]; then
-    if [ -d "venv" ]; then
-        echo "   Removing corrupted virtual environment..."
-        rm -rf venv
-    fi
-
-    echo "   Creating Python virtual environment..."
-    python3 -m venv venv
-
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ Failed to create virtual environment${NC}"
-        echo "   Install python3-venv with: apt-get install python3-venv"
-        exit 1
-    fi
-
-    if [ ! -f "venv/bin/activate" ]; then
-        echo -e "${RED}❌ Virtual environment creation failed${NC}"
-        exit 1
-    fi
+    rm -rf venv 2>/dev/null
+    echo "   Creating virtual environment..."
+    python3 -m venv venv || { echo -e "${RED}❌ Failed to create venv${NC}"; exit 1; }
 fi
 
 source venv/bin/activate
-
-# Install dependencies
-echo "   Installing Python dependencies..."
+echo "   Installing dependencies..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
-
-# Initialize database
 echo "   Initializing database..."
 python3 -c "from database import init_database; init_database()"
 
-# ===== FRONTEND DEPENDENCIES =====
-echo -e "${GREEN}[2/4] Installing Frontend Dependencies...${NC}"
+# Frontend setup
+echo -e "${GREEN}[3/5] Building Frontend...${NC}"
 cd "$FRONTEND_DIR"
 
-# Check if node_modules exists
-if [ ! -d "node_modules" ]; then
-    echo "   Installing Node dependencies..."
-    npm install
-fi
+[ ! -d "node_modules" ] && npm install
 
-# ===== FIND AVAILABLE PORTS =====
-echo -e "${GREEN}[3/5] Checking ports...${NC}"
-
-# Check if nginx reverse proxy is configured
-NGINX_CONFIGURED=false
-if [ -f "/etc/nginx/sites-enabled/vibecaster" ]; then
-    NGINX_CONFIGURED=true
-    echo -e "   ${GREEN}Nginx reverse proxy detected${NC}"
-fi
-
-# Function to find available port (use fuser - more reliable than lsof)
-find_port() {
-    local start_port=$1
-    local max_port=65535
-    for port in $(seq $start_port $max_port); do
-        if ! fuser $port/tcp >/dev/null 2>&1; then
-            echo $port
-            return 0
-        fi
-    done
-    echo "0"
-}
-
-# Function to check if a port is available (use fuser - more reliable than lsof)
-is_port_available() {
-    local port=$1
-    if ! fuser $port/tcp >/dev/null 2>&1; then
-        return 0  # Available
-    else
-        return 1  # In use
-    fi
-}
-
-if [ "$NGINX_CONFIGURED" = true ]; then
-    # Nginx is configured - prefer ports 3000 and 8001, but use alternatives if needed
-    # Try standard ports first (3000/8001 to avoid port 8000 conflicts)
-    if is_port_available 8001 && is_port_available 3000; then
-        BACKEND_PORT=8001
-        FRONTEND_PORT=3000
-        echo -e "   ${GREEN}Using standard ports (3000, 8001)${NC}"
-    else
-        # Find alternative ports
-        echo -e "   ${YELLOW}Standard ports unavailable, finding alternatives...${NC}"
-        BACKEND_PORT=$(find_port 8001)
-        FRONTEND_PORT=$(find_port 3000)
-
-        if [ "$BACKEND_PORT" = "0" ] || [ "$FRONTEND_PORT" = "0" ]; then
-            echo -e "${RED}❌ No available ports found${NC}"
-            exit 1
-        fi
-
-        echo -e "   ${YELLOW}Using alternative ports: $FRONTEND_PORT, $BACKEND_PORT${NC}"
-        echo -e "   ${YELLOW}⚠️  Nginx will be updated to use these ports${NC}"
-    fi
-else
-    # No nginx - find any available ports (start from 3000/8001)
-    echo -e "   ${YELLOW}Finding available ports (no nginx detected)${NC}"
-
-    BACKEND_PORT=$(find_port 8001)
-    FRONTEND_PORT=$(find_port 3000)
-
-    if [ "$BACKEND_PORT" = "0" ]; then
-        echo -e "${RED}❌ No available port found for backend${NC}"
-        exit 1
-    fi
-
-    if [ "$FRONTEND_PORT" = "0" ]; then
-        echo -e "${RED}❌ No available port found for frontend${NC}"
-        exit 1
-    fi
-fi
-
-echo -e "   ✅ Backend will use port: $BACKEND_PORT"
-echo -e "   ✅ Frontend will use port: $FRONTEND_PORT"
-
-# ===== BUILD FRONTEND =====
-echo -e "${GREEN}[4/5] Building Frontend for Production...${NC}"
-cd "$FRONTEND_DIR"
-
-# Clean build cache to prevent chunk loading errors
-echo "   Cleaning build cache..."
 rm -rf .next node_modules/.cache
-
-echo "   Building Next.js application..."
 npm run build
 
-# ===== START BACKEND =====
-echo -e "${GREEN}[5/5] Starting Backend (Production Mode)...${NC}"
+# Start backend
+echo -e "${GREEN}[4/5] Starting Backend on port $BACKEND_PORT...${NC}"
 cd "$BACKEND_DIR"
 source venv/bin/activate
-
-# Set production environment
 export ENVIRONMENT=production
 
-# Start backend with uvicorn (1 worker to preserve in-memory OAuth state)
-# TODO: Use Redis or database for OAuth state storage to enable multiple workers
 nohup uvicorn main:app \
     --host 0.0.0.0 \
     --port $BACKEND_PORT \
@@ -238,198 +99,56 @@ nohup uvicorn main:app \
 
 BACKEND_PID=$!
 echo $BACKEND_PID > "$PIDS_DIR/backend.pid"
-echo -e "   ✅ Backend started (PID: $BACKEND_PID)"
-echo -e "      Logs: $LOGS_DIR/backend.log"
-echo -e "      URL: http://localhost:$BACKEND_PORT"
 
-# Wait for backend to be ready (check port is listening using fuser)
-echo -e "   Waiting for backend to be ready..."
+# Wait for backend
 for i in {1..30}; do
-    if fuser $BACKEND_PORT/tcp >/dev/null 2>&1; then
-        echo -e "   ✅ Backend is listening on port $BACKEND_PORT"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        echo -e "${RED}❌ Backend failed to start within 30 seconds${NC}"
-        cat "$LOGS_DIR/backend.log" | tail -20
-        exit 1
-    fi
+    fuser $BACKEND_PORT/tcp >/dev/null 2>&1 && break
+    [ $i -eq 30 ] && { echo -e "${RED}❌ Backend failed to start${NC}"; tail -20 "$LOGS_DIR/backend.log"; exit 1; }
     sleep 1
 done
+echo -e "   ✅ Backend running (PID: $BACKEND_PID)"
 
-# ===== START FRONTEND =====
-echo -e "${GREEN}[5/5] Starting Frontend (Production Mode)...${NC}"
+# Start frontend
+echo -e "${GREEN}[5/5] Starting Frontend on port $FRONTEND_PORT...${NC}"
 cd "$FRONTEND_DIR"
 
-# Verify no lingering vibecaster Next.js processes on target port (use fuser)
-LINGERING_NEXT_PID=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
-if [ -n "$LINGERING_NEXT_PID" ]; then
-    if is_vibecaster_process $LINGERING_NEXT_PID; then
-        echo -e "${YELLOW}   Found lingering vibecaster process on port $FRONTEND_PORT (PID: $LINGERING_NEXT_PID), cleaning up...${NC}"
-        pkill -9 -P $LINGERING_NEXT_PID 2>/dev/null || true
-        kill -9 $LINGERING_NEXT_PID 2>/dev/null || true
-        sleep 2
-    else
-        echo -e "${RED}❌ Port $FRONTEND_PORT is in use by non-vibecaster process (PID: $LINGERING_NEXT_PID)${NC}"
-        echo -e "   This port was supposed to be available. Something else started using it."
-        echo -e "   Please check what's running on port $FRONTEND_PORT and either stop it or run this script again."
-        fuser -v $FRONTEND_PORT/tcp 2>&1 || ss -tlnp "sport = :$FRONTEND_PORT"
-        exit 1
-    fi
-fi
-
-# Double-check port is free right before starting
-if ! is_port_available $FRONTEND_PORT; then
-    echo -e "${RED}❌ Port $FRONTEND_PORT is not available!${NC}"
-    echo -e "   Checking what's using it:"
-    fuser -v $FRONTEND_PORT/tcp 2>&1 || ss -tlnp "sport = :$FRONTEND_PORT"
-    exit 1
-fi
-
-# Give the system a moment to ensure port is fully released
-sleep 1
-
-# Start Next.js in production mode with custom port
-# Run next directly (not through npm) to avoid orphaned process issues
 nohup node_modules/.bin/next start -p $FRONTEND_PORT -H 0.0.0.0 > "$LOGS_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 disown $FRONTEND_PID 2>/dev/null || true
 echo $FRONTEND_PID > "$PIDS_DIR/frontend.pid"
-echo -e "   ✅ Frontend started (PID: $FRONTEND_PID)"
-echo -e "      Logs: $LOGS_DIR/frontend.log"
-echo -e "      URL: http://localhost:$FRONTEND_PORT"
 
-# Wait for frontend to be ready (use curl to check HTTP response)
-echo -e "   Waiting for frontend to be ready..."
+# Wait for frontend
 for i in {1..45}; do
-    if curl -s -o /dev/null -w "" http://127.0.0.1:$FRONTEND_PORT/ 2>/dev/null; then
-        echo -e "   ✅ Frontend is responding on port $FRONTEND_PORT"
-        break
-    fi
-    if [ $i -eq 45 ]; then
-        echo -e "${RED}❌ Frontend failed to start within 45 seconds${NC}"
-        cat "$LOGS_DIR/frontend.log" | tail -20
-        exit 1
-    fi
+    curl -s -o /dev/null http://127.0.0.1:$FRONTEND_PORT/ 2>/dev/null && break
+    [ $i -eq 45 ] && { echo -e "${RED}❌ Frontend failed to start${NC}"; tail -20 "$LOGS_DIR/frontend.log"; exit 1; }
     sleep 1
 done
+echo -e "   ✅ Frontend running (PID: $FRONTEND_PID)"
 
-# Give frontend a moment to fully initialize
-sleep 2
-
-# ===== UPDATE NGINX TO MATCH ACTUAL PORTS =====
-if [ "$NGINX_CONFIGURED" = true ]; then
-    echo -e "${GREEN}Updating Nginx configuration for ports $FRONTEND_PORT and $BACKEND_PORT...${NC}"
-
-    if [ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null; then
-        # Update nginx config - handle both localhost and 127.0.0.1 formats
-        # Use regex to match any port number after the host
-        sudo sed -i -E "s|http://127\.0\.0\.1:[0-9]+(/\|;)|http://127.0.0.1:$FRONTEND_PORT\1|g" /etc/nginx/sites-available/vibecaster
-        sudo sed -i -E "s|http://localhost:[0-9]+(/\|;)|http://localhost:$FRONTEND_PORT\1|g" /etc/nginx/sites-available/vibecaster
-
-        # Now update backend-specific locations (api, auth, docs, openapi)
-        # These need to point to backend port, so we fix them after the blanket frontend update
-        sudo sed -i "/location \/api/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
-        sudo sed -i "/location \/auth/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
-        sudo sed -i "/location \/docs/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
-        sudo sed -i "/location \/openapi/,/}/ s|http://127\.0\.0\.1:[0-9]+|http://127.0.0.1:$BACKEND_PORT|g" /etc/nginx/sites-available/vibecaster
-
-        # Verify the changes were applied
-        NGINX_FRONTEND_PORT=$(grep -E "location / " -A5 /etc/nginx/sites-available/vibecaster | grep proxy_pass | grep -oE '[0-9]+' | tail -1)
-        NGINX_BACKEND_PORT=$(grep -E "location /api" -A5 /etc/nginx/sites-available/vibecaster | grep proxy_pass | grep -oE '[0-9]+' | tail -1)
-
-        if [ "$NGINX_FRONTEND_PORT" != "$FRONTEND_PORT" ] || [ "$NGINX_BACKEND_PORT" != "$BACKEND_PORT" ]; then
-            echo -e "${RED}   ❌ Nginx config update failed!${NC}"
-            echo -e "   Expected frontend:$FRONTEND_PORT backend:$BACKEND_PORT"
-            echo -e "   Got frontend:$NGINX_FRONTEND_PORT backend:$NGINX_BACKEND_PORT"
-            echo -e "   Please manually update /etc/nginx/sites-available/vibecaster"
-        else
-            # Test and reload nginx
-            if sudo nginx -t >/dev/null 2>&1; then
-                sudo systemctl reload nginx
-                echo -e "   ✅ Nginx configuration updated and reloaded"
-                echo -e "   Frontend -> 127.0.0.1:$FRONTEND_PORT"
-                echo -e "   Backend  -> 127.0.0.1:$BACKEND_PORT"
-            else
-                echo -e "${YELLOW}   ⚠️  Nginx config test failed${NC}"
-                sudo nginx -t
-            fi
-        fi
-    else
-        echo -e "${YELLOW}   ⚠️  Cannot update nginx (no sudo access)${NC}"
-        echo -e "   Manually update /etc/nginx/sites-available/vibecaster:"
-        echo -e "   - Change frontend port to $FRONTEND_PORT"
-        echo -e "   - Change backend port to $BACKEND_PORT"
-        echo -e "   Then: sudo nginx -t && sudo systemctl reload nginx"
-    fi
-fi
-
-# Save the ports we used so stop script knows what to kill
+# Save ports for stop script
 echo "$FRONTEND_PORT" > "$PIDS_DIR/frontend.port"
 echo "$BACKEND_PORT" > "$PIDS_DIR/backend.port"
 
-# Verify services are responding to HTTP requests
-echo -e "${GREEN}Verifying services with health checks...${NC}"
-
-# Check backend responds
+# Verify
+echo -e "${GREEN}Verifying...${NC}"
 BACKEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$BACKEND_PORT/docs 2>/dev/null || echo "000")
-if [ "$BACKEND_STATUS" = "200" ]; then
-    echo -e "   ✅ Backend is responding (HTTP $BACKEND_STATUS)"
-else
-    echo -e "${RED}❌ Backend not responding (HTTP $BACKEND_STATUS)${NC}"
-    echo "   Check logs: tail -f $LOGS_DIR/backend.log"
-    exit 1
-fi
-
-# Check frontend responds
 FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:$FRONTEND_PORT/ 2>/dev/null || echo "000")
-if [ "$FRONTEND_STATUS" = "200" ]; then
-    echo -e "   ✅ Frontend is responding (HTTP $FRONTEND_STATUS)"
-else
-    echo -e "${RED}❌ Frontend not responding (HTTP $FRONTEND_STATUS)${NC}"
-    echo "   Check logs: tail -f $LOGS_DIR/frontend.log"
-    exit 1
-fi
 
-# Update PID files with actual process IDs (in case they differ from nohup PID)
-ACTUAL_BACKEND_PID=$(fuser $BACKEND_PORT/tcp 2>/dev/null | awk '{print $1}')
-ACTUAL_FRONTEND_PID=$(fuser $FRONTEND_PORT/tcp 2>/dev/null | awk '{print $1}')
-if [ -n "$ACTUAL_BACKEND_PID" ]; then
-    echo $ACTUAL_BACKEND_PID > "$PIDS_DIR/backend.pid"
-fi
-if [ -n "$ACTUAL_FRONTEND_PID" ]; then
-    echo $ACTUAL_FRONTEND_PID > "$PIDS_DIR/frontend.pid"
-fi
+[ "$BACKEND_STATUS" != "200" ] && { echo -e "${RED}❌ Backend not responding${NC}"; exit 1; }
+[ "$FRONTEND_STATUS" != "200" ] && { echo -e "${RED}❌ Frontend not responding${NC}"; exit 1; }
 
-# ===== SUCCESS =====
+echo -e "   ✅ All services healthy"
+
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   🚀 Vibecaster is now running!       ║${NC}"
+echo -e "${GREEN}║   🚀 Vibecaster is running!            ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
 echo ""
-
-if [ "$NGINX_CONFIGURED" = true ]; then
-    # Get the domain from nginx config
-    NGINX_DOMAIN=$(grep -E "^\s*server_name" /etc/nginx/sites-available/vibecaster | head -1 | awk '{print $2}' | sed 's/;//')
-    echo -e "📊 ${GREEN}Access your site at:${NC}"
-    echo -e "   ${GREEN}http://$NGINX_DOMAIN${NC}"
-    echo ""
-    echo -e "📡 ${GREEN}Internal services (localhost only):${NC}"
-    echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
-    echo -e "   Backend:  http://localhost:$BACKEND_PORT"
-    echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
-else
-    echo -e "📊 ${GREEN}Status:${NC}"
-    echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
-    echo -e "   Backend:  http://localhost:$BACKEND_PORT"
-    echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
-fi
-
+echo -e "   Site:     http://vibecaster.ai"
+echo -e "   Frontend: http://localhost:$FRONTEND_PORT"
+echo -e "   Backend:  http://localhost:$BACKEND_PORT"
+echo -e "   Docs:     http://localhost:$BACKEND_PORT/docs"
 echo ""
-echo -e "📝 ${GREEN}Logs:${NC}"
-echo -e "   Backend:  tail -f $LOGS_DIR/backend.log"
-echo -e "   Frontend: tail -f $LOGS_DIR/frontend.log"
-echo ""
-echo -e "🛑 ${GREEN}To stop:${NC}"
-echo -e "   ./stop_production.sh"
+echo -e "   Logs:     tail -f $LOGS_DIR/backend.log"
+echo -e "   Stop:     ./stop_production.sh"
 echo ""

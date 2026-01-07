@@ -34,6 +34,85 @@ SUPPORTED_MIME_TYPES = SUPPORTED_AUDIO | SUPPORTED_VIDEO
 INLINE_SIZE_LIMIT = 20 * 1024 * 1024
 
 
+def upload_to_gemini(file_bytes: bytes, filename: str, mime_type: str, on_progress=None):
+    """
+    Upload file to Gemini for processing.
+
+    For small files (<20MB): Returns Part.from_bytes() directly
+    For large files: Writes to temp file, uploads via Files API, waits for ACTIVE state
+
+    Args:
+        file_bytes: Raw file bytes
+        filename: Original filename (for extension/display)
+        mime_type: MIME type of the file
+        on_progress: Optional callback(message) for progress updates
+
+    Returns:
+        tuple: (media_part, uploaded_file_or_none)
+        - media_part: The Part object to use in generate_content
+        - uploaded_file: The File object if uploaded (for cleanup), or None
+    """
+    import tempfile
+
+    if len(file_bytes) <= INLINE_SIZE_LIMIT:
+        # Small file - use inline bytes
+        logger.info(f"[Gemini] Using inline bytes ({len(file_bytes)} bytes)")
+        return types.Part.from_bytes(data=file_bytes, mime_type=mime_type), None
+
+    # Large file - write to temp file and upload via Files API
+    logger.info(f"[Gemini] Using Files API for large file ({len(file_bytes)} bytes)")
+
+    if on_progress:
+        on_progress("Uploading to Gemini...")
+
+    ext = os.path.splitext(filename)[1] or '.mp4'
+    temp_file_path = None
+
+    try:
+        # Write to temp file
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(file_bytes)
+            temp_file_path = tmp.name
+
+        # Upload to Gemini
+        uploaded_file = client.files.upload(
+            file=temp_file_path,
+            config=types.UploadFileConfig(
+                display_name=filename,
+                mime_type=mime_type
+            )
+        )
+
+    finally:
+        # Clean up temp file immediately after upload
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
+
+    # Wait for file to become ACTIVE
+    logger.info(f"[Gemini] Waiting for file {uploaded_file.name} to become ACTIVE...")
+    while uploaded_file.state.name == "PROCESSING":
+        if on_progress:
+            on_progress("Processing file on Gemini...")
+        time.sleep(5)
+        uploaded_file = client.files.get(name=uploaded_file.name)
+
+    if uploaded_file.state.name != "ACTIVE":
+        raise Exception(f"File processing failed: {uploaded_file.state.name}")
+
+    logger.info(f"[Gemini] File {uploaded_file.name} is now ACTIVE")
+    return uploaded_file, uploaded_file
+
+
+def cleanup_gemini_file(uploaded_file):
+    """Clean up an uploaded file from Gemini."""
+    if uploaded_file:
+        try:
+            client.files.delete(name=uploaded_file.name)
+            logger.info(f"[Gemini] Deleted file: {uploaded_file.name}")
+        except Exception as e:
+            logger.warning(f"[Gemini] Failed to delete file: {e}")
+
+
 def emit_event(event_type: str, **kwargs) -> str:
     """Create a JSON event string for SSE streaming."""
     event = {
@@ -78,24 +157,8 @@ def transcribe_media_stream(
         # Step 1: Upload/prepare file for Gemini
         yield emit_event("progress", step="uploading", message="Preparing file...")
 
-        if len(file_bytes) > INLINE_SIZE_LIMIT:
-            # Use Files API for large files
-            logger.info(f"[Transcribe] Using Files API for large file ({len(file_bytes)} bytes)")
-            yield emit_event("progress", step="uploading", message="Uploading to Gemini...")
-
-            uploaded_file = client.files.upload(
-                file=file_bytes,
-                config=types.UploadFileConfig(
-                    display_name=filename,
-                    mime_type=mime_type
-                )
-            )
-            media_part = uploaded_file
-            logger.info(f"[Transcribe] File uploaded: {uploaded_file.name}")
-        else:
-            # Use inline bytes for smaller files
-            logger.info(f"[Transcribe] Using inline bytes ({len(file_bytes)} bytes)")
-            media_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        # Use shared upload function (handles temp file, wait for ACTIVE, etc.)
+        media_part, uploaded_file = upload_to_gemini(file_bytes, filename, mime_type)
 
         # Step 2: Transcribe
         yield emit_event("progress", step="transcribing", message="Transcribing audio...")
@@ -155,14 +218,14 @@ def transcribe_media_stream(
         logger.info(f"[Transcribe] User {user_id} transcription complete")
 
     except Exception as e:
-        logger.error(f"[Transcribe] Error for user {user_id}: {e}", exc_info=True)
-        yield emit_event("error", message=str(e))
+        # Truncate error to avoid logging/sending huge binary data
+        error_msg = str(e)[:500] if len(str(e)) > 500 else str(e)
+        if len(str(e)) > 1000:
+            logger.error(f"[Transcribe] Error for user {user_id}: {type(e).__name__} (message truncated, {len(str(e))} chars)")
+        else:
+            logger.error(f"[Transcribe] Error for user {user_id}: {error_msg}")
+        yield emit_event("error", message=error_msg)
 
     finally:
         # Clean up uploaded file from Gemini if we used Files API
-        if uploaded_file:
-            try:
-                client.files.delete(name=uploaded_file.name)
-                logger.info(f"[Transcribe] Deleted uploaded file: {uploaded_file.name}")
-            except Exception as e:
-                logger.warning(f"[Transcribe] Failed to delete uploaded file: {e}")
+        cleanup_gemini_file(uploaded_file)

@@ -26,7 +26,7 @@ interface GeneratedContent {
   youtube_title: string | null;
   youtube_description: string | null;
   blog_post: string | null;
-  video_base64: string | null;
+  video_ref: string | null;  // Server-side reference (no more huge base64)
   mime_type: string | null;
 }
 
@@ -42,7 +42,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     youtube_title: null,
     youtube_description: null,
     blog_post: null,
-    video_base64: null,
+    video_ref: null,
     mime_type: null
   });
   const [isPosting, setIsPosting] = useState<{ twitter: boolean; linkedin: boolean; youtube: boolean }>({
@@ -87,7 +87,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       youtube_title: null,
       youtube_description: null,
       blog_post: null,
-      video_base64: null,
+      video_ref: null,
       mime_type: null
     });
     setProgress('idle');
@@ -195,7 +195,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       youtube_title: null,
       youtube_description: null,
       blog_post: null,
-      video_base64: null,
+      video_ref: null,
       mime_type: null
     });
     setPosted({ twitter: false, linkedin: false, youtube: false });
@@ -294,7 +294,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                   case 'video_ready':
                     setContent(prev => ({
                       ...prev,
-                      video_base64: data.video_base64,
+                      video_ref: data.video_ref,
                       mime_type: data.mime_type
                     }));
                     break;
@@ -325,7 +325,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   };
 
   const handlePost = async (platform: 'twitter' | 'linkedin' | 'youtube') => {
-    if (!token || !content.video_base64) return;
+    if (!token || !content.video_ref) return;
 
     setIsPosting(prev => ({ ...prev, [platform]: true }));
 
@@ -337,7 +337,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          video_base64: content.video_base64,
+          video_ref: content.video_ref,
           x_post: content.x_post,
           linkedin_post: content.linkedin_post,
           youtube_title: content.youtube_title,
@@ -383,7 +383,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       youtube_title: null,
       youtube_description: null,
       blog_post: null,
-      video_base64: null,
+      video_ref: null,
       mime_type: null
     });
     setProgress('idle');
@@ -605,11 +605,11 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                 <p className="text-gray-200 text-sm whitespace-pre-wrap mb-3">{content.x_post}</p>
                 <button
                   onClick={() => handlePost('twitter')}
-                  disabled={!connections.twitter || isPosting.twitter || posted.twitter || !content.video_base64}
+                  disabled={!connections.twitter || isPosting.twitter || posted.twitter || !content.video_ref}
                   className={`w-full py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
                     posted.twitter
                       ? 'bg-green-600 text-white cursor-default'
-                      : connections.twitter && content.video_base64
+                      : connections.twitter && content.video_ref
                       ? 'bg-blue-600 hover:bg-blue-700 text-white'
                       : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                   }`}
@@ -656,11 +656,11 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                 </p>
                 <button
                   onClick={() => handlePost('linkedin')}
-                  disabled={!connections.linkedin || isPosting.linkedin || posted.linkedin || !content.video_base64}
+                  disabled={!connections.linkedin || isPosting.linkedin || posted.linkedin || !content.video_ref}
                   className={`w-full py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
                     posted.linkedin
                       ? 'bg-green-600 text-white cursor-default'
-                      : connections.linkedin && content.video_base64
+                      : connections.linkedin && content.video_ref
                       ? 'bg-blue-700 hover:bg-blue-600 text-white'
                       : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                   }`}
@@ -717,11 +717,11 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                 </div>
                 <button
                   onClick={() => handlePost('youtube')}
-                  disabled={!connections.youtube || isPosting.youtube || posted.youtube || !content.video_base64}
+                  disabled={!connections.youtube || isPosting.youtube || posted.youtube || !content.video_ref}
                   className={`w-full py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
                     posted.youtube
                       ? 'bg-green-600 text-white cursor-default'
-                      : connections.youtube && content.video_base64
+                      : connections.youtube && content.video_ref
                       ? 'bg-red-600 hover:bg-red-700 text-white'
                       : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                   }`}

@@ -17,7 +17,8 @@ const ACCEPTED_TYPES = [
   'video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'
 ];
 
-const MAX_SIZE_MB = 200;
+const MAX_SIZE_MB = 500;
+const CHUNK_SIZE_MB = 50;
 
 export default function TranscribeBox({ token, showNotification }: TranscribeBoxProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -30,7 +31,78 @@ export default function TranscribeBox({ token, showNotification }: TranscribeBox
   const [activeTab, setActiveTab] = useState<OutputTab>('transcript');
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Chunked upload for large files (>50MB)
+  const uploadFileChunked = async (file: File): Promise<string> => {
+    const chunkSize = CHUNK_SIZE_MB * 1024 * 1024;
+    const totalChunks = Math.ceil(file.size / chunkSize);
+
+    // Step 1: Initialize upload
+    const initResponse = await fetch('/api/upload/init', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filename: file.name,
+        content_type: file.type,
+        total_size: file.size
+      })
+    });
+
+    const initData = await initResponse.json();
+    if (!initResponse.ok) {
+      throw new Error(initData.detail || 'Failed to initialize upload');
+    }
+
+    const upload_id = initData.upload_id;
+
+    // Step 2: Upload chunks
+    for (let i = 0; i < totalChunks; i++) {
+      setUploadProgress({ current: i + 1, total: totalChunks });
+      setStatusMessage(`Uploading chunk ${i + 1} of ${totalChunks}...`);
+
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+
+      const chunkSlice = file.slice(start, end);
+      const arrayBuffer = await chunkSlice.arrayBuffer();
+      const chunkBlob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+
+      const formData = new FormData();
+      formData.append('chunk', chunkBlob, `chunk_${i}.bin`);
+      formData.append('index', String(i));
+
+      const chunkResponse = await fetch(`/api/upload/chunk/${encodeURIComponent(upload_id)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+
+      if (!chunkResponse.ok) {
+        const data = await chunkResponse.json();
+        throw new Error(data.detail || `Failed to upload chunk ${i + 1}`);
+      }
+    }
+
+    // Step 3: Complete upload
+    setStatusMessage('Finalizing upload...');
+    const completeResponse = await fetch(`/api/upload/complete/${upload_id}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!completeResponse.ok) {
+      const data = await completeResponse.json();
+      throw new Error(data.detail || 'Failed to complete upload');
+    }
+
+    setUploadProgress(null);
+    return upload_id;
+  };
 
   const validateFile = (file: File): string | null => {
     if (!ACCEPTED_TYPES.includes(file.type)) {
@@ -84,18 +156,36 @@ export default function TranscribeBox({ token, showNotification }: TranscribeBox
     setBlogPost('');
     setProgress('uploading');
     setStatusMessage('Uploading file...');
+    setUploadProgress(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+      let response: Response;
+      const chunkThreshold = CHUNK_SIZE_MB * 1024 * 1024;
 
-      const response = await fetch('/api/transcribe-stream', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
+      if (selectedFile.size > chunkThreshold) {
+        // Use chunked upload for large files
+        const uploadId = await uploadFileChunked(selectedFile);
+
+        setStatusMessage('Processing file...');
+        const formData = new FormData();
+        formData.append('upload_id', uploadId);
+
+        response = await fetch('/api/transcribe-stream', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+      } else {
+        // Direct upload for small files
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        response = await fetch('/api/transcribe-stream', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+      }
 
       if (!response.ok) {
         const data = await response.json();
@@ -307,7 +397,7 @@ export default function TranscribeBox({ token, showNotification }: TranscribeBox
 
         {/* Progress Steps */}
         {isProcessing && (
-          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg">
+          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg space-y-3">
             <div className="flex items-center justify-between">
               {progressSteps.map((step, index) => {
                 const status = getStepStatus(step.key);
@@ -336,6 +426,25 @@ export default function TranscribeBox({ token, showNotification }: TranscribeBox
                 );
               })}
             </div>
+
+            {/* Chunked Upload Progress Bar */}
+            {uploadProgress && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Uploading large file...</span>
+                  <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-500 text-center">
+                  Chunk {uploadProgress.current} of {uploadProgress.total} ({CHUNK_SIZE_MB}MB each)
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
