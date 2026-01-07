@@ -752,25 +752,32 @@ async def upload_chunk_endpoint(
     """
     Upload a single chunk of a file.
     """
-    # Verify upload exists and belongs to user
-    if upload_id not in pending_uploads:
-        raise HTTPException(status_code=404, detail="Upload not found or expired")
+    try:
+        # Verify upload exists and belongs to user
+        if upload_id not in pending_uploads:
+            logger.error(f"[ChunkedUpload] Upload {upload_id} not found. Active uploads: {list(pending_uploads.keys())}")
+            raise HTTPException(status_code=404, detail="Upload not found or expired")
 
-    upload_data = pending_uploads[upload_id]
-    if upload_data['user_id'] != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized")
+        upload_data = pending_uploads[upload_id]
+        if upload_data['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
 
-    # Read chunk data
-    chunk_bytes = await chunk.read()
+        # Read chunk data
+        chunk_bytes = await chunk.read()
 
-    # Validate chunk size (last chunk may be smaller)
-    if len(chunk_bytes) > CHUNK_SIZE:
-        raise HTTPException(status_code=400, detail=f"Chunk too large. Max: {CHUNK_SIZE // (1024*1024)}MB")
+        # Validate chunk size (last chunk may be smaller)
+        if len(chunk_bytes) > CHUNK_SIZE:
+            raise HTTPException(status_code=400, detail=f"Chunk too large. Max: {CHUNK_SIZE // (1024*1024)}MB")
 
-    # Store chunk
-    upload_data['chunks'][index] = chunk_bytes
+        # Store chunk
+        upload_data['chunks'][index] = chunk_bytes
 
-    logger.info(f"[ChunkedUpload] Upload {upload_id}: received chunk {index} ({len(chunk_bytes)} bytes)")
+        logger.info(f"[ChunkedUpload] Upload {upload_id}: received chunk {index} ({len(chunk_bytes)} bytes)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ChunkedUpload] Error processing chunk {index} for {upload_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         'success': True,

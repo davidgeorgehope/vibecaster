@@ -120,12 +120,15 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       })
     });
 
+    const initData = await initResponse.json();
     if (!initResponse.ok) {
-      const data = await initResponse.json();
-      throw new Error(data.detail || 'Failed to initialize upload');
+      throw new Error(initData.detail || 'Failed to initialize upload');
     }
 
-    const { upload_id } = await initResponse.json();
+    const upload_id = initData.upload_id;
+    if (!upload_id || typeof upload_id !== 'string') {
+      throw new Error('Invalid upload_id received from server');
+    }
 
     // Step 2: Upload chunks
     for (let i = 0; i < totalChunks; i++) {
@@ -134,13 +137,18 @@ export default function VideoPostBox({ token, connections, showNotification }: V
 
       const start = i * chunkSize;
       const end = Math.min(start + chunkSize, file.size);
-      const chunk = file.slice(start, end);
+
+      // Read chunk as ArrayBuffer first for better browser compatibility
+      const chunkSlice = file.slice(start, end);
+      const arrayBuffer = await chunkSlice.arrayBuffer();
+      const chunkBlob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
 
       const formData = new FormData();
-      formData.append('chunk', chunk);
-      formData.append('index', i.toString());
+      formData.append('chunk', chunkBlob, `chunk_${i}.bin`);
+      formData.append('index', String(i));
 
-      const chunkResponse = await fetch(`/api/upload/chunk/${upload_id}`, {
+      const chunkUrl = `/api/upload/chunk/${encodeURIComponent(upload_id)}`;
+      const chunkResponse = await fetch(chunkUrl, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
