@@ -1,7 +1,9 @@
 import os
 import asyncio
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+import uuid
+import time as time_module
+from typing import Optional, Dict
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -294,6 +296,15 @@ async def startup_event():
         replace_existing=True
     )
     logger.info("Cleanup job scheduled (every hour)")
+
+    # Add chunked upload cleanup job (runs every 5 minutes)
+    scheduler.add_job(
+        cleanup_stale_uploads,
+        trigger=IntervalTrigger(minutes=5),
+        id="upload_cleanup_job",
+        replace_existing=True
+    )
+    logger.info("Upload cleanup job scheduled (every 5 minutes)")
 
     # Run initial cleanup on startup
     run_cleanup_job()
@@ -652,7 +663,176 @@ async def chat_generate_media(request: GenerateMediaRequest, user_id: int = Depe
 
 # ===== TRANSCRIPTION =====
 
-MAX_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500MB (chunked uploads bypass Cloudflare limits)
+CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks
+UPLOAD_EXPIRY_SECONDS = 30 * 60  # 30 minutes
+
+# Store partial uploads: {upload_id: {chunks: {index: bytes}, filename, content_type, total_size, created_at}}
+pending_uploads: Dict[str, dict] = {}
+
+
+class UploadInitRequest(BaseModel):
+    filename: str
+    content_type: str
+    total_size: int
+
+
+def cleanup_stale_uploads():
+    """Remove uploads older than UPLOAD_EXPIRY_SECONDS."""
+    now = time_module.time()
+    expired = [
+        upload_id for upload_id, data in pending_uploads.items()
+        if now - data.get('created_at', 0) > UPLOAD_EXPIRY_SECONDS
+    ]
+    for upload_id in expired:
+        del pending_uploads[upload_id]
+        logger.info(f"[ChunkedUpload] Cleaned up expired upload: {upload_id}")
+    return len(expired)
+
+
+@app.post("/api/upload/init")
+async def upload_init_endpoint(
+    request: UploadInitRequest,
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Initialize a chunked upload session.
+    Returns an upload_id to use for subsequent chunk uploads.
+    """
+    # Validate content type
+    video_types = {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}
+    if request.content_type not in video_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only video files allowed. Supported: mp4, webm, mov. Got: {request.content_type}"
+        )
+
+    # Validate total size
+    if request.total_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+        )
+
+    if request.total_size == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Generate upload ID
+    upload_id = str(uuid.uuid4())
+
+    # Store upload metadata
+    pending_uploads[upload_id] = {
+        'user_id': user_id,
+        'filename': request.filename,
+        'content_type': request.content_type,
+        'total_size': request.total_size,
+        'chunks': {},
+        'created_at': time_module.time()
+    }
+
+    logger.info(f"[ChunkedUpload] User {user_id} initiated upload {upload_id}: {request.filename} ({request.total_size} bytes)")
+
+    # Clean up old uploads periodically
+    cleanup_stale_uploads()
+
+    return {
+        'upload_id': upload_id,
+        'chunk_size': CHUNK_SIZE,
+        'total_chunks': (request.total_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    }
+
+
+@app.post("/api/upload/chunk/{upload_id}")
+async def upload_chunk_endpoint(
+    upload_id: str,
+    chunk: UploadFile = File(...),
+    index: int = Form(...),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Upload a single chunk of a file.
+    """
+    # Verify upload exists and belongs to user
+    if upload_id not in pending_uploads:
+        raise HTTPException(status_code=404, detail="Upload not found or expired")
+
+    upload_data = pending_uploads[upload_id]
+    if upload_data['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    # Read chunk data
+    chunk_bytes = await chunk.read()
+
+    # Validate chunk size (last chunk may be smaller)
+    if len(chunk_bytes) > CHUNK_SIZE:
+        raise HTTPException(status_code=400, detail=f"Chunk too large. Max: {CHUNK_SIZE // (1024*1024)}MB")
+
+    # Store chunk
+    upload_data['chunks'][index] = chunk_bytes
+
+    logger.info(f"[ChunkedUpload] Upload {upload_id}: received chunk {index} ({len(chunk_bytes)} bytes)")
+
+    return {
+        'success': True,
+        'chunk_index': index,
+        'chunks_received': len(upload_data['chunks'])
+    }
+
+
+@app.post("/api/upload/complete/{upload_id}")
+async def upload_complete_endpoint(
+    upload_id: str,
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Complete a chunked upload by assembling all chunks.
+    Returns the upload_id which can be used with generate-video-post-stream.
+    """
+    # Verify upload exists and belongs to user
+    if upload_id not in pending_uploads:
+        raise HTTPException(status_code=404, detail="Upload not found or expired")
+
+    upload_data = pending_uploads[upload_id]
+    if upload_data['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    # Calculate expected chunks
+    total_size = upload_data['total_size']
+    expected_chunks = (total_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    received_chunks = len(upload_data['chunks'])
+
+    if received_chunks != expected_chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing chunks. Expected {expected_chunks}, got {received_chunks}"
+        )
+
+    # Assemble file from chunks (in order)
+    file_bytes = b''
+    for i in range(expected_chunks):
+        if i not in upload_data['chunks']:
+            raise HTTPException(status_code=400, detail=f"Missing chunk {i}")
+        file_bytes += upload_data['chunks'][i]
+
+    # Validate assembled size
+    if len(file_bytes) != total_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Size mismatch. Expected {total_size}, got {len(file_bytes)}"
+        )
+
+    # Store assembled bytes (clear individual chunks to save memory)
+    upload_data['chunks'] = {}
+    upload_data['file_bytes'] = file_bytes
+    upload_data['assembled_at'] = time_module.time()
+
+    logger.info(f"[ChunkedUpload] Upload {upload_id} complete: {len(file_bytes)} bytes assembled")
+
+    return {
+        'success': True,
+        'upload_id': upload_id,
+        'total_size': len(file_bytes)
+    }
 
 
 @app.post("/api/transcribe-stream")
@@ -727,7 +907,7 @@ def generate_video_posts_from_transcript(transcript: str, user_id: int) -> dict:
     persona = campaign.get("refined_persona", "") if campaign else ""
 
     # Generate all posts in one call for efficiency
-    prompt = f"""Based on this video transcript, generate promotional posts for social media.
+    prompt = f"""Based on this video transcript, generate promotional posts for social media and a blog post.
 
 TRANSCRIPT:
 {transcript[:8000]}  # Limit transcript length
@@ -739,8 +919,14 @@ Generate the following (output as JSON):
 2. linkedin_post: A professional LinkedIn post promoting this video (3-5 paragraphs, include key insights)
 3. youtube_title: An SEO-friendly title for this video (max 100 chars, compelling)
 4. youtube_description: A YouTube video description (2-3 paragraphs, include key topics, timestamps if applicable)
+5. blog_post: A full blog post (800-1200 words) in markdown format that:
+   - Has an engaging title as H1 (# Title)
+   - Opens with a hook paragraph
+   - Includes "[VIDEO_EMBED]" placeholder on its own line where the video should be embedded (after the intro)
+   - Expands on key points from the transcript with subheadings (## Subheading)
+   - Ends with a call-to-action
 
-Output ONLY valid JSON with these four fields. No other text."""
+Output ONLY valid JSON with these five fields. No other text."""
 
     try:
         response = client.models.generate_content(
@@ -759,17 +945,23 @@ Output ONLY valid JSON with these four fields. No other text."""
             "x_post": transcript[:250] + "...",
             "linkedin_post": transcript[:1000],
             "youtube_title": "Video",
-            "youtube_description": transcript[:500]
+            "youtube_description": transcript[:500],
+            "blog_post": f"# Video Summary\n\n[VIDEO_EMBED]\n\n{transcript[:2000]}"
         }
 
 
 @app.post("/api/generate-video-post-stream")
 async def generate_video_post_stream_endpoint(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
     user_id: int = Depends(get_current_user_id)
 ):
     """
     Stream video transcription and promotional post generation.
+
+    Accepts either:
+    - file: Direct file upload (for small files)
+    - upload_id: Reference to a chunked upload (for large files up to 500MB)
 
     Flow:
     1. Transcribe video using Gemini
@@ -782,29 +974,54 @@ async def generate_video_post_stream_endpoint(
     import time
     import base64
 
-    # Validate file type - only video
-    content_type = file.content_type or ""
     video_types = {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}
-    if content_type not in video_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Only video files allowed. Supported: mp4, webm, mov. Got: {content_type}"
-        )
 
-    # Read file into memory
-    file_bytes = await file.read()
+    # Get file bytes from either direct upload or chunked upload
+    if upload_id:
+        # Retrieve from chunked upload
+        if upload_id not in pending_uploads:
+            raise HTTPException(status_code=404, detail="Upload not found or expired")
 
-    # Validate file size (200MB max)
-    if len(file_bytes) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
-        )
+        upload_data = pending_uploads[upload_id]
+        if upload_data['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
 
-    if len(file_bytes) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
+        if 'file_bytes' not in upload_data:
+            raise HTTPException(status_code=400, detail="Upload not complete. Call /api/upload/complete first")
 
-    logger.info(f"[VideoPost] User {user_id} uploading {file.filename} ({len(file_bytes)} bytes)")
+        file_bytes = upload_data['file_bytes']
+        content_type = upload_data['content_type']
+        filename = upload_data['filename']
+
+        # Clean up the pending upload after retrieving
+        del pending_uploads[upload_id]
+        logger.info(f"[VideoPost] User {user_id} processing chunked upload {upload_id}: {filename} ({len(file_bytes)} bytes)")
+
+    elif file:
+        # Direct file upload
+        content_type = file.content_type or ""
+        if content_type not in video_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only video files allowed. Supported: mp4, webm, mov. Got: {content_type}"
+            )
+
+        file_bytes = await file.read()
+        filename = file.filename
+
+        if len(file_bytes) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+            )
+
+        if len(file_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        logger.info(f"[VideoPost] User {user_id} uploading {filename} ({len(file_bytes)} bytes)")
+
+    else:
+        raise HTTPException(status_code=400, detail="Either file or upload_id is required")
 
     def generate():
         transcript = None
@@ -830,7 +1047,7 @@ async def generate_video_post_stream_endpoint(
                     uploaded_file = client.files.upload(
                         file=file_bytes,
                         config=types.UploadFileConfig(
-                            display_name=file.filename,
+                            display_name=filename,
                             mime_type=content_type
                         )
                     )
@@ -875,6 +1092,10 @@ async def generate_video_post_stream_endpoint(
             # Yield YouTube title/description
             if posts.get("youtube_title"):
                 yield f"data: {json.dumps({'type': 'youtube', 'title': posts['youtube_title'], 'description': posts.get('youtube_description', ''), 'timestamp': time.time()})}\n\n"
+
+            # Yield blog post
+            if posts.get("blog_post"):
+                yield f"data: {json.dumps({'type': 'blog_post', 'blog_post': posts['blog_post'], 'timestamp': time.time()})}\n\n"
 
             # Step 4: Return video as base64 for posting
             video_base64 = base64.b64encode(file_bytes).decode('utf-8')

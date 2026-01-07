@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Upload, Loader2, FileVideo, Check, AlertCircle, Twitter, Linkedin, Youtube, Copy } from 'lucide-react';
+import { Upload, Loader2, FileVideo, Check, AlertCircle, Twitter, Linkedin, Youtube, Copy, FileText } from 'lucide-react';
 
 interface VideoPostBoxProps {
   token: string | null;
@@ -16,7 +16,8 @@ interface VideoPostBoxProps {
 type ProgressStep = 'idle' | 'uploading' | 'transcribing' | 'generating_posts' | 'complete' | 'error';
 
 const ACCEPTED_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
-const MAX_SIZE_MB = 200;
+const MAX_SIZE_MB = 500;
+const CHUNK_SIZE_MB = 50;
 
 interface GeneratedContent {
   transcript: string | null;
@@ -24,6 +25,7 @@ interface GeneratedContent {
   linkedin_post: string | null;
   youtube_title: string | null;
   youtube_description: string | null;
+  blog_post: string | null;
   video_base64: string | null;
   mime_type: string | null;
 }
@@ -39,6 +41,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     linkedin_post: null,
     youtube_title: null,
     youtube_description: null,
+    blog_post: null,
     video_base64: null,
     mime_type: null
   });
@@ -54,6 +57,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   });
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const validateFile = (file: File): string | null => {
@@ -82,6 +86,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       linkedin_post: null,
       youtube_title: null,
       youtube_description: null,
+      blog_post: null,
       video_base64: null,
       mime_type: null
     });
@@ -96,6 +101,77 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     if (file) handleFileSelect(file);
   };
 
+  // Chunked upload for large files (>50MB)
+  const uploadFileChunked = async (file: File): Promise<string> => {
+    const chunkSize = CHUNK_SIZE_MB * 1024 * 1024;
+    const totalChunks = Math.ceil(file.size / chunkSize);
+
+    // Step 1: Initialize upload
+    const initResponse = await fetch('/api/upload/init', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filename: file.name,
+        content_type: file.type,
+        total_size: file.size
+      })
+    });
+
+    if (!initResponse.ok) {
+      const data = await initResponse.json();
+      throw new Error(data.detail || 'Failed to initialize upload');
+    }
+
+    const { upload_id } = await initResponse.json();
+
+    // Step 2: Upload chunks
+    for (let i = 0; i < totalChunks; i++) {
+      setUploadProgress({ current: i + 1, total: totalChunks });
+      setStatusMessage(`Uploading chunk ${i + 1} of ${totalChunks}...`);
+
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      const chunk = file.slice(start, end);
+
+      const formData = new FormData();
+      formData.append('chunk', chunk);
+      formData.append('index', i.toString());
+
+      const chunkResponse = await fetch(`/api/upload/chunk/${upload_id}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!chunkResponse.ok) {
+        const data = await chunkResponse.json();
+        throw new Error(data.detail || `Failed to upload chunk ${i + 1}`);
+      }
+    }
+
+    // Step 3: Complete upload
+    setStatusMessage('Finalizing upload...');
+    const completeResponse = await fetch(`/api/upload/complete/${upload_id}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!completeResponse.ok) {
+      const data = await completeResponse.json();
+      throw new Error(data.detail || 'Failed to complete upload');
+    }
+
+    setUploadProgress(null);
+    return upload_id;
+  };
+
   const handleGenerate = async () => {
     if (!selectedFile || !token) return;
 
@@ -103,28 +179,52 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     setError(null);
     setProgress('uploading');
     setStatusMessage('Uploading video...');
+    setUploadProgress(null);
     setContent({
       transcript: null,
       x_post: null,
       linkedin_post: null,
       youtube_title: null,
       youtube_description: null,
+      blog_post: null,
       video_base64: null,
       mime_type: null
     });
     setPosted({ twitter: false, linkedin: false, youtube: false });
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+      let response: Response;
+      const chunkThreshold = CHUNK_SIZE_MB * 1024 * 1024; // Use chunked upload for files > 50MB
 
-      const response = await fetch('/api/generate-video-post-stream', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
+      if (selectedFile.size > chunkThreshold) {
+        // Use chunked upload for large files
+        const uploadId = await uploadFileChunked(selectedFile);
+
+        // Now process with upload_id
+        setStatusMessage('Processing video...');
+        const formData = new FormData();
+        formData.append('upload_id', uploadId);
+
+        response = await fetch('/api/generate-video-post-stream', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+      } else {
+        // Direct upload for small files
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+
+        response = await fetch('/api/generate-video-post-stream', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+      }
 
       if (!response.ok) {
         const data = await response.json();
@@ -179,6 +279,9 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                       youtube_title: data.title,
                       youtube_description: data.description
                     }));
+                    break;
+                  case 'blog_post':
+                    setContent(prev => ({ ...prev, blog_post: data.blog_post }));
                     break;
                   case 'video_ready':
                     setContent(prev => ({
@@ -271,12 +374,14 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       linkedin_post: null,
       youtube_title: null,
       youtube_description: null,
+      blog_post: null,
       video_base64: null,
       mime_type: null
     });
     setProgress('idle');
     setError(null);
     setStatusMessage('');
+    setUploadProgress(null);
     setPosted({ twitter: false, linkedin: false, youtube: false });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -392,7 +497,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
 
         {/* Progress Steps */}
         {isProcessing && (
-          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg">
+          <div className="p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg space-y-3">
             <div className="flex items-center justify-between">
               {progressSteps.map((step, index) => {
                 const status = getStepStatus(step.key);
@@ -421,6 +526,25 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                 );
               })}
             </div>
+
+            {/* Chunked Upload Progress Bar */}
+            {uploadProgress && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>Uploading large file...</span>
+                  <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-500 text-center">
+                  Chunk {uploadProgress.current} of {uploadProgress.total} ({CHUNK_SIZE_MB}MB each)
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -612,6 +736,31 @@ export default function VideoPostBox({ token, connections, showNotification }: V
               </div>
             )}
           </div>
+        )}
+
+        {/* Blog Post Preview (collapsible) */}
+        {content.blog_post && (
+          <details className="bg-gray-800/50 border border-gray-700 rounded-lg" open>
+            <summary className="p-4 cursor-pointer text-white font-medium flex items-center gap-2">
+              <FileText className="w-5 h-5 text-green-400" />
+              Blog Post
+              <span className="text-xs text-gray-500 ml-auto">
+                {content.blog_post.split(/\s+/).length} words
+              </span>
+            </summary>
+            <div className="px-4 pb-4">
+              <div className="text-gray-300 text-sm whitespace-pre-wrap max-h-64 overflow-y-auto prose prose-invert prose-sm">
+                {content.blog_post}
+              </div>
+              <button
+                onClick={() => handleCopy(content.blog_post!, 'Blog post')}
+                className="mt-3 text-sm text-green-400 hover:text-green-300 flex items-center gap-1"
+              >
+                <Copy className="w-3 h-3" />
+                Copy blog post (markdown)
+              </button>
+            </div>
+          </details>
         )}
 
         {/* Transcript Preview (collapsible) */}
