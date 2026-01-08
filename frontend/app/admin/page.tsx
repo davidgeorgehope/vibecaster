@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { Zap, Users, FileText, BarChart3, ArrowLeft, RefreshCw, Twitter, Linkedin, Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Zap, Users, FileText, BarChart3, ArrowLeft, RefreshCw, Twitter, Linkedin, Check, X, ChevronLeft, ChevronRight, AtSign, Plus, Pencil, Trash2 } from 'lucide-react';
 
 interface Stats {
   total_users: number;
@@ -48,6 +48,16 @@ interface Post {
   created_at: number;
 }
 
+interface LinkedInMention {
+  id: number;
+  company_name: string;
+  organization_urn: string;
+  aliases: string[];
+  is_active: number;
+  created_at: number;
+  updated_at: number;
+}
+
 interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -62,7 +72,7 @@ interface PaginationState {
   total: number;
 }
 
-type Tab = 'stats' | 'users' | 'campaigns' | 'posts';
+type Tab = 'stats' | 'users' | 'campaigns' | 'posts' | 'mentions';
 
 export default function AdminPage() {
   const { token, isLoading: authLoading } = useAuth();
@@ -77,6 +87,10 @@ export default function AdminPage() {
   const [usersPagination, setUsersPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
   const [campaignsPagination, setCampaignsPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
   const [postsPagination, setPostsPagination] = useState<PaginationState>({ page: 1, pages: 1, total: 0 });
+  const [mentions, setMentions] = useState<LinkedInMention[]>([]);
+  const [editingMention, setEditingMention] = useState<number | null>(null);
+  const [newMention, setNewMention] = useState({ company_name: '', organization_urn: '', aliases: '' });
+  const [mentionError, setMentionError] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async (page: number = 1) => {
     if (!token) return;
@@ -111,6 +125,88 @@ export default function AdminPage() {
     }
   }, [token]);
 
+  const fetchMentions = useCallback(async () => {
+    if (!token) return;
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const res = await fetch('/api/admin/mentions?include_inactive=true', { headers });
+    if (res.ok) {
+      const data = await res.json();
+      setMentions(data);
+    }
+  }, [token]);
+
+  const createMention = async () => {
+    if (!token) return;
+    setMentionError(null);
+    try {
+      const res = await fetch('/api/admin/mentions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          company_name: newMention.company_name,
+          organization_urn: newMention.organization_urn,
+          aliases: newMention.aliases ? newMention.aliases.split(',').map(a => a.trim()).filter(Boolean) : []
+        })
+      });
+      if (res.ok) {
+        setNewMention({ company_name: '', organization_urn: '', aliases: '' });
+        fetchMentions();
+      } else {
+        const data = await res.json();
+        setMentionError(data.detail || 'Failed to create mention');
+      }
+    } catch {
+      setMentionError('Failed to create mention');
+    }
+  };
+
+  const updateMention = async (id: number, updates: { company_name?: string; organization_urn?: string; aliases?: string[]; is_active?: boolean }) => {
+    if (!token) return;
+    setMentionError(null);
+    try {
+      const res = await fetch(`/api/admin/mentions/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        setEditingMention(null);
+        fetchMentions();
+      } else {
+        const data = await res.json();
+        setMentionError(data.detail || 'Failed to update mention');
+      }
+    } catch {
+      setMentionError('Failed to update mention');
+    }
+  };
+
+  const deleteMention = async (id: number) => {
+    if (!token) return;
+    if (!confirm('Are you sure you want to delete this mention?')) return;
+    try {
+      const res = await fetch(`/api/admin/mentions/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        fetchMentions();
+      }
+    } catch {
+      setMentionError('Failed to delete mention');
+    }
+  };
+
+  const toggleMentionActive = async (mention: LinkedInMention) => {
+    await updateMention(mention.id, { is_active: !mention.is_active });
+  };
+
   const fetchData = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -136,14 +232,15 @@ export default function AdminPage() {
       await Promise.all([
         fetchUsers(1),
         fetchCampaigns(1),
-        fetchPosts(1)
+        fetchPosts(1),
+        fetchMentions()
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
     }
-  }, [token, fetchUsers, fetchCampaigns, fetchPosts]);
+  }, [token, fetchUsers, fetchCampaigns, fetchPosts, fetchMentions]);
 
   useEffect(() => {
     if (!authLoading && !token) {
@@ -246,7 +343,8 @@ export default function AdminPage() {
               { id: 'stats', label: 'Overview', icon: BarChart3 },
               { id: 'users', label: 'Users', icon: Users },
               { id: 'campaigns', label: 'Campaigns', icon: FileText },
-              { id: 'posts', label: 'Posts', icon: FileText }
+              { id: 'posts', label: 'Posts', icon: FileText },
+              { id: 'mentions', label: 'Mentions', icon: AtSign }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -428,6 +526,153 @@ export default function AdminPage() {
                   pagination={postsPagination}
                   onPageChange={fetchPosts}
                 />
+              </div>
+            )}
+
+            {/* Mentions Tab */}
+            {activeTab === 'mentions' && (
+              <div className="space-y-6">
+                {/* Add New Mention Form */}
+                <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                    <Plus className="w-4 h-4" /> Add LinkedIn Company Mention
+                  </h3>
+                  {mentionError && (
+                    <div className="mb-4 p-3 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
+                      {mentionError}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <input
+                      type="text"
+                      placeholder="Company Name"
+                      value={newMention.company_name}
+                      onChange={(e) => setNewMention({ ...newMention, company_name: e.target.value })}
+                      className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="urn:li:organization:XXXXX"
+                      value={newMention.organization_urn}
+                      onChange={(e) => setNewMention({ ...newMention, organization_urn: e.target.value })}
+                      className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Aliases (comma-separated)"
+                      value={newMention.aliases}
+                      onChange={(e) => setNewMention({ ...newMention, aliases: e.target.value })}
+                      className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    />
+                    <button
+                      onClick={createMention}
+                      disabled={!newMention.company_name || !newMention.organization_urn}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Add Mention
+                    </button>
+                  </div>
+                  <p className="mt-2 text-gray-500 text-xs">
+                    Format: @[Company Name](urn:li:organization:ID) - The URN can be found on the company&apos;s LinkedIn page URL or via LinkedIn API.
+                  </p>
+                </div>
+
+                {/* Mentions List */}
+                <div className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-800">
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Company</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">URN</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Aliases</th>
+                        <th className="text-left px-4 py-3 text-gray-400 font-medium">Status</th>
+                        <th className="text-right px-4 py-3 text-gray-400 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mentions.map(mention => (
+                        <tr key={mention.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                          <td className="px-4 py-3">
+                            {editingMention === mention.id ? (
+                              <input
+                                type="text"
+                                defaultValue={mention.company_name}
+                                onBlur={(e) => updateMention(mention.id, { company_name: e.target.value })}
+                                className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white w-full"
+                              />
+                            ) : (
+                              <span className="text-white font-medium">{mention.company_name}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-gray-400 text-sm font-mono">{mention.organization_urn}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1 flex-wrap">
+                              {mention.aliases?.map((alias, i) => (
+                                <span key={i} className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">
+                                  {alias}
+                                </span>
+                              ))}
+                              {(!mention.aliases || mention.aliases.length === 0) && (
+                                <span className="text-gray-600 text-sm">None</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => toggleMentionActive(mention)}
+                              className={`px-2 py-1 text-xs rounded ${
+                                mention.is_active ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'
+                              }`}
+                            >
+                              {mention.is_active ? 'Active' : 'Inactive'}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => setEditingMention(editingMention === mention.id ? null : mention.id)}
+                                className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                                title="Edit"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => deleteMention(mention.id)}
+                                className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {mentions.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">No mentions configured yet</div>
+                  )}
+                </div>
+
+                {/* Preview */}
+                <div className="bg-gray-900/50 border border-gray-800 rounded-lg p-4">
+                  <h3 className="text-white font-medium mb-2">Preview</h3>
+                  <p className="text-gray-400 text-sm mb-3">
+                    When these company names appear in LinkedIn posts, they will be automatically converted to mentions:
+                  </p>
+                  <div className="space-y-2">
+                    {mentions.filter(m => m.is_active).map(mention => (
+                      <div key={mention.id} className="text-sm">
+                        <span className="text-gray-500">&quot;{mention.company_name}&quot;</span>
+                        {mention.aliases?.length > 0 && (
+                          <span className="text-gray-600"> or &quot;{mention.aliases.join('&quot;, &quot;')}&quot;</span>
+                        )}
+                        <span className="text-gray-500"> → </span>
+                        <span className="text-blue-400">@[{mention.company_name}]({mention.organization_urn})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </>

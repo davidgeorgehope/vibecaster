@@ -147,6 +147,19 @@ def init_database():
             )
         """)
 
+        # Create linkedin_mentions table for company mention mappings
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS linkedin_mentions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_name TEXT NOT NULL,
+                organization_urn TEXT UNIQUE NOT NULL,
+                aliases_json TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """)
+
         # Migration: Add include_links column to existing campaign tables
         cursor.execute("PRAGMA table_info(campaign)")
         columns = [column[1] for column in cursor.fetchall()]
@@ -172,6 +185,21 @@ def init_database():
         cursor.execute("""
             UPDATE users SET is_admin = 1 WHERE email = 'email.djhope@gmail.com'
         """)
+
+        # Seed LinkedIn mentions if table is empty
+        cursor.execute("SELECT COUNT(*) FROM linkedin_mentions")
+        if cursor.fetchone()[0] == 0:
+            import json
+            now = int(time.time())
+            seed_mentions = [
+                ("Elastic", "urn:li:organization:814025", json.dumps(["Elasticsearch", "ELK"])),
+                ("OpenTelemetry", "urn:li:organization:95045699", json.dumps(["OTel", "Open Telemetry"])),
+            ]
+            cursor.executemany("""
+                INSERT INTO linkedin_mentions (company_name, organization_urn, aliases_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, [(name, urn, aliases, now, now) for name, urn, aliases in seed_mentions])
+            print("Seeded LinkedIn mentions: Elastic, OpenTelemetry")
 
         conn.commit()
 
@@ -825,6 +853,104 @@ def get_admin_stats() -> dict:
             "linkedin_connections": connections.get("linkedin", 0),
             "youtube_connections": connections.get("youtube", 0)
         }
+
+
+# ===== LINKEDIN MENTIONS FUNCTIONS =====
+
+def create_linkedin_mention(company_name: str, organization_urn: str, aliases: list = None) -> int:
+    """Create a new LinkedIn mention mapping. Returns ID."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        now = int(time.time())
+        cursor.execute("""
+            INSERT INTO linkedin_mentions (company_name, organization_urn, aliases_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (company_name, organization_urn, json.dumps(aliases) if aliases else None, now, now))
+        return cursor.lastrowid
+
+
+def update_linkedin_mention(mention_id: int, company_name: str = None,
+                           organization_urn: str = None, aliases: list = None,
+                           is_active: bool = None):
+    """Update an existing mention."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        updates = ["updated_at = ?"]
+        params = [int(time.time())]
+
+        if company_name is not None:
+            updates.append("company_name = ?")
+            params.append(company_name)
+        if organization_urn is not None:
+            updates.append("organization_urn = ?")
+            params.append(organization_urn)
+        if aliases is not None:
+            updates.append("aliases_json = ?")
+            params.append(json.dumps(aliases) if aliases else None)
+        if is_active is not None:
+            updates.append("is_active = ?")
+            params.append(1 if is_active else 0)
+
+        query = f"UPDATE linkedin_mentions SET {', '.join(updates)} WHERE id = ?"
+        params.append(mention_id)
+        cursor.execute(query, params)
+
+
+def delete_linkedin_mention(mention_id: int):
+    """Delete a mention."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM linkedin_mentions WHERE id = ?", (mention_id,))
+
+
+def get_linkedin_mention(mention_id: int) -> Optional[Dict[str, Any]]:
+    """Get a single mention by ID."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM linkedin_mentions WHERE id = ?", (mention_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        mention = dict(row)
+        if mention.get('aliases_json'):
+            mention['aliases'] = json.loads(mention['aliases_json'])
+        else:
+            mention['aliases'] = []
+        return mention
+
+
+def get_all_linkedin_mentions(include_inactive: bool = False) -> list:
+    """Get all mentions. Returns list with parsed aliases."""
+    import json
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if include_inactive:
+            cursor.execute("SELECT * FROM linkedin_mentions ORDER BY company_name")
+        else:
+            cursor.execute("SELECT * FROM linkedin_mentions WHERE is_active = 1 ORDER BY company_name")
+
+        mentions = []
+        for row in cursor.fetchall():
+            mention = dict(row)
+            if mention.get('aliases_json'):
+                mention['aliases'] = json.loads(mention['aliases_json'])
+            else:
+                mention['aliases'] = []
+            mentions.append(mention)
+        return mentions
+
+
+def get_active_linkedin_mentions() -> list:
+    """Get only active mentions for use in post processing."""
+    return get_all_linkedin_mentions(include_inactive=False)
 
 
 # ===== CLEANUP FUNCTIONS =====

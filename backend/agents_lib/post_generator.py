@@ -5,6 +5,7 @@ from google.genai import types
 
 from .config import client, LLM_MODEL
 from .utils import strip_markdown_formatting
+from .linkedin_mentions import apply_linkedin_mentions
 from logger_config import agent_logger as logger
 
 
@@ -173,6 +174,9 @@ def generate_linkedin_post(
 
             # Strip any markdown formatting (LinkedIn doesn't support it)
             post_text = strip_markdown_formatting(post_text)
+
+            # Apply LinkedIn company mentions (converts company names to mention format)
+            post_text = apply_linkedin_mentions(post_text)
 
             # Always add URL if provided and not already in post
             if source_url and source_url not in post_text:
