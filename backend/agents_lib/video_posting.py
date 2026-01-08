@@ -10,6 +10,7 @@ import requests
 
 from database import get_oauth_tokens
 from logger_config import agent_logger as logger
+from agents_lib.linkedin_mentions import apply_linkedin_mentions
 
 
 # ===== TWITTER/X VIDEO UPLOAD =====
@@ -76,7 +77,7 @@ def upload_video_to_twitter(
             access_token_secret=access_token_secret
         )
 
-        response = client.create_tweet(text=post_text, media_ids=[media_id])
+        response = client.create_tweet(text=post_text, media_ids=[str(media_id)])
         tweet_id = response.data['id']
 
         logger.info(f"Posted video to Twitter: {tweet_id}")
@@ -216,6 +217,7 @@ def upload_video_to_linkedin(
 
         # Step 4: Create post with video (LinkedIn processes video async in background)
         logger.info(f"[LinkedIn Video] POST /rest/posts - creating post with video")
+        post_text = apply_linkedin_mentions(post_text)
         post_data = {
             "author": author_urn,
             "commentary": post_text,
