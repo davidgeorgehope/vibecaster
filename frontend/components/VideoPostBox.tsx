@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { Upload, Loader2, FileVideo, Check, AlertCircle, Twitter, Linkedin, Youtube, Copy, FileText } from 'lucide-react';
+import { fetchWithRetry } from '@/utils/fetchWithRetry';
 
 interface VideoPostBoxProps {
   token: string | null;
@@ -107,7 +108,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     const totalChunks = Math.ceil(file.size / chunkSize);
 
     // Step 1: Initialize upload
-    const initResponse = await fetch('/api/upload/init', {
+    const initResponse = await fetchWithRetry('/api/upload/init', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -148,7 +149,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
       formData.append('index', String(i));
 
       const chunkUrl = `/api/upload/chunk/${encodeURIComponent(upload_id)}`;
-      const chunkResponse = await fetch(chunkUrl, {
+      const chunkResponse = await fetchWithRetry(chunkUrl, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -164,7 +165,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
 
     // Step 3: Complete upload
     setStatusMessage('Finalizing upload...');
-    const completeResponse = await fetch(`/api/upload/complete/${upload_id}`, {
+    const completeResponse = await fetchWithRetry(`/api/upload/complete/${upload_id}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`
@@ -213,7 +214,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
         const formData = new FormData();
         formData.append('upload_id', uploadId);
 
-        response = await fetch('/api/generate-video-post-stream', {
+        response = await fetchWithRetry('/api/generate-video-post-stream', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`
@@ -225,7 +226,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
         const formData = new FormData();
         formData.append('file', selectedFile);
 
-        response = await fetch('/api/generate-video-post-stream', {
+        response = await fetchWithRetry('/api/generate-video-post-stream', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`
@@ -330,7 +331,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     setIsPosting(prev => ({ ...prev, [platform]: true }));
 
     try {
-      const response = await fetch('/api/post-video', {
+      const response = await fetchWithRetry('/api/post-video', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

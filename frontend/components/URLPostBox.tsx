@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { Link, Loader2, Sparkles, Twitter, Linkedin, Check, AlertCircle, Image, ExternalLink } from 'lucide-react';
+import { fetchWithRetry } from '@/utils/fetchWithRetry';
 
 interface URLPostBoxProps {
   token: string | null;
@@ -60,7 +61,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
     setStreamingStatus('Connecting...');
 
     try {
-      const response = await fetch('/api/generate-from-url-stream', {
+      const response = await fetchWithRetry('/api/generate-from-url-stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -185,7 +186,7 @@ export default function URLPostBox({ token, connections, showNotification }: URL
     setIsPosting(prev => ({ ...prev, [platform]: true }));
 
     try {
-      const response = await fetch('/api/post-from-url', {
+      const response = await fetchWithRetry('/api/post-from-url', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

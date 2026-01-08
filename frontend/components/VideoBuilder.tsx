@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Video, Send, Loader2, Play, Download, History, AlertCircle, Check, Image, Film, Sparkles } from 'lucide-react';
+import { fetchWithRetry } from '@/utils/fetchWithRetry';
 
 interface VideoBuilderProps {
   token: string | null;
@@ -99,7 +100,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
       isPollingRef.current = true;
 
       try {
-        const response = await fetch(`/api/video/jobs/${activeJobId}`, {
+        const response = await fetchWithRetry(`/api/video/jobs/${activeJobId}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -193,7 +194,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
       if (!token) return;
 
       try {
-        const response = await fetch('/api/video/jobs', {
+        const response = await fetchWithRetry('/api/video/jobs', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -227,7 +228,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
 
     setIsLoadingHistory(true);
     try {
-      const response = await fetch('/api/video/jobs', {
+      const response = await fetchWithRetry('/api/video/jobs', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
@@ -337,7 +338,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
         // Job ID unknown - check for recent job before giving up
         console.log('[VideoBuilder] No job ID, checking for recent job...');
         try {
-          const response = await fetch('/api/video/jobs', {
+          const response = await fetchWithRetry('/api/video/jobs', {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           if (response.ok) {
@@ -470,7 +471,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     if (!token || !jobId) return;
 
     try {
-      const response = await fetch(`/api/video/jobs/${jobId}/cancel`, {
+      const response = await fetchWithRetry(`/api/video/jobs/${jobId}/cancel`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -505,7 +506,7 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
     if (!token || job.status !== 'complete') return;
 
     try {
-      const response = await fetch(`/api/video/jobs/${job.id}`, {
+      const response = await fetchWithRetry(`/api/video/jobs/${job.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
