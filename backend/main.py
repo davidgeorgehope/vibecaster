@@ -1074,35 +1074,84 @@ async def generate_video_post_stream_endpoint(
         raise HTTPException(status_code=400, detail="Either file or upload_id is required")
 
     def generate():
+        import threading
         transcript = None
 
         try:
             # Step 1: Emit processing started
             yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time.time()})}\n\n"
 
-            # Step 2: Transcribe video using shared Gemini utilities
-            yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time.time()})}\n\n"
-
             from transcription import upload_to_gemini, cleanup_gemini_file, client, LLM_MODEL
 
+            # Step 2: Upload to Gemini with keepalives
             uploaded_file = None
-            try:
-                # Upload to Gemini (handles temp file, wait for ACTIVE, etc.)
-                media_part, uploaded_file = upload_to_gemini(file_bytes, filename, content_type)
+            upload_result = {'media_part': None, 'uploaded_file': None, 'error': None}
+            upload_done = threading.Event()
 
-                transcript_response = client.models.generate_content(
-                    model=LLM_MODEL,
-                    contents=[
-                        "Generate a complete, accurate, verbatim transcript of this video. "
-                        "Include all spoken words exactly as said.",
-                        media_part
-                    ]
-                )
-                transcript = transcript_response.text.strip()
-                logger.info(f"[VideoPost] Transcript generated: {len(transcript)} chars")
+            def do_upload():
+                try:
+                    media_part, ufile = upload_to_gemini(file_bytes, filename, content_type)
+                    upload_result['media_part'] = media_part
+                    upload_result['uploaded_file'] = ufile
+                except Exception as e:
+                    upload_result['error'] = e
+                finally:
+                    upload_done.set()
 
-            finally:
-                cleanup_gemini_file(uploaded_file)
+            upload_thread = threading.Thread(target=do_upload)
+            upload_thread.start()
+
+            # Send keepalives every 15 seconds while upload processes
+            keepalive_count = 0
+            while not upload_done.wait(timeout=15):
+                keepalive_count += 1
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'uploading', 'message': f'Processing file... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+
+            if upload_result['error']:
+                raise upload_result['error']
+
+            media_part = upload_result['media_part']
+            uploaded_file = upload_result['uploaded_file']
+
+            # Step 3: Transcribe video with keepalives
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time.time()})}\n\n"
+
+            transcribe_result = {'transcript': None, 'error': None}
+            transcribe_done = threading.Event()
+
+            def do_transcribe():
+                try:
+                    response = client.models.generate_content(
+                        model=LLM_MODEL,
+                        contents=[
+                            "Generate a complete, accurate, verbatim transcript of this video. "
+                            "Include all spoken words exactly as said.",
+                            media_part
+                        ]
+                    )
+                    transcribe_result['transcript'] = response.text.strip()
+                except Exception as e:
+                    transcribe_result['error'] = e
+                finally:
+                    transcribe_done.set()
+
+            transcribe_thread = threading.Thread(target=do_transcribe)
+            transcribe_thread.start()
+
+            # Send keepalives every 15 seconds while transcribing
+            keepalive_count = 0
+            while not transcribe_done.wait(timeout=15):
+                keepalive_count += 1
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'transcribing', 'message': f'Transcribing audio... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+
+            # Clean up Gemini file
+            cleanup_gemini_file(uploaded_file)
+
+            if transcribe_result['error']:
+                raise transcribe_result['error']
+
+            transcript = transcribe_result['transcript']
+            logger.info(f"[VideoPost] Transcript generated: {len(transcript)} chars")
 
             # Yield transcript
             yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time.time()})}\n\n"
