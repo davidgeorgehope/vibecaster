@@ -976,12 +976,16 @@ Generate the following (output as JSON):
 3. youtube_title: An SEO-friendly title for this video (max 100 chars, compelling)
 4. youtube_description: A YouTube video description (2-3 paragraphs, include key topics)
 5. blog_post: A standalone blog post (800-1200 words) in markdown format that:
-   - Has an engaging title as H1 (# Title)
-   - Opens with a hook paragraph
+   - Has a clear, descriptive title as H1 (# Title)
+   - Opens with a paragraph that sets context
    - Expands on key points with subheadings (## Subheading)
-   - Ends with a call-to-action
+   - Ends with key takeaways
    - IMPORTANT: Do NOT reference "the video", "this video", "in the video", or the transcript.
      Write as if these are your own insights and expertise on the subject.
+   - WRITING STYLE: Write authentically for the natural audience of this content.
+     Avoid marketing hype, buzzwords, and sensationalist language.
+     No words like 'revolutionizing', 'game-changing', 'cutting-edge', 'unleash', 'supercharge'.
+     Be clear and genuine rather than promotional. Let the content speak for itself.
 
 Output ONLY valid JSON with these five fields. No other text."""
 
