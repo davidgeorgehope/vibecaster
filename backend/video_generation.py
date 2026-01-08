@@ -45,6 +45,51 @@ MAX_QUOTA_RETRIES = 3
 QUOTA_RETRY_DELAYS = [60, 120, 240]  # 1m, 2m, 4m backoff
 
 
+import threading
+
+
+class BlockingTaskWithKeepalives:
+    """
+    Run a blocking function in a thread, yielding keepalive events while waiting.
+
+    Usage:
+        task = BlockingTaskWithKeepalives(lambda: slow_function(), "Processing")
+        for keepalive in task.run():
+            yield keepalive
+        result = task.result  # Get the result after iteration
+    """
+    def __init__(self, func, step_name: str, keepalive_interval: int = 15):
+        self.func = func
+        self.step_name = step_name
+        self.keepalive_interval = keepalive_interval
+        self.result = None
+        self._error = None
+
+    def run(self):
+        """Generator that yields keepalives and stores result in self.result"""
+        done = threading.Event()
+
+        def worker():
+            try:
+                self.result = self.func()
+            except Exception as e:
+                self._error = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        keepalive_count = 0
+        while not done.wait(timeout=self.keepalive_interval):
+            keepalive_count += 1
+            yield emit_event("keepalive", step=self.step_name,
+                            message=f"{self.step_name}... ({keepalive_count * self.keepalive_interval}s)")
+
+        if self._error:
+            raise self._error
+
+
 def emit_event(event_type: str, **kwargs) -> str:
     """Create a JSON event string for SSE streaming."""
     event = {
@@ -866,7 +911,14 @@ def generate_video_stream(
         # Phase 0a: Search for content about the topic (for educational accuracy)
         yield emit_event("searching", message="Researching topic...")
 
-        grounded_content = search_video_topic(topic=topic, user_prompt=user_prompt)
+        # Run search with keepalives to prevent Cloudflare timeout
+        search_task = BlockingTaskWithKeepalives(
+            lambda: search_video_topic(topic=topic, user_prompt=user_prompt),
+            "Researching"
+        )
+        for keepalive in search_task.run():
+            yield keepalive
+        grounded_content = search_task.result
 
         if grounded_content.get('search_successful'):
             yield emit_event("search_complete",
@@ -894,10 +946,17 @@ def generate_video_stream(
                            message=f"Generating {len(characters)} character reference(s)...",
                            characters=[c.get('name') for c in characters])
 
-            character_references = generate_character_references_batch(
-                characters=characters,
-                global_style=global_style
+            # Run with keepalives - character image generation can take 60+ seconds
+            refs_task = BlockingTaskWithKeepalives(
+                lambda: generate_character_references_batch(
+                    characters=characters,
+                    global_style=global_style
+                ),
+                "Generating characters"
             )
+            for keepalive in refs_task.run():
+                yield keepalive
+            character_references = refs_task.result
 
             yield emit_event("references_ready",
                            count=len(character_references),
@@ -912,14 +971,21 @@ def generate_video_stream(
         yield emit_event("planning", message="Planning video script...")
         update_video_job(job_id, status="planning")
 
-        script = plan_video_script(
-            topic=topic,
-            style=style,
-            target_duration=target_duration,
-            author_bio=author_bio,
-            user_prompt=user_prompt,
-            grounded_content=grounded_content
+        # Run with keepalives - script planning can take 30+ seconds
+        script_task = BlockingTaskWithKeepalives(
+            lambda: plan_video_script(
+                topic=topic,
+                style=style,
+                target_duration=target_duration,
+                author_bio=author_bio,
+                user_prompt=user_prompt,
+                grounded_content=grounded_content
+            ),
+            "Planning script"
         )
+        for keepalive in script_task.run():
+            yield keepalive
+        script = script_task.result
 
         update_video_job(job_id, title=script.get('title', topic[:100]),
                         script_json=json.dumps(script))
