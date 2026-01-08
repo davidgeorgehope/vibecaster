@@ -327,14 +327,14 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="border-b border-gray-800">
-        <div className="container mx-auto px-6">
-          <div className="flex gap-1">
+        <div className="container mx-auto px-4 sm:px-6">
+          <div className="flex flex-wrap gap-1">
             {[
               { id: 'campaign', label: 'Campaign', icon: Megaphone },
               { id: 'url', label: 'URL Post', icon: Link },
               { id: 'builder', label: 'Post Builder', icon: MessageSquare },
               { id: 'transcribe', label: 'Transcribe', icon: Mic },
-              { id: 'video', label: 'Video', icon: Video },
+              { id: 'video', label: 'Video Gen', icon: Video },
               { id: 'video-post', label: 'Video Post', icon: Upload },
               { id: 'bio', label: 'Bio', icon: User },
               { id: 'jobs', label: 'Jobs', icon: ListTodo }
@@ -342,7 +342,7 @@ export default function Home() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as Tab)}
-                className={`flex items-center gap-2 px-4 py-3 font-medium transition-colors border-b-2 ${
+                className={`flex items-center gap-1.5 px-2.5 py-2 sm:gap-2 sm:px-4 sm:py-3 text-sm sm:text-base font-medium transition-colors border-b-2 ${
                   activeTab === tab.id
                     ? 'text-purple-400 border-purple-500'
                     : 'text-gray-400 border-transparent hover:text-white'

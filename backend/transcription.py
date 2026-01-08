@@ -199,13 +199,17 @@ def transcribe_media_stream(
         blog_response = client.models.generate_content(
             model=LLM_MODEL,
             contents=[
-                f"Based on this transcript, write a well-structured blog post. Include:\n"
+                f"Write a standalone blog post about the topics and ideas discussed below. "
+                f"The blog should read as an original article - do NOT reference the video, "
+                f"transcript, speaker, or recording. Write as if these are your own insights "
+                f"and expertise on the subject.\n\n"
+                f"Include:\n"
                 f"- An engaging title\n"
                 f"- An introduction that hooks the reader\n"
                 f"- Main content organized into clear sections with headers\n"
                 f"- A conclusion with key takeaways\n\n"
                 f"Make it informative, engaging, and easy to read. Use markdown formatting.\n\n"
-                f"TRANSCRIPT:\n{transcript}"
+                f"SOURCE MATERIAL:\n{transcript}"
             ]
         )
         blog_post = blog_response.text.strip()
