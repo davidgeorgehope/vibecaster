@@ -1252,6 +1252,7 @@ async def post_video_endpoint(
     Returns a streaming response with keepalives to prevent Cloudflare timeouts.
     """
     import threading
+    import json
     from agents_lib import post_video_to_platforms
 
     # Validate platforms
