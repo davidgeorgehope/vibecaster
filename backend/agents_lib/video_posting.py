@@ -145,7 +145,7 @@ def upload_video_to_linkedin(
             headers={
                 "Authorization": f"Bearer {tokens['access_token']}",
                 "Content-Type": "application/json",
-                "LinkedIn-Version": "202401",
+                "LinkedIn-Version": "202511",
                 "X-Restli-Protocol-Version": "2.0.0"
             },
             json=init_request
@@ -188,7 +188,7 @@ def upload_video_to_linkedin(
             headers={
                 "Authorization": f"Bearer {tokens['access_token']}",
                 "Content-Type": "application/json",
-                "LinkedIn-Version": "202401",
+                "LinkedIn-Version": "202511",
                 "X-Restli-Protocol-Version": "2.0.0"
             },
             json=finalize_request
@@ -202,7 +202,7 @@ def upload_video_to_linkedin(
                 f"https://api.linkedin.com/rest/videos/{video_urn.split(':')[-1]}",
                 headers={
                     "Authorization": f"Bearer {tokens['access_token']}",
-                    "LinkedIn-Version": "202401",
+                    "LinkedIn-Version": "202511",
                     "X-Restli-Protocol-Version": "2.0.0"
                 }
             )
@@ -243,7 +243,7 @@ def upload_video_to_linkedin(
             headers={
                 "Authorization": f"Bearer {tokens['access_token']}",
                 "Content-Type": "application/json",
-                "LinkedIn-Version": "202401",
+                "LinkedIn-Version": "202511",
                 "X-Restli-Protocol-Version": "2.0.0"
             },
             json=post_data
