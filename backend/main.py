@@ -974,7 +974,6 @@ Generate the following (output as JSON):
 5. blog_post: A standalone blog post (800-1200 words) in markdown format that:
    - Has an engaging title as H1 (# Title)
    - Opens with a hook paragraph
-   - Includes "[VIDEO_EMBED]" placeholder on its own line where the video should be embedded (after the intro)
    - Expands on key points with subheadings (## Subheading)
    - Ends with a call-to-action
    - IMPORTANT: Do NOT reference "the video", "this video", "in the video", or the transcript.
