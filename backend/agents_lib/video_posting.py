@@ -214,37 +214,7 @@ def upload_video_to_linkedin(
         finalize_response.raise_for_status()
         logger.info("[LinkedIn Video] Finalize upload successful")
 
-        # Step 4: Wait for video processing (poll status)
-        logger.info(f"[LinkedIn Video] Polling video status (up to 60 attempts, 5s each)")
-        max_attempts = 60
-        for attempt in range(max_attempts):
-            status_response = requests.get(
-                f"https://api.linkedin.com/rest/videos/{video_urn.split(':')[-1]}",
-                headers={
-                    "Authorization": f"Bearer {tokens['access_token']}",
-                    "LinkedIn-Version": "202511",
-                    "X-Restli-Protocol-Version": "2.0.0"
-                }
-            )
-
-            if status_response.ok:
-                status_data = status_response.json()
-                video_status = status_data.get("status", "UNKNOWN")
-                if attempt % 6 == 0:  # Log every 30 seconds
-                    logger.info(f"[LinkedIn Video] Poll {attempt+1}/60 - status: {video_status}")
-                if video_status == "AVAILABLE":
-                    logger.info(f"[LinkedIn Video] Video processing complete after {(attempt+1)*5}s")
-                    break
-                elif video_status in ["FAILED", "CANCELLED"]:
-                    logger.error(f"[LinkedIn Video] Video processing failed: {video_status}")
-                    return False, f"Video processing failed: {video_status}"
-
-            time.sleep(5)
-        else:
-            logger.error("[LinkedIn Video] Video processing timed out after 300s")
-            return False, "Video processing timed out"
-
-        # Step 5: Create post with video
+        # Step 4: Create post with video (LinkedIn processes video async in background)
         logger.info(f"[LinkedIn Video] POST /rest/posts - creating post with video")
         post_data = {
             "author": author_urn,
