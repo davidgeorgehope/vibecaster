@@ -932,7 +932,14 @@ def generate_video_stream(
         # Phase 0b: Analyze prompt for multi-character references
         yield emit_event("analyzing", message="Analyzing characters...")
 
-        char_analysis = extract_characters_from_prompt(user_prompt)
+        # Run with keepalives - character extraction can take 15-30+ seconds
+        char_task = BlockingTaskWithKeepalives(
+            lambda: extract_characters_from_prompt(user_prompt),
+            "Analyzing characters"
+        )
+        for keepalive in char_task.run():
+            yield keepalive
+        char_analysis = char_task.result
         characters = char_analysis.get('characters', [])
         scene_characters = char_analysis.get('scene_characters', {})
         global_style = char_analysis.get('global_style', 'storybook')
@@ -1060,12 +1067,19 @@ def generate_video_stream(
                                message=f"Generating image for scene {scene_num}...")
                 update_video_scene(scene_id, status="generating_image")
 
-                image_bytes = generate_scene_image(
-                    image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
-                    character_references=scene_refs if scene_refs else None,
-                    style=author_bio.get('style', 'real_person') if author_bio else 'real_person',
-                    aspect_ratio=aspect_ratio
+                # Run with keepalives - image generation can take 30-60+ seconds
+                image_task = BlockingTaskWithKeepalives(
+                    lambda: generate_scene_image(
+                        image_prompt=scene.get('image_prompt', scene.get('visual_description', '')),
+                        character_references=scene_refs if scene_refs else None,
+                        style=author_bio.get('style', 'real_person') if author_bio else 'real_person',
+                        aspect_ratio=aspect_ratio
+                    ),
+                    f"Generating scene {scene_num} image"
                 )
+                for keepalive in image_task.run():
+                    yield keepalive
+                image_bytes = image_task.result
 
                 if not image_bytes:
                     yield emit_event("error", message="First scene image failed - cannot continue")
@@ -1085,15 +1099,23 @@ def generate_video_stream(
                 raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
                 yield emit_event("refining_prompt", scene=scene_num,
                                message=f"Refining prompt for scene {scene_num}...")
-                refined_prompt = refine_video_prompt(
-                    video_prompt=raw_prompt,
-                    scene_number=scene_num,
-                    total_scenes=len(scenes),
-                    style=style,
-                    aspect_ratio=aspect_ratio,
-                    full_context=user_prompt,  # Pass original user prompt for character/setting consistency
-                    characters=characters  # Pass character info for voice styles
+
+                # Run with keepalives - prompt refinement can take 15-30+ seconds
+                refine_task = BlockingTaskWithKeepalives(
+                    lambda: refine_video_prompt(
+                        video_prompt=raw_prompt,
+                        scene_number=scene_num,
+                        total_scenes=len(scenes),
+                        style=style,
+                        aspect_ratio=aspect_ratio,
+                        full_context=user_prompt,
+                        characters=characters
+                    ),
+                    f"Refining scene {scene_num} prompt"
                 )
+                for keepalive in refine_task.run():
+                    yield keepalive
+                refined_prompt = refine_task.result
 
                 video_bytes = None
                 video_object = None
@@ -1164,15 +1186,23 @@ def generate_video_stream(
                 raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
                 yield emit_event("refining_prompt", scene=scene_num,
                                message=f"Refining prompt for scene {scene_num}...")
-                refined_prompt = refine_video_prompt(
-                    video_prompt=raw_prompt,
-                    scene_number=scene_num,
-                    total_scenes=len(scenes),
-                    style=style,
-                    aspect_ratio=aspect_ratio,
-                    full_context=user_prompt,  # Pass original user prompt for character/setting consistency
-                    characters=characters  # Pass character info for voice styles
+
+                # Run with keepalives - prompt refinement can take 15-30+ seconds
+                refine_task = BlockingTaskWithKeepalives(
+                    lambda: refine_video_prompt(
+                        video_prompt=raw_prompt,
+                        scene_number=scene_num,
+                        total_scenes=len(scenes),
+                        style=style,
+                        aspect_ratio=aspect_ratio,
+                        full_context=user_prompt,
+                        characters=characters
+                    ),
+                    f"Refining scene {scene_num} prompt"
                 )
+                for keepalive in refine_task.run():
+                    yield keepalive
+                refined_prompt = refine_task.result
 
                 video_bytes = None
                 video_object = None

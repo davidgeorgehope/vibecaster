@@ -2,6 +2,8 @@
 import re
 import json
 import base64
+import threading
+import time
 from typing import Optional
 
 from google.genai import types
@@ -13,6 +15,47 @@ from .agent_tools import agent_search, agent_post_generator, agent_brainstorm, a
 from .content_generator import generate_image
 from database import get_campaign
 from logger_config import agent_logger as logger
+
+
+class _KeepaliveTask:
+    """
+    Run a blocking function with keepalive events for SSE streaming.
+
+    Usage:
+        task = _KeepaliveTask(lambda: slow_function(), "Processing")
+        for keepalive in task.run():
+            yield keepalive
+        result = task.result
+    """
+    def __init__(self, func, step_name: str, keepalive_interval: int = 15):
+        self.func = func
+        self.step_name = step_name
+        self.keepalive_interval = keepalive_interval
+        self.result = None
+        self._error = None
+
+    def run(self):
+        done = threading.Event()
+
+        def worker():
+            try:
+                self.result = self.func()
+            except Exception as e:
+                self._error = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        keepalive_count = 0
+        while not done.wait(timeout=self.keepalive_interval):
+            keepalive_count += 1
+            yield emit_agent_event("keepalive", step=self.step_name,
+                                  message=f"{self.step_name}... ({keepalive_count * self.keepalive_interval}s)")
+
+        if self._error:
+            raise self._error
 
 
 # ===== POST BUILDER MULTI-AGENT SYSTEM =====
@@ -137,10 +180,16 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
         Text chunks or JSON with tool results
     """
     try:
-        # STEP 1: Parse intent to understand the request
+        # STEP 1: Parse intent to understand the request (with keepalives)
         yield emit_agent_event("thinking", message="Analyzing your request...", step="intent_parsing")
 
-        intent_data = agent_intent_parser(message, history)
+        intent_task = _KeepaliveTask(
+            lambda: agent_intent_parser(message, history),
+            "Parsing intent"
+        )
+        for keepalive in intent_task.run():
+            yield keepalive
+        intent_data = intent_task.result
         intent = intent_data.get("intent", "generate_posts")
         persona = intent_data.get("persona", "professional thought leader")
         topic = intent_data.get("topic", message)
@@ -169,7 +218,13 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
 
         if intent == "brainstorm":
             yield emit_agent_event("thinking", message=f"Exploring ideas about {topic}...", step="brainstorming")
-            brainstorm_result = agent_brainstorm(topic)
+            brainstorm_task = _KeepaliveTask(
+                lambda: agent_brainstorm(topic),
+                "Brainstorming"
+            )
+            for keepalive in brainstorm_task.run():
+                yield keepalive
+            brainstorm_result = brainstorm_task.result
             suggestions = brainstorm_result.get("suggestions", "No suggestions found.")
             yield emit_agent_event("tool_result", tool="brainstorm", result={"suggestions": suggestions})
             yield emit_agent_event("text", content=f"{suggestions}\n\nWant me to create posts about any of these? Just say which one!")
@@ -206,12 +261,18 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
                                         context_persona = persona_part
                                         break
 
-            campaign_result = agent_generate_campaign_prompt(
-                persona=context_persona,
-                topic=context_topic,
-                visual_style=context_visual_style,
-                history=history
+            campaign_task = _KeepaliveTask(
+                lambda: agent_generate_campaign_prompt(
+                    persona=context_persona,
+                    topic=context_topic,
+                    visual_style=context_visual_style,
+                    history=history
+                ),
+                "Generating campaign prompt"
             )
+            for keepalive in campaign_task.run():
+                yield keepalive
+            campaign_result = campaign_task.result
 
             if campaign_result.get("success"):
                 yield emit_agent_event("tool_result", tool="campaign_prompt_generator", result={
@@ -226,10 +287,16 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
                 yield emit_agent_event("error", message="Had trouble generating the campaign prompt.", retryable=True)
             return
 
-        # STEP 3: For generate_posts intent - search with OPTIMIZED query
+        # STEP 3: For generate_posts intent - search with OPTIMIZED query (with keepalives)
         yield emit_agent_event("searching", query=search_query, message=f"Searching for content about: {topic}")
 
-        search_result = agent_search(search_query, persona)
+        search_task = _KeepaliveTask(
+            lambda: agent_search(search_query, persona),
+            "Searching"
+        )
+        for keepalive in search_task.run():
+            yield keepalive
+        search_result = search_task.result
 
         if search_result.get("success") and search_result.get("content"):
             selected_url = search_result.get("selected_url")
@@ -264,13 +331,19 @@ def chat_post_builder_stream(message: str, history: list[dict], user_id: int = N
         if campaign_visual_style and visual_style == "professional, modern design":
             final_visual_style = campaign_visual_style
 
-        post_result = agent_post_generator(
-            persona=persona,
-            topic=topic,
-            content=search_result.get("content", f"Topic: {topic}"),
-            visual_style=final_visual_style,
-            source_url=search_result.get("selected_url")
+        post_task = _KeepaliveTask(
+            lambda: agent_post_generator(
+                persona=persona,
+                topic=topic,
+                content=search_result.get("content", f"Topic: {topic}"),
+                visual_style=final_visual_style,
+                source_url=search_result.get("selected_url")
+            ),
+            "Generating posts"
         )
+        for keepalive in post_task.run():
+            yield keepalive
+        post_result = post_task.result
 
         if post_result.get("success"):
             # Return posts in the format frontend expects (keep base64 for backward compat)

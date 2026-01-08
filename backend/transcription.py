@@ -6,6 +6,7 @@ Handles file upload, transcription, summarization, and blog post generation.
 import os
 import json
 import time
+import threading
 from typing import Generator
 from google import genai
 from google.genai import types
@@ -123,6 +124,47 @@ def emit_event(event_type: str, **kwargs) -> str:
     return json.dumps(event)
 
 
+class _KeepaliveTask:
+    """
+    Run a blocking function with keepalive events for SSE streaming.
+
+    Usage:
+        task = _KeepaliveTask(lambda: slow_function(), "Processing")
+        for keepalive in task.run():
+            yield keepalive
+        result = task.result
+    """
+    def __init__(self, func, step_name: str, keepalive_interval: int = 15):
+        self.func = func
+        self.step_name = step_name
+        self.keepalive_interval = keepalive_interval
+        self.result = None
+        self._error = None
+
+    def run(self):
+        done = threading.Event()
+
+        def worker():
+            try:
+                self.result = self.func()
+            except Exception as e:
+                self._error = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        keepalive_count = 0
+        while not done.wait(timeout=self.keepalive_interval):
+            keepalive_count += 1
+            yield emit_event("keepalive", step=self.step_name,
+                            message=f"{self.step_name}... ({keepalive_count * self.keepalive_interval}s)")
+
+        if self._error:
+            raise self._error
+
+
 def transcribe_media_stream(
     user_id: int,
     file_bytes: bytes,
@@ -154,64 +196,87 @@ def transcribe_media_stream(
             yield emit_event("error", message=f"Unsupported file type: {mime_type}")
             return
 
-        # Step 1: Upload/prepare file for Gemini
+        # Step 1: Upload/prepare file for Gemini (with keepalives)
         yield emit_event("progress", step="uploading", message="Preparing file...")
 
-        # Use shared upload function (handles temp file, wait for ACTIVE, etc.)
-        media_part, uploaded_file = upload_to_gemini(file_bytes, filename, mime_type)
+        upload_task = _KeepaliveTask(
+            lambda: upload_to_gemini(file_bytes, filename, mime_type),
+            "Uploading file"
+        )
+        for keepalive in upload_task.run():
+            yield keepalive
+        media_part, uploaded_file = upload_task.result
 
-        # Step 2: Transcribe
+        # Step 2: Transcribe (with keepalives)
         yield emit_event("progress", step="transcribing", message="Transcribing audio...")
 
-        transcript_response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                "Generate a complete, accurate, verbatim transcript of this audio/video. "
-                "Include all spoken words exactly as said. Do not summarize or paraphrase. "
-                "If there are multiple speakers, indicate speaker changes where possible.",
-                media_part
-            ]
+        transcribe_task = _KeepaliveTask(
+            lambda: client.models.generate_content(
+                model=LLM_MODEL,
+                contents=[
+                    "Generate a complete, accurate, verbatim transcript of this audio/video. "
+                    "Include all spoken words exactly as said. Do not summarize or paraphrase. "
+                    "If there are multiple speakers, indicate speaker changes where possible.",
+                    media_part
+                ]
+            ),
+            "Transcribing"
         )
+        for keepalive in transcribe_task.run():
+            yield keepalive
+        transcript_response = transcribe_task.result
         transcript = transcript_response.text.strip()
         logger.info(f"[Transcribe] Transcript generated: {len(transcript)} chars")
 
         yield emit_event("transcript", transcript=transcript)
 
-        # Step 3: Generate summary
+        # Step 3: Generate summary (with keepalives)
         yield emit_event("progress", step="summarizing", message="Generating summary...")
 
-        summary_response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                f"Based on this transcript, write a concise summary (3-5 paragraphs) that captures "
-                f"the key points, main topics discussed, and any important conclusions or takeaways.\n\n"
-                f"TRANSCRIPT:\n{transcript}"
-            ]
+        summary_task = _KeepaliveTask(
+            lambda: client.models.generate_content(
+                model=LLM_MODEL,
+                contents=[
+                    f"Based on this transcript, write a concise summary (3-5 paragraphs) that captures "
+                    f"the key points, main topics discussed, and any important conclusions or takeaways.\n\n"
+                    f"TRANSCRIPT:\n{transcript}"
+                ]
+            ),
+            "Summarizing"
         )
+        for keepalive in summary_task.run():
+            yield keepalive
+        summary_response = summary_task.result
         summary = summary_response.text.strip()
         logger.info(f"[Transcribe] Summary generated: {len(summary)} chars")
 
         yield emit_event("summary", summary=summary)
 
-        # Step 4: Generate blog post
+        # Step 4: Generate blog post (with keepalives)
         yield emit_event("progress", step="generating_blog", message="Generating blog post...")
 
-        blog_response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                f"Write a standalone blog post about the topics and ideas discussed below. "
-                f"The blog should read as an original article - do NOT reference the video, "
-                f"transcript, speaker, or recording. Write as if these are your own insights "
-                f"and expertise on the subject.\n\n"
-                f"Include:\n"
-                f"- An engaging title\n"
-                f"- An introduction that hooks the reader\n"
-                f"- Main content organized into clear sections with headers\n"
-                f"- A conclusion with key takeaways\n\n"
-                f"Make it informative, engaging, and easy to read. Use markdown formatting.\n\n"
-                f"SOURCE MATERIAL:\n{transcript}"
-            ]
+        blog_task = _KeepaliveTask(
+            lambda: client.models.generate_content(
+                model=LLM_MODEL,
+                contents=[
+                    f"Write a standalone blog post about the topics and ideas discussed below. "
+                    f"The blog should read as an original article - do NOT reference the video, "
+                    f"transcript, speaker, or recording. Write as if these are your own insights "
+                    f"and expertise on the subject.\n\n"
+                    f"Include:\n"
+                    f"- An engaging title\n"
+                    f"- An introduction that hooks the reader\n"
+                    f"- Main content organized into clear sections with headers\n"
+                    f"- A conclusion with key takeaways\n\n"
+                    f"Make it informative, engaging, and easy to read. Use markdown formatting.\n\n"
+                    f"SOURCE MATERIAL:\n{transcript}"
+                ]
+            ),
+            "Generating blog post"
         )
+        for keepalive in blog_task.run():
+            yield keepalive
+        blog_response = blog_task.result
         blog_post = blog_response.text.strip()
         logger.info(f"[Transcribe] Blog post generated: {len(blog_post)} chars")
 

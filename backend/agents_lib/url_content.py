@@ -2,6 +2,8 @@
 import json
 import re as regex_module
 import base64
+import threading
+import time
 from typing import Dict, Any, Optional
 
 from .url_utils import validate_url, extract_html_title
@@ -10,6 +12,51 @@ from .content_generator import generate_image
 from .social_media import post_to_twitter, post_to_linkedin
 from database import get_campaign, get_oauth_tokens, save_post_history
 from logger_config import agent_logger as logger
+
+
+class _KeepaliveTask:
+    """
+    Run a blocking function with keepalive events for SSE streaming.
+
+    Usage:
+        task = _KeepaliveTask(lambda: slow_function(), "Processing")
+        for keepalive in task.run():
+            yield keepalive
+        result = task.result
+    """
+    def __init__(self, func, step_name: str, keepalive_interval: int = 15):
+        self.func = func
+        self.step_name = step_name
+        self.keepalive_interval = keepalive_interval
+        self.result = None
+        self._error = None
+
+    def run(self):
+        done = threading.Event()
+
+        def worker():
+            try:
+                self.result = self.func()
+            except Exception as e:
+                self._error = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        keepalive_count = 0
+        while not done.wait(timeout=self.keepalive_interval):
+            keepalive_count += 1
+            yield json.dumps({
+                "status": "keepalive",
+                "step": self.step_name,
+                "message": f"{self.step_name}... ({keepalive_count * self.keepalive_interval}s)",
+                "timestamp": time.time()
+            })
+
+        if self._error:
+            raise self._error
 
 
 def generate_from_url(user_id: int, url: str) -> Dict[str, Any]:
@@ -169,10 +216,16 @@ def generate_from_url_stream(user_id: int, url: str):
         logger.info(f"URL: {url}")
         logger.info("=" * 60)
 
-        # Step 1: Validate and fetch URL content
+        # Step 1: Validate and fetch URL content with keepalives
         yield json.dumps({"status": "fetching", "message": "Fetching URL content..."})
 
-        is_valid, html_content, status_code, final_url = validate_url(url, fetch_content=True)
+        fetch_task = _KeepaliveTask(
+            lambda: validate_url(url, fetch_content=True),
+            "Fetching URL"
+        )
+        for keepalive in fetch_task.run():
+            yield keepalive
+        is_valid, html_content, status_code, final_url = fetch_task.result
 
         if not is_valid:
             error_msg = f"Could not fetch content from URL (status: {status_code})"
@@ -205,54 +258,72 @@ def generate_from_url_stream(user_id: int, url: str):
             visual_style = "Clean, modern digital illustration style. Professional and eye-catching visuals that complement the content."
             user_prompt = "Create engaging social media content about this topic"
 
-        # Step 3: Generate X/Twitter post
+        # Step 3: Generate X/Twitter post with keepalives
         yield json.dumps({"status": "generating_x", "message": "Generating X post..."})
 
         x_post = None
         try:
-            x_post, _ = generate_x_post(
-                search_context=search_context,
-                refined_persona=refined_persona,
-                user_prompt=user_prompt,
-                source_url=final_url,
-                recent_topics=[]
+            x_task = _KeepaliveTask(
+                lambda: generate_x_post(
+                    search_context=search_context,
+                    refined_persona=refined_persona,
+                    user_prompt=user_prompt,
+                    source_url=final_url,
+                    recent_topics=[]
+                ),
+                "Generating X post"
             )
+            for keepalive in x_task.run():
+                yield keepalive
+            x_post, _ = x_task.result
             yield json.dumps({"status": "x_post", "x_post": x_post})
             logger.info(f"X post generated ({len(x_post)} chars)")
         except Exception as e:
             logger.error(f"Failed to generate X post: {e}")
             yield json.dumps({"status": "x_post_error", "error": str(e)})
 
-        # Step 4: Generate LinkedIn post
+        # Step 4: Generate LinkedIn post with keepalives
         yield json.dumps({"status": "generating_linkedin", "message": "Generating LinkedIn post..."})
 
         linkedin_post = None
         try:
-            linkedin_post = generate_linkedin_post(
-                search_context=search_context,
-                refined_persona=refined_persona,
-                user_prompt=user_prompt,
-                source_url=final_url,
-                recent_topics=[]
+            linkedin_task = _KeepaliveTask(
+                lambda: generate_linkedin_post(
+                    search_context=search_context,
+                    refined_persona=refined_persona,
+                    user_prompt=user_prompt,
+                    source_url=final_url,
+                    recent_topics=[]
+                ),
+                "Generating LinkedIn post"
             )
+            for keepalive in linkedin_task.run():
+                yield keepalive
+            linkedin_post = linkedin_task.result
             yield json.dumps({"status": "linkedin_post", "linkedin_post": linkedin_post})
             logger.info(f"LinkedIn post generated ({len(linkedin_post)} chars)")
         except Exception as e:
             logger.error(f"Failed to generate LinkedIn post: {e}")
             yield json.dumps({"status": "linkedin_post_error", "error": str(e)})
 
-        # Step 5: Generate image
+        # Step 5: Generate image with keepalives
         yield json.dumps({"status": "generating_image", "message": "Generating image..."})
 
         try:
             image_context_post = x_post or linkedin_post
             if image_context_post:
-                image_bytes = generate_image(
-                    post_text=image_context_post,
-                    visual_style=visual_style,
-                    user_prompt=user_prompt,
-                    topic_context=search_context[:1000]
+                image_task = _KeepaliveTask(
+                    lambda: generate_image(
+                        post_text=image_context_post,
+                        visual_style=visual_style,
+                        user_prompt=user_prompt,
+                        topic_context=search_context[:1000]
+                    ),
+                    "Generating image"
                 )
+                for keepalive in image_task.run():
+                    yield keepalive
+                image_bytes = image_task.result
                 if image_bytes:
                     image_b64 = base64.b64encode(image_bytes).decode('utf-8')
                     yield json.dumps({"status": "image", "image_base64": image_b64})

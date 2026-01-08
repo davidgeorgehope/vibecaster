@@ -1156,10 +1156,33 @@ async def generate_video_post_stream_endpoint(
             # Yield transcript
             yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time.time()})}\n\n"
 
-            # Step 3: Generate promotional posts
+            # Step 3: Generate promotional posts with keepalives
             yield f"data: {json.dumps({'type': 'progress', 'step': 'generating_posts', 'message': 'Creating promotional posts...', 'timestamp': time.time()})}\n\n"
 
-            posts = generate_video_posts_from_transcript(transcript, user_id)
+            posts_result = {'posts': None, 'error': None}
+            posts_done = threading.Event()
+
+            def do_generate_posts():
+                try:
+                    posts_result['posts'] = generate_video_posts_from_transcript(transcript, user_id)
+                except Exception as e:
+                    posts_result['error'] = e
+                finally:
+                    posts_done.set()
+
+            posts_thread = threading.Thread(target=do_generate_posts)
+            posts_thread.start()
+
+            # Send keepalives every 15 seconds while generating posts
+            keepalive_count = 0
+            while not posts_done.wait(timeout=15):
+                keepalive_count += 1
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'generating_posts', 'message': f'Generating posts... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+
+            if posts_result['error']:
+                raise posts_result['error']
+
+            posts = posts_result['posts']
 
             # Yield X post
             if posts.get("x_post"):
