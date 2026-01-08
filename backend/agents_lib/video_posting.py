@@ -156,7 +156,8 @@ def upload_video_to_linkedin(
         video_urn = init_data["value"]["video"]
         upload_instructions = init_data["value"]["uploadInstructions"]
 
-        # Step 2: Upload video chunks
+        # Step 2: Upload video chunks and capture ETags
+        uploaded_part_ids = []
         for instruction in upload_instructions:
             upload_url = instruction["uploadUrl"]
             first_byte = instruction["firstByte"]
@@ -174,12 +175,17 @@ def upload_video_to_linkedin(
             )
             upload_response.raise_for_status()
 
-        # Step 3: Finalize upload
+            # Capture ETag from response headers (required for finalizeUpload)
+            etag = upload_response.headers.get("etag")
+            if etag:
+                uploaded_part_ids.append(etag)
+
+        # Step 3: Finalize upload with captured ETags
         finalize_request = {
             "finalizeUploadRequest": {
                 "video": video_urn,
                 "uploadToken": "",
-                "uploadedPartIds": []
+                "uploadedPartIds": uploaded_part_ids
             }
         }
 
