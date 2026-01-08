@@ -2,6 +2,10 @@ import os
 import asyncio
 import uuid
 import time as time_module
+import json
+import threading
+import re
+import base64
 from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -1082,7 +1086,7 @@ async def generate_video_post_stream_endpoint(
 
         try:
             # Step 1: Emit processing started
-            yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time_module.time()})}\n\n"
 
             from transcription import upload_to_gemini, cleanup_gemini_file, client, LLM_MODEL
 
@@ -1108,7 +1112,7 @@ async def generate_video_post_stream_endpoint(
             keepalive_count = 0
             while not upload_done.wait(timeout=15):
                 keepalive_count += 1
-                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'uploading', 'message': f'Processing file... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'uploading', 'message': f'Processing file... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
 
             if upload_result['error']:
                 raise upload_result['error']
@@ -1117,7 +1121,7 @@ async def generate_video_post_stream_endpoint(
             uploaded_file = upload_result['uploaded_file']
 
             # Step 3: Transcribe video with keepalives
-            yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time_module.time()})}\n\n"
 
             transcribe_result = {'transcript': None, 'error': None}
             transcribe_done = threading.Event()
@@ -1145,7 +1149,7 @@ async def generate_video_post_stream_endpoint(
             keepalive_count = 0
             while not transcribe_done.wait(timeout=15):
                 keepalive_count += 1
-                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'transcribing', 'message': f'Transcribing audio... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'transcribing', 'message': f'Transcribing audio... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
 
             # Clean up Gemini file
             cleanup_gemini_file(uploaded_file)
@@ -1157,10 +1161,10 @@ async def generate_video_post_stream_endpoint(
             logger.info(f"[VideoPost] Transcript generated: {len(transcript)} chars")
 
             # Yield transcript
-            yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'transcript', 'transcript': transcript, 'timestamp': time_module.time()})}\n\n"
 
             # Step 3: Generate promotional posts with keepalives
-            yield f"data: {json.dumps({'type': 'progress', 'step': 'generating_posts', 'message': 'Creating promotional posts...', 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'step': 'generating_posts', 'message': 'Creating promotional posts...', 'timestamp': time_module.time()})}\n\n"
 
             posts_result = {'posts': None, 'error': None}
             posts_done = threading.Event()
@@ -1180,7 +1184,7 @@ async def generate_video_post_stream_endpoint(
             keepalive_count = 0
             while not posts_done.wait(timeout=15):
                 keepalive_count += 1
-                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'generating_posts', 'message': f'Generating posts... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'generating_posts', 'message': f'Generating posts... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
 
             if posts_result['error']:
                 raise posts_result['error']
@@ -1189,33 +1193,33 @@ async def generate_video_post_stream_endpoint(
 
             # Yield X post
             if posts.get("x_post"):
-                yield f"data: {json.dumps({'type': 'x_post', 'x_post': posts['x_post'], 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'x_post', 'x_post': posts['x_post'], 'timestamp': time_module.time()})}\n\n"
 
             # Yield LinkedIn post
             if posts.get("linkedin_post"):
-                yield f"data: {json.dumps({'type': 'linkedin_post', 'linkedin_post': posts['linkedin_post'], 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'linkedin_post', 'linkedin_post': posts['linkedin_post'], 'timestamp': time_module.time()})}\n\n"
 
             # Yield YouTube title/description
             if posts.get("youtube_title"):
-                yield f"data: {json.dumps({'type': 'youtube', 'title': posts['youtube_title'], 'description': posts.get('youtube_description', ''), 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'youtube', 'title': posts['youtube_title'], 'description': posts.get('youtube_description', ''), 'timestamp': time_module.time()})}\n\n"
 
             # Yield blog post
             if posts.get("blog_post"):
-                yield f"data: {json.dumps({'type': 'blog_post', 'blog_post': posts['blog_post'], 'timestamp': time.time()})}\n\n"
+                yield f"data: {json.dumps({'type': 'blog_post', 'blog_post': posts['blog_post'], 'timestamp': time_module.time()})}\n\n"
 
             # Step 4: Store video for posting (avoid sending huge base64 to browser)
             video_ref = str(uuid.uuid4())
             processed_videos[video_ref] = {
                 'bytes': file_bytes,
                 'content_type': content_type,
-                'created_at': time.time(),
+                'created_at': time_module.time(),
                 'user_id': user_id
             }
             logger.info(f"[VideoPost] Stored video {video_ref} for user {user_id} ({len(file_bytes)} bytes)")
-            yield f"data: {json.dumps({'type': 'video_ready', 'video_ref': video_ref, 'mime_type': content_type, 'size_bytes': len(file_bytes), 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'video_ready', 'video_ref': video_ref, 'mime_type': content_type, 'size_bytes': len(file_bytes), 'timestamp': time_module.time()})}\n\n"
 
             # Complete
-            yield f"data: {json.dumps({'type': 'complete', 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'timestamp': time_module.time()})}\n\n"
 
         except Exception as e:
             # Truncate error message to avoid sending huge binary data
@@ -1225,7 +1229,7 @@ async def generate_video_post_stream_endpoint(
                 logger.error(f"[VideoPost] Error for user {user_id}: {type(e).__name__} (message truncated, {len(str(e))} chars)")
             else:
                 logger.error(f"[VideoPost] Error for user {user_id}: {error_msg}")
-            yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'timestamp': time_module.time()})}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -1297,18 +1301,18 @@ async def post_video_endpoint(
         post_thread.start()
 
         # Yield keepalives every 15 seconds while posting
-        yield f"data: {json.dumps({'type': 'progress', 'message': 'Posting to platforms...', 'timestamp': time.time()})}\n\n"
+        yield f"data: {json.dumps({'type': 'progress', 'message': 'Posting to platforms...', 'timestamp': time_module.time()})}\n\n"
 
         keepalive_count = 0
         while not done.wait(timeout=15):
             keepalive_count += 1
-            yield f"data: {json.dumps({'type': 'keepalive', 'message': f'Posting in progress... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'keepalive', 'message': f'Posting in progress... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
 
         # Return final result
         if result_container['error']:
-            yield f"data: {json.dumps({'type': 'error', 'message': result_container['error'], 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': result_container['error'], 'timestamp': time_module.time()})}\n\n"
         else:
-            yield f"data: {json.dumps({'type': 'complete', 'result': result_container['result'], 'timestamp': time.time()})}\n\n"
+            yield f"data: {json.dumps({'type': 'complete', 'result': result_container['result'], 'timestamp': time_module.time()})}\n\n"
 
         yield "data: [DONE]\n\n"
 
