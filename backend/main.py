@@ -957,7 +957,7 @@ def generate_video_posts_from_transcript(transcript: str, user_id: int) -> dict:
     persona = campaign.get("refined_persona", "") if campaign else ""
 
     # Generate all posts in one call for efficiency
-    prompt = f"""Based on this video transcript, generate promotional posts for social media and a blog post.
+    prompt = f"""Based on this video transcript, generate social media posts and a blog post.
 
 TRANSCRIPT:
 {transcript[:8000]}  # Limit transcript length
@@ -965,16 +965,20 @@ TRANSCRIPT:
 {f'AUTHOR PERSONA: {persona}' if persona else ''}
 
 Generate the following (output as JSON):
-1. x_post: A tweet to promote this video (max 280 chars, engaging, with relevant hashtags)
-2. linkedin_post: A professional LinkedIn post promoting this video (3-5 paragraphs, include key insights)
+1. x_post: A tweet about this topic (max 280 chars, engaging, with relevant hashtags).
+   The video will be uploaded directly to the post - do NOT include "watch here" or any links.
+2. linkedin_post: A professional LinkedIn post about this topic (3-5 paragraphs, include key insights).
+   The video will be attached directly - do NOT include "watch" links or references to watching a video.
 3. youtube_title: An SEO-friendly title for this video (max 100 chars, compelling)
-4. youtube_description: A YouTube video description (2-3 paragraphs, include key topics, timestamps if applicable)
-5. blog_post: A full blog post (800-1200 words) in markdown format that:
+4. youtube_description: A YouTube video description (2-3 paragraphs, include key topics)
+5. blog_post: A standalone blog post (800-1200 words) in markdown format that:
    - Has an engaging title as H1 (# Title)
    - Opens with a hook paragraph
    - Includes "[VIDEO_EMBED]" placeholder on its own line where the video should be embedded (after the intro)
-   - Expands on key points from the transcript with subheadings (## Subheading)
+   - Expands on key points with subheadings (## Subheading)
    - Ends with a call-to-action
+   - IMPORTANT: Do NOT reference "the video", "this video", "in the video", or the transcript.
+     Write as if these are your own insights and expertise on the subject.
 
 Output ONLY valid JSON with these five fields. No other text."""
 
