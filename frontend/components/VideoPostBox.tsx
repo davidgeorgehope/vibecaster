@@ -331,7 +331,8 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     setIsPosting(prev => ({ ...prev, [platform]: true }));
 
     try {
-      const response = await fetchWithRetry('/api/post-video', {
+      // Use streaming endpoint with keepalives for long-running uploads
+      const response = await fetch('/api/post-video', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -347,14 +348,55 @@ export default function VideoPostBox({ token, connections, showNotification }: V
         })
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
 
-      if (data.posted?.includes(platform)) {
+      // Handle SSE streaming response
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+      let finalResult: { posted?: string[]; errors?: Record<string, string> } | null = null;
+      let errorMessage: string | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+
+            try {
+              const event = JSON.parse(data);
+              if (event.type === 'complete' && event.result) {
+                finalResult = event.result;
+              } else if (event.type === 'error') {
+                errorMessage = event.message;
+              }
+              // Ignore keepalive events - they just prevent timeout
+            } catch {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+
+      if (errorMessage) {
+        throw new Error(errorMessage);
+      }
+
+      if (finalResult?.posted?.includes(platform)) {
         setPosted(prev => ({ ...prev, [platform]: true }));
         const platformName = platform === 'twitter' ? 'X/Twitter' : platform === 'linkedin' ? 'LinkedIn' : 'YouTube';
         showNotification('success', `Posted to ${platformName}!`);
-      } else if (data.errors?.[platform]) {
-        throw new Error(data.errors[platform]);
+      } else if (finalResult?.errors?.[platform]) {
+        throw new Error(finalResult.errors[platform]);
       } else {
         throw new Error('Failed to post');
       }

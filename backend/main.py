@@ -1246,54 +1246,80 @@ async def post_video_endpoint(
     user_id: int = Depends(get_current_user_id)
 ):
     """
-    Post video to selected platforms.
+    Post video to selected platforms with SSE streaming for keepalives.
 
-    Args:
-        video_ref: Reference to server-stored video
-        x_post: Text for X/Twitter post
-        linkedin_post: Text for LinkedIn post
-        youtube_title: Title for YouTube video
-        youtube_description: Description for YouTube video
-        platforms: List of platforms ['twitter', 'linkedin', 'youtube']
+    LinkedIn video uploads can take several minutes due to processing.
+    Returns a streaming response with keepalives to prevent Cloudflare timeouts.
     """
+    import threading
     from agents_lib import post_video_to_platforms
 
-    try:
-        # Validate platforms
-        valid_platforms = ['twitter', 'linkedin', 'youtube']
-        for platform in request.platforms:
-            if platform not in valid_platforms:
-                raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
+    # Validate platforms
+    valid_platforms = ['twitter', 'linkedin', 'youtube']
+    for platform in request.platforms:
+        if platform not in valid_platforms:
+            raise HTTPException(status_code=400, detail=f"Invalid platform: {platform}")
 
-        # Retrieve video from server storage
-        if request.video_ref not in processed_videos:
-            raise HTTPException(status_code=404, detail="Video not found or expired. Please regenerate.")
+    # Retrieve video from server storage
+    if request.video_ref not in processed_videos:
+        raise HTTPException(status_code=404, detail="Video not found or expired. Please regenerate.")
 
-        video_data = processed_videos[request.video_ref]
-        if video_data['user_id'] != user_id:
-            raise HTTPException(status_code=403, detail="Unauthorized")
+    video_data = processed_videos[request.video_ref]
+    if video_data['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
-        video_bytes = video_data['bytes']
-        logger.info(f"[PostVideo] Retrieved video {request.video_ref} for user {user_id}")
+    video_bytes = video_data['bytes']
+    logger.info(f"[PostVideo] Retrieved video {request.video_ref} for user {user_id}")
 
-        # Post to platforms
-        result = post_video_to_platforms(
-            user_id=user_id,
-            video_bytes=video_bytes,
-            x_post=request.x_post,
-            linkedin_post=request.linkedin_post,
-            youtube_title=request.youtube_title,
-            youtube_description=request.youtube_description,
-            platforms=request.platforms
-        )
+    def generate():
+        result_container = {'result': None, 'error': None}
+        done = threading.Event()
 
-        return result
+        def do_post():
+            try:
+                result_container['result'] = post_video_to_platforms(
+                    user_id=user_id,
+                    video_bytes=video_bytes,
+                    x_post=request.x_post,
+                    linkedin_post=request.linkedin_post,
+                    youtube_title=request.youtube_title,
+                    youtube_description=request.youtube_description,
+                    platforms=request.platforms
+                )
+            except Exception as e:
+                result_container['error'] = str(e)
+            finally:
+                done.set()
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error posting video: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to post video: {str(e)}")
+        # Start posting in background thread
+        post_thread = threading.Thread(target=do_post)
+        post_thread.start()
+
+        # Yield keepalives every 15 seconds while posting
+        yield f"data: {json.dumps({'type': 'progress', 'message': 'Posting to platforms...', 'timestamp': time.time()})}\n\n"
+
+        keepalive_count = 0
+        while not done.wait(timeout=15):
+            keepalive_count += 1
+            yield f"data: {json.dumps({'type': 'keepalive', 'message': f'Posting in progress... ({keepalive_count * 15}s)', 'timestamp': time.time()})}\n\n"
+
+        # Return final result
+        if result_container['error']:
+            yield f"data: {json.dumps({'type': 'error', 'message': result_container['error'], 'timestamp': time.time()})}\n\n"
+        else:
+            yield f"data: {json.dumps({'type': 'complete', 'result': result_container['result'], 'timestamp': time.time()})}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 # ===== AUTHOR BIO ENDPOINTS =====

@@ -110,8 +110,11 @@ def upload_video_to_linkedin(
         Tuple of (success, error_message or post_id)
     """
     try:
+        logger.info(f"[LinkedIn Video] Starting upload for user {user_id}, file size: {len(video_bytes)} bytes")
+
         tokens = get_oauth_tokens(user_id, "linkedin")
         if not tokens:
+            logger.warning(f"[LinkedIn Video] No tokens found for user {user_id}")
             return False, "LinkedIn not connected"
 
         headers = {
@@ -121,6 +124,7 @@ def upload_video_to_linkedin(
         }
 
         # Get author URN
+        logger.info("[LinkedIn Video] GET /v2/userinfo - fetching author URN")
         user_response = requests.get(
             "https://api.linkedin.com/v2/userinfo",
             headers=headers
@@ -128,6 +132,7 @@ def upload_video_to_linkedin(
         user_response.raise_for_status()
         person_id = user_response.json()["sub"]
         author_urn = f"urn:li:person:{person_id}"
+        logger.info(f"[LinkedIn Video] Author URN: {author_urn}")
 
         # Step 1: Initialize video upload
         file_size = len(video_bytes)
@@ -140,6 +145,7 @@ def upload_video_to_linkedin(
             }
         }
 
+        logger.info(f"[LinkedIn Video] POST /rest/videos?action=initializeUpload - file size: {file_size}")
         init_response = requests.post(
             "https://api.linkedin.com/rest/videos?action=initializeUpload",
             headers={
@@ -155,15 +161,17 @@ def upload_video_to_linkedin(
 
         video_urn = init_data["value"]["video"]
         upload_instructions = init_data["value"]["uploadInstructions"]
+        logger.info(f"[LinkedIn Video] Initialized upload - video URN: {video_urn}, {len(upload_instructions)} chunk(s)")
 
         # Step 2: Upload video chunks and capture ETags
         uploaded_part_ids = []
-        for instruction in upload_instructions:
+        for i, instruction in enumerate(upload_instructions):
             upload_url = instruction["uploadUrl"]
             first_byte = instruction["firstByte"]
             last_byte = instruction["lastByte"]
 
             chunk = video_bytes[first_byte:last_byte + 1]
+            logger.info(f"[LinkedIn Video] PUT chunk {i+1}/{len(upload_instructions)} - bytes {first_byte}-{last_byte} ({len(chunk)} bytes)")
 
             upload_response = requests.put(
                 upload_url,
@@ -179,6 +187,9 @@ def upload_video_to_linkedin(
             etag = upload_response.headers.get("etag")
             if etag:
                 uploaded_part_ids.append(etag)
+                logger.info(f"[LinkedIn Video] Chunk {i+1} uploaded, ETag: {etag[:50]}...")
+
+        logger.info(f"[LinkedIn Video] All chunks uploaded, {len(uploaded_part_ids)} ETags captured")
 
         # Step 3: Finalize upload with captured ETags
         finalize_request = {
@@ -189,6 +200,7 @@ def upload_video_to_linkedin(
             }
         }
 
+        logger.info(f"[LinkedIn Video] POST /rest/videos?action=finalizeUpload with {len(uploaded_part_ids)} ETags")
         finalize_response = requests.post(
             "https://api.linkedin.com/rest/videos?action=finalizeUpload",
             headers={
@@ -200,8 +212,10 @@ def upload_video_to_linkedin(
             json=finalize_request
         )
         finalize_response.raise_for_status()
+        logger.info("[LinkedIn Video] Finalize upload successful")
 
         # Step 4: Wait for video processing (poll status)
+        logger.info(f"[LinkedIn Video] Polling video status (up to 60 attempts, 5s each)")
         max_attempts = 60
         for attempt in range(max_attempts):
             status_response = requests.get(
@@ -215,16 +229,23 @@ def upload_video_to_linkedin(
 
             if status_response.ok:
                 status_data = status_response.json()
-                if status_data.get("status") == "AVAILABLE":
+                video_status = status_data.get("status", "UNKNOWN")
+                if attempt % 6 == 0:  # Log every 30 seconds
+                    logger.info(f"[LinkedIn Video] Poll {attempt+1}/60 - status: {video_status}")
+                if video_status == "AVAILABLE":
+                    logger.info(f"[LinkedIn Video] Video processing complete after {(attempt+1)*5}s")
                     break
-                elif status_data.get("status") in ["FAILED", "CANCELLED"]:
-                    return False, f"Video processing failed: {status_data.get('status')}"
+                elif video_status in ["FAILED", "CANCELLED"]:
+                    logger.error(f"[LinkedIn Video] Video processing failed: {video_status}")
+                    return False, f"Video processing failed: {video_status}"
 
             time.sleep(5)
         else:
+            logger.error("[LinkedIn Video] Video processing timed out after 300s")
             return False, "Video processing timed out"
 
         # Step 5: Create post with video
+        logger.info(f"[LinkedIn Video] POST /rest/posts - creating post with video")
         post_data = {
             "author": author_urn,
             "commentary": post_text,
