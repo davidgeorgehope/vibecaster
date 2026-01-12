@@ -81,7 +81,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(access_token);
 
     await fetchUser(access_token);
-    router.push('/');
+    router.push('/dashboard');
   };
 
   const signup = async (email: string, password: string) => {
@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(access_token);
 
     await fetchUser(access_token);
-    router.push('/');
+    router.push('/dashboard');
   };
 
   const logout = () => {

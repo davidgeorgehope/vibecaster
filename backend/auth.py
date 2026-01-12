@@ -84,11 +84,11 @@ async def twitter_callback(
         # Check if user denied authorization
         if denied:
             logger.warning(f"Twitter OAuth denied: {denied}")
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=Authorization denied")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_error&error=Authorization denied")
 
         # Validate oauth_token
         if not oauth_token or oauth_token not in oauth_states:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=Invalid oauth_token")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_error&error=Invalid oauth_token")
 
         # Get user_id and OAuth handler from stored state
         state_data = oauth_states.pop(oauth_token)
@@ -96,10 +96,10 @@ async def twitter_callback(
         oauth1_handler = state_data.get("oauth_handler")
 
         if not user_id:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=User not authenticated")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_error&error=User not authenticated")
 
         if not oauth1_handler:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error=OAuth handler not found")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_error&error=OAuth handler not found")
 
         # Get access token using the verifier
         logger.info(f"Fetching Twitter access token with verifier...")
@@ -136,14 +136,14 @@ async def twitter_callback(
         logger.info(f"Successfully saved Twitter tokens for user {user_id}")
 
         # Redirect back to frontend with success
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_connected")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_connected")
 
     except Exception as e:
         # Log the full error for debugging
         logger.error(f"Twitter OAuth error: {str(e)}", exc_info=True)
         # Redirect back with error
         error_msg = str(e)[:200]  # Limit error message length for URL
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=twitter_error&error={error_msg}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_error&error={error_msg}")
 
 
 @router.post("/twitter/disconnect")
@@ -189,14 +189,14 @@ async def linkedin_callback(code: str = Query(...), state: Optional[str] = Query
     try:
         # Validate state
         if not state or state not in oauth_states:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=linkedin_error&error=Invalid state")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=linkedin_error&error=Invalid state")
 
         # Get user_id from state
         state_data = oauth_states.pop(state)
         user_id = state_data.get("user_id")
 
         if not user_id:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=linkedin_error&error=User not authenticated")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=linkedin_error&error=User not authenticated")
 
         # Exchange code for access token
         token_url = "https://www.linkedin.com/oauth/v2/accessToken"
@@ -229,11 +229,11 @@ async def linkedin_callback(code: str = Query(...), state: Optional[str] = Query
         )
 
         # Redirect back to frontend with success
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=linkedin_connected")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=linkedin_connected")
 
     except Exception as e:
         # Redirect back with error
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=linkedin_error&error={str(e)}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=linkedin_error&error={str(e)}")
 
 
 @router.post("/linkedin/disconnect")
@@ -285,18 +285,18 @@ async def youtube_callback(code: str = Query(...), state: str = Query(None), err
         # Check for error from Google
         if error:
             logger.warning(f"YouTube OAuth error: {error}")
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error={error}")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_error&error={error}")
 
         # Validate state
         if not state or state not in oauth_states:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error=Invalid state")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_error&error=Invalid state")
 
         # Get user_id from state
         state_data = oauth_states.pop(state)
         user_id = state_data.get("user_id")
 
         if not user_id:
-            return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error=User not authenticated")
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_error&error=User not authenticated")
 
         # Exchange code for access token
         token_url = "https://oauth2.googleapis.com/token"
@@ -339,12 +339,12 @@ async def youtube_callback(code: str = Query(...), state: str = Query(None), err
         logger.info(f"Successfully saved YouTube tokens for user {user_id}")
 
         # Redirect back to frontend with success
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_connected")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_connected")
 
     except Exception as e:
         logger.error(f"YouTube OAuth error: {str(e)}", exc_info=True)
         error_msg = str(e)[:200]
-        return RedirectResponse(url=f"{FRONTEND_URL}?status=youtube_error&error={error_msg}")
+        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_error&error={error_msg}")
 
 
 @router.post("/youtube/disconnect")
