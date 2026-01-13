@@ -19,7 +19,7 @@ from agents_lib.social_media import (
 
 
 class TestBuildLinkedInPostData:
-    """Tests for _build_linkedin_post_data helper function."""
+    """Tests for _build_linkedin_post_data helper function (new Posts API format)."""
 
     def test_builds_text_only_post(self):
         """Should build correct structure for text-only post."""
@@ -30,28 +30,34 @@ class TestBuildLinkedInPostData:
 
         assert result["author"] == "urn:li:person:123"
         assert result["lifecycleState"] == "PUBLISHED"
-        assert result["specificContent"]["com.linkedin.ugc.ShareContent"]["shareCommentary"]["text"] == "Hello LinkedIn!"
-        assert result["specificContent"]["com.linkedin.ugc.ShareContent"]["shareMediaCategory"] == "NONE"
-        assert "media" not in result["specificContent"]["com.linkedin.ugc.ShareContent"]
+        assert result["commentary"] == "Hello LinkedIn!"
+        assert result["visibility"] == "PUBLIC"
+        assert "content" not in result
 
     def test_builds_post_with_image(self):
         """Should build correct structure for post with image."""
         result = _build_linkedin_post_data(
             author_urn="urn:li:person:123",
             post_text="Check out this image!",
-            image_urn="urn:li:digitalmediaAsset:456"
+            image_urn="urn:li:image:456"
         )
 
-        assert result["specificContent"]["com.linkedin.ugc.ShareContent"]["shareMediaCategory"] == "IMAGE"
-        assert len(result["specificContent"]["com.linkedin.ugc.ShareContent"]["media"]) == 1
-        assert result["specificContent"]["com.linkedin.ugc.ShareContent"]["media"][0]["media"] == "urn:li:digitalmediaAsset:456"
-        assert result["specificContent"]["com.linkedin.ugc.ShareContent"]["media"][0]["status"] == "READY"
+        assert result["commentary"] == "Check out this image!"
+        assert result["content"]["media"]["id"] == "urn:li:image:456"
+        assert result["content"]["media"]["title"] == "Image"
 
     def test_visibility_is_public(self):
         """Should set visibility to PUBLIC."""
         result = _build_linkedin_post_data("urn:li:person:123", "test")
 
-        assert result["visibility"]["com.linkedin.ugc.MemberNetworkVisibility"] == "PUBLIC"
+        assert result["visibility"] == "PUBLIC"
+
+    def test_has_distribution_settings(self):
+        """Should include distribution settings for Posts API."""
+        result = _build_linkedin_post_data("urn:li:person:123", "test")
+
+        assert result["distribution"]["feedDistribution"] == "MAIN_FEED"
+        assert result["isReshareDisabledByAuthor"] is False
 
 
 class TestGetLinkedInAuthorUrn:
@@ -137,26 +143,22 @@ class TestUploadTwitterMedia:
 
 
 class TestUploadLinkedInImage:
-    """Tests for _upload_linkedin_image helper function."""
+    """Tests for _upload_linkedin_image helper function (new Images API)."""
 
     @patch('agents_lib.social_media.requests.put')
     @patch('agents_lib.social_media.requests.post')
-    def test_returns_asset_id_on_success(self, mock_post, mock_put):
-        """Should return asset ID on successful upload."""
-        # Mock register upload response
-        mock_register_response = Mock()
-        mock_register_response.json.return_value = {
+    def test_returns_image_urn_on_success(self, mock_post, mock_put):
+        """Should return image URN on successful upload."""
+        # Mock initialize upload response (new Images API format)
+        mock_init_response = Mock()
+        mock_init_response.json.return_value = {
             "value": {
-                "uploadMechanism": {
-                    "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
-                        "uploadUrl": "https://upload.linkedin.com/..."
-                    }
-                },
-                "asset": "urn:li:digitalmediaAsset:xyz789"
+                "uploadUrl": "https://upload.linkedin.com/...",
+                "image": "urn:li:image:xyz789"
             }
         }
-        mock_register_response.raise_for_status = Mock()
-        mock_post.return_value = mock_register_response
+        mock_init_response.raise_for_status = Mock()
+        mock_post.return_value = mock_init_response
 
         # Mock upload response
         mock_upload_response = Mock()
@@ -170,12 +172,12 @@ class TestUploadLinkedInImage:
             {"access_token": "token"}
         )
 
-        assert result == "urn:li:digitalmediaAsset:xyz789"
+        assert result == "urn:li:image:xyz789"
 
     @patch('agents_lib.social_media.requests.post')
-    def test_returns_none_on_register_error(self, mock_post):
-        """Should return None when register upload fails."""
-        mock_post.side_effect = Exception("Register failed")
+    def test_returns_none_on_init_error(self, mock_post):
+        """Should return None when initialize upload fails."""
+        mock_post.side_effect = Exception("Initialize failed")
 
         result = _upload_linkedin_image(
             b"image bytes",
@@ -185,6 +187,36 @@ class TestUploadLinkedInImage:
         )
 
         assert result is None
+
+    @patch('agents_lib.social_media.requests.put')
+    @patch('agents_lib.social_media.requests.post')
+    def test_calls_correct_endpoint(self, mock_post, mock_put):
+        """Should call the new Images API endpoint."""
+        mock_init_response = Mock()
+        mock_init_response.json.return_value = {
+            "value": {
+                "uploadUrl": "https://upload.linkedin.com/...",
+                "image": "urn:li:image:abc123"
+            }
+        }
+        mock_init_response.raise_for_status = Mock()
+        mock_post.return_value = mock_init_response
+
+        mock_upload_response = Mock()
+        mock_upload_response.raise_for_status = Mock()
+        mock_put.return_value = mock_upload_response
+
+        _upload_linkedin_image(
+            b"image bytes",
+            "urn:li:person:123",
+            {"Authorization": "Bearer token"},
+            {"access_token": "token"}
+        )
+
+        # Verify the new Images API endpoint is called
+        call_url = mock_post.call_args[0][0]
+        assert "rest/images" in call_url
+        assert "initializeUpload" in call_url
 
 
 class TestPostToTwitter:
@@ -378,7 +410,7 @@ class TestEdgeCases:
 
         mock_response = Mock()
         mock_response.ok = True
-        mock_response.json.return_value = {"id": "post_123"}
+        mock_response.headers = {"x-restli-id": "post_123"}
         mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
@@ -386,6 +418,6 @@ class TestEdgeCases:
         result = post_to_linkedin(user_id=123, post_text=long_text)
 
         assert result is True
-        # Verify the long text was passed through
+        # Verify the long text was passed through (using new Posts API format)
         call_json = mock_post.call_args.kwargs['json']
-        assert len(call_json['specificContent']['com.linkedin.ugc.ShareContent']['shareCommentary']['text']) == 5000
+        assert len(call_json['commentary']) == 5000

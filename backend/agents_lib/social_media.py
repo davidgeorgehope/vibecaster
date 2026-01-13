@@ -103,7 +103,9 @@ def _upload_twitter_media(
 
 def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] = None) -> bool:
     """
-    Post to LinkedIn with optional image.
+    Post to LinkedIn with optional image using the new Posts API.
+
+    Uses /rest/posts which supports @[Name](urn:li:organization:ID) mentions.
 
     Args:
         user_id: The user's ID in the database
@@ -135,15 +137,22 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         if image_bytes:
             image_urn = _upload_linkedin_image(image_bytes, author_urn, headers, tokens)
 
-        # Prepare and create post
+        # Prepare and create post using new Posts API
         post_data = _build_linkedin_post_data(author_urn, post_text, image_urn)
 
         logger.info(f"Creating LinkedIn post with text length: {len(post_text)}")
         logger.info(f"LinkedIn post text preview: {post_text[:200]}...")
 
+        post_headers = {
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "Content-Type": "application/json",
+            "LinkedIn-Version": "202511",
+            "X-Restli-Protocol-Version": "2.0.0"
+        }
+
         response = requests.post(
-            "https://api.linkedin.com/v2/ugcPosts",
-            headers=headers,
+            "https://api.linkedin.com/rest/posts",
+            headers=post_headers,
             json=post_data
         )
 
@@ -154,7 +163,8 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
 
         response.raise_for_status()
 
-        logger.info(f"Posted to LinkedIn: {response.json()['id']}")
+        post_id = response.headers.get("x-restli-id", "unknown")
+        logger.info(f"Posted to LinkedIn: {post_id}")
         return True
 
     except Exception as e:
@@ -192,58 +202,49 @@ def _upload_linkedin_image(
     tokens: dict
 ) -> Optional[str]:
     """
-    Upload an image to LinkedIn.
+    Upload an image to LinkedIn using the new Images API.
 
     Args:
         image_bytes: The image bytes to upload
         author_urn: The author's LinkedIn URN
-        headers: Request headers
+        headers: Request headers (unused, kept for compatibility)
         tokens: OAuth tokens
 
     Returns:
         Image URN if successful, None otherwise
     """
     try:
-        logger.info("Uploading image to LinkedIn...")
+        logger.info("Uploading image to LinkedIn via Images API...")
 
-        # Step 1: Register upload
-        register_upload_request = {
-            "registerUploadRequest": {
-                "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
-                "owner": author_urn,
-                "serviceRelationships": [
-                    {
-                        "relationshipType": "OWNER",
-                        "identifier": "urn:li:userGeneratedContent"
-                    }
-                ]
-            }
+        # Step 1: Initialize upload with new Images API
+        init_headers = {
+            "Authorization": f"Bearer {tokens['access_token']}",
+            "Content-Type": "application/json",
+            "LinkedIn-Version": "202511",
+            "X-Restli-Protocol-Version": "2.0.0"
         }
 
-        register_response = requests.post(
-            "https://api.linkedin.com/v2/assets?action=registerUpload",
-            headers=headers,
-            json=register_upload_request
+        init_response = requests.post(
+            "https://api.linkedin.com/rest/images?action=initializeUpload",
+            headers=init_headers,
+            json={"initializeUploadRequest": {"owner": author_urn}}
         )
-        register_response.raise_for_status()
-        register_data = register_response.json()
+        init_response.raise_for_status()
+        init_data = init_response.json()
 
-        upload_url = register_data["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
-        asset_id = register_data["value"]["asset"]
+        upload_url = init_data["value"]["uploadUrl"]
+        image_urn = init_data["value"]["image"]
 
         # Step 2: Upload the image binary
-        upload_headers = {
-            "Authorization": f"Bearer {tokens['access_token']}"
-        }
         upload_response = requests.put(
             upload_url,
-            headers=upload_headers,
+            headers={"Content-Type": "image/png"},
             data=image_bytes
         )
         upload_response.raise_for_status()
 
-        logger.info(f"Image uploaded to LinkedIn: {asset_id}")
-        return asset_id
+        logger.info(f"Image uploaded to LinkedIn: {image_urn}")
+        return image_urn
 
     except Exception as e:
         logger.error(f"Error uploading image to LinkedIn: {e}")
@@ -252,51 +253,37 @@ def _upload_linkedin_image(
 
 def _build_linkedin_post_data(author_urn: str, post_text: str, image_urn: Optional[str] = None) -> dict:
     """
-    Build the LinkedIn post data structure.
+    Build the LinkedIn post data structure for the new Posts API.
+
+    Uses the /rest/posts format which supports @[Name](urn) mentions in commentary.
 
     Args:
         author_urn: The author's LinkedIn URN
-        post_text: The text content
+        post_text: The text content (supports @[Name](urn:li:organization:ID) mentions)
         image_urn: Optional image URN
 
     Returns:
-        Post data dictionary for LinkedIn API
+        Post data dictionary for LinkedIn Posts API
     """
+    data = {
+        "author": author_urn,
+        "commentary": post_text,
+        "visibility": "PUBLIC",
+        "distribution": {
+            "feedDistribution": "MAIN_FEED",
+            "targetEntities": [],
+            "thirdPartyDistributionChannels": []
+        },
+        "lifecycleState": "PUBLISHED",
+        "isReshareDisabledByAuthor": False
+    }
+
     if image_urn:
-        return {
-            "author": author_urn,
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {
-                        "text": post_text
-                    },
-                    "shareMediaCategory": "IMAGE",
-                    "media": [
-                        {
-                            "status": "READY",
-                            "media": image_urn
-                        }
-                    ]
-                }
-            },
-            "visibility": {
-                "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+        data["content"] = {
+            "media": {
+                "title": "Image",
+                "id": image_urn
             }
         }
-    else:
-        return {
-            "author": author_urn,
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {
-                        "text": post_text
-                    },
-                    "shareMediaCategory": "NONE"
-                }
-            },
-            "visibility": {
-                "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
-            }
-        }
+
+    return data
