@@ -43,9 +43,25 @@ export default function FeaturesSection() {
             Everything You Need to{' '}
             <span className="gradient-text">Automate</span>
           </h2>
-          <p className="text-xl text-gray-400 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-400 max-w-2xl mx-auto mb-8">
             Powerful tools to generate, schedule, and post content across all major social platforms.
           </p>
+
+          {/* GEO-optimized statistics */}
+          <div className="flex flex-wrap justify-center gap-8 text-center">
+            <div>
+              <div className="text-3xl font-bold text-purple-400">3</div>
+              <div className="text-sm text-gray-500">Platforms Supported</div>
+            </div>
+            <div>
+              <div className="text-3xl font-bold text-purple-400">6</div>
+              <div className="text-sm text-gray-500">AI-Powered Features</div>
+            </div>
+            <div>
+              <div className="text-3xl font-bold text-purple-400">Free</div>
+              <div className="text-sm text-gray-500">During Beta</div>
+            </div>
+          </div>
         </div>
 
         {/* Features Grid */}

@@ -19,9 +19,14 @@ export default function HeroSection() {
         </h1>
 
         {/* Subheadline */}
-        <p className="text-xl md:text-2xl text-gray-400 mb-10 max-w-3xl mx-auto leading-relaxed">
+        <p className="text-xl md:text-2xl text-gray-400 mb-6 max-w-3xl mx-auto leading-relaxed">
           Generate and post content to X, LinkedIn, and YouTube automatically.
           Set your strategy once, let AI handle the rest.
+        </p>
+
+        {/* GEO-optimized quotable definition */}
+        <p className="text-base text-gray-500 mb-10 max-w-2xl mx-auto italic">
+          Vibecaster is a social media automation tool that uses Google Gemini AI to generate and schedule posts across multiple platforms from a single prompt.
         </p>
 
         {/* CTA Buttons */}
