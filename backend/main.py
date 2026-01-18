@@ -230,7 +230,12 @@ def _setup_user_scheduler(user_id: int):
 
         # Get campaign configuration for this user
         campaign = get_campaign(user_id)
-        if campaign and campaign.get("user_prompt"):
+
+        # Check if user has any connected social accounts
+        connections = get_connection_status(user_id)
+        has_connections = any(connections.values())
+
+        if campaign and campaign.get("user_prompt") and has_connections:
             cron_schedule = campaign.get("schedule_cron", "0 9 * * *")
 
             # Parse cron schedule (minute hour day month day_of_week)
@@ -258,10 +263,13 @@ def _setup_user_scheduler(user_id: int):
             else:
                 logger.warning(f"Invalid cron schedule for user {user_id}: {cron_schedule}")
         else:
-            # Remove job if campaign is empty or deleted
+            # Remove job if campaign is empty, deleted, or no social accounts connected
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
-                logger.info(f"Removed scheduler job for user {user_id}")
+                if not has_connections:
+                    logger.info(f"Removed scheduler job for user {user_id} (no social accounts connected)")
+                else:
+                    logger.info(f"Removed scheduler job for user {user_id}")
 
     except Exception as e:
         logger.error(f"Error setting up scheduler for user {user_id}: {e}", exc_info=True)

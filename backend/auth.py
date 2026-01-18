@@ -135,6 +135,10 @@ async def twitter_callback(
 
         logger.info(f"Successfully saved Twitter tokens for user {user_id}")
 
+        # Refresh scheduler now that user has a connected account
+        from main import setup_scheduler
+        setup_scheduler(user_id)
+
         # Redirect back to frontend with success
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=twitter_connected")
 
@@ -151,6 +155,9 @@ async def twitter_disconnect(user_id: int = Depends(get_current_user_id)):
     """Disconnect Twitter account."""
     try:
         delete_oauth_tokens(user_id, "twitter")
+        # Refresh scheduler - may need to disable if no accounts left
+        from main import setup_scheduler
+        setup_scheduler(user_id)
         return {"success": True, "message": "Twitter disconnected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -228,6 +235,10 @@ async def linkedin_callback(code: str = Query(...), state: Optional[str] = Query
             expires_at=int(time.time()) + tokens.get("expires_in", 5184000)
         )
 
+        # Refresh scheduler now that user has a connected account
+        from main import setup_scheduler
+        setup_scheduler(user_id)
+
         # Redirect back to frontend with success
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=linkedin_connected")
 
@@ -241,6 +252,9 @@ async def linkedin_disconnect(user_id: int = Depends(get_current_user_id)):
     """Disconnect LinkedIn account."""
     try:
         delete_oauth_tokens(user_id, "linkedin")
+        # Refresh scheduler - may need to disable if no accounts left
+        from main import setup_scheduler
+        setup_scheduler(user_id)
         return {"success": True, "message": "LinkedIn disconnected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -338,6 +352,10 @@ async def youtube_callback(code: str = Query(...), state: str = Query(None), err
 
         logger.info(f"Successfully saved YouTube tokens for user {user_id}")
 
+        # Refresh scheduler now that user has a connected account
+        from main import setup_scheduler
+        setup_scheduler(user_id)
+
         # Redirect back to frontend with success
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?status=youtube_connected")
 
@@ -352,6 +370,9 @@ async def youtube_disconnect(user_id: int = Depends(get_current_user_id)):
     """Disconnect YouTube account."""
     try:
         delete_oauth_tokens(user_id, "youtube")
+        # Refresh scheduler - may need to disable if no accounts left
+        from main import setup_scheduler
+        setup_scheduler(user_id)
         return {"success": True, "message": "YouTube disconnected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
