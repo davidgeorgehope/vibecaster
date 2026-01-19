@@ -1,12 +1,13 @@
-# Vibecaster robots.txt
+# https://www.robotstxt.org/robotstxt.html
 User-agent: *
 Allow: /
 
-# Disallow authenticated routes
-Disallow: /dashboard
-Disallow: /admin
+# Disallow private routes
+Disallow: /api/
+Disallow: /dashboard/
+Disallow: /admin/
 Disallow: /login
 Disallow: /signup
 
 # Sitemap
-Sitemap: https://vibecaster.app/sitemap.xml
+Sitemap: https://vibecaster.ai/sitemap.xml
