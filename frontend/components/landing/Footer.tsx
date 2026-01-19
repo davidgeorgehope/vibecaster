@@ -71,6 +71,10 @@ export default function Footer() {
                 <span className="text-gray-500 cursor-not-allowed">Terms of Service</span>
               </li>
             </ul>
+            <h4 className="text-white font-semibold mb-2 mt-6">Contact</h4>
+            <a href="mailto:me@davidgeorgehope.com" className="text-gray-400 hover:text-white transition-colors text-sm">
+              me@davidgeorgehope.com
+            </a>
           </div>
         </div>
 
