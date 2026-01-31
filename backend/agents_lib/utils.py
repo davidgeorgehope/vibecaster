@@ -54,3 +54,36 @@ def strip_markdown_formatting(text: str) -> str:
     text = re.sub(r'`(.+?)`', r'\1', text)
 
     return text
+
+
+def sanitize_for_linkedin(text: str) -> str:
+    """
+    Sanitize text for LinkedIn Posts API to prevent truncation.
+
+    Known truncation triggers:
+    1. ASCII pipe '|' (U+007C) - swapped to Unicode VERTICAL LINE EXTENSION
+    2. Parentheses '()' outside @[Name](urn:...) mention syntax - the Posts API
+       parses parens as mention URNs, causing truncation on malformed patterns.
+       We swap standalone parens to Unicode fullwidth equivalents.
+    """
+    # Fix 1: Replace pipe characters
+    text = text.replace("|", "\u23d0")
+
+    # Fix 2: Replace parentheses that are NOT part of @[Name](urn:...) mentions
+    # Temporarily protect mention patterns
+    mentions = []
+    def protect_mention(m):
+        mentions.append(m.group(0))
+        return f"__MENTION_{len(mentions)-1}__"
+
+    text = re.sub(r'@\[([^\]]+)\]\(([^)]+)\)', protect_mention, text)
+
+    # Now replace remaining parens with fullwidth versions
+    text = text.replace("(", "\uff08")
+    text = text.replace(")", "\uff09")
+
+    # Restore mentions
+    for i, mention in enumerate(mentions):
+        text = text.replace(f"__MENTION_{i}__", mention)
+
+    return text
