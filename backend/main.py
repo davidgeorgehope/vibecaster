@@ -20,6 +20,8 @@ import uvicorn
 # Import local modules
 from database import init_database, get_campaign, update_campaign, get_connection_status
 from agents import analyze_user_prompt, run_agent_cycle, generate_from_url, generate_from_url_stream, post_url_content, chat_post_builder_stream, parse_generated_posts, generate_image_for_post_builder
+from agents_lib.persona import infer_excluded_companies, infer_schedule_from_prompt
+from database import get_author_bio as db_get_author_bio
 from transcription import transcribe_media_stream, SUPPORTED_MIME_TYPES
 from author_bio import generate_character_reference, search_author_images, download_image_from_url, validate_image
 from video_generation import generate_video_stream, get_video_job_status
@@ -365,10 +367,14 @@ async def get_status(user_id: int = Depends(get_current_user_id)):
 
 @app.get("/api/campaign")
 async def get_campaign_info(user_id: int = Depends(get_current_user_id)):
-    """Get current campaign configuration."""
+    """Get current campaign configuration including active status."""
     campaign = get_campaign(user_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="No campaign configured")
+
+    # Check if scheduler job exists for this user
+    job_id = f"agent_cycle_user_{user_id}"
+    is_active = scheduler.get_job(job_id) is not None
 
     return {
         "user_prompt": campaign.get("user_prompt", ""),
@@ -376,7 +382,9 @@ async def get_campaign_info(user_id: int = Depends(get_current_user_id)):
         "visual_style": campaign.get("visual_style", ""),
         "schedule_cron": campaign.get("schedule_cron", "0 9 * * *"),
         "last_run": campaign.get("last_run", 0),
+        "media_type": campaign.get("media_type", "image"),
         "exclude_companies": campaign.get("exclude_companies", []),
+        "is_active": is_active,
     }
 
 
@@ -384,48 +392,206 @@ async def get_campaign_info(user_id: int = Depends(get_current_user_id)):
 async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_current_user_id)):
     """
     Setup or update the campaign configuration.
-    This analyzes the user prompt and configures the AI agent.
-    Media type (image/video) is auto-detected from the prompt.
+    Analyzes the user prompt, infers ALL settings (persona, visual style,
+    media type, schedule, excluded companies), saves to DB, but does NOT
+    activate the scheduler. User must explicitly activate.
     """
     try:
-        # Analyze user prompt with AI
-        logger.info(f"Analyzing prompt: {request.user_prompt}")
+        import concurrent.futures
+
+        logger.info(f"Analyzing prompt for user {user_id}: {request.user_prompt}")
+
+        # 1. Analyze user prompt with AI (persona + visual style)
         refined_persona, visual_style = analyze_user_prompt(request.user_prompt)
 
-        # Auto-detect media type from prompt (or use explicit value if provided)
+        # 2. Auto-detect media type from prompt
         if request.media_type and request.media_type in ("image", "video"):
             media_type = request.media_type
         else:
             media_type = detect_media_type_from_prompt(request.user_prompt)
             logger.info(f"Auto-detected media type: {media_type}")
 
-        # Update campaign in database
+        # 3. Infer excluded companies from prompt + author bio (with timeout)
+        exclude_companies = []
+        schedule_cron = request.schedule_cron
+        schedule_description = "Daily at 9 AM"
+
+        try:
+            # Get author bio for competitor inference
+            author_bio = db_get_author_bio(user_id)
+            bio_text = ""
+            if author_bio:
+                bio_name = author_bio.get("name", "")
+                bio_desc = author_bio.get("description", "")
+                bio_text = f"{bio_name}: {bio_desc}" if bio_name else bio_desc
+
+            # Run competitor inference and schedule inference concurrently
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                competitor_future = executor.submit(
+                    infer_excluded_companies, request.user_prompt, bio_text
+                )
+                schedule_future = executor.submit(
+                    infer_schedule_from_prompt, request.user_prompt
+                )
+
+                try:
+                    exclude_companies = competitor_future.result(timeout=60)
+                    logger.info(f"Inferred excluded companies: {exclude_companies}")
+                except concurrent.futures.TimeoutError:
+                    logger.warning("Competitor inference timed out, using empty list")
+                    exclude_companies = []
+                except Exception as e:
+                    logger.warning(f"Competitor inference failed: {e}")
+                    exclude_companies = []
+
+                try:
+                    schedule_cron, schedule_description = schedule_future.result(timeout=60)
+                    logger.info(f"Inferred schedule: {schedule_cron} ({schedule_description})")
+                except concurrent.futures.TimeoutError:
+                    logger.warning("Schedule inference timed out, using default")
+                except Exception as e:
+                    logger.warning(f"Schedule inference failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Inference side-effects failed: {e}")
+
+        # 4. Save ALL inferred settings to the campaign table (do NOT activate scheduler)
         update_campaign(
             user_id=user_id,
             user_prompt=request.user_prompt,
             refined_persona=refined_persona,
             visual_style=visual_style,
-            schedule_cron=request.schedule_cron,
-            media_type=media_type
+            schedule_cron=schedule_cron,
+            media_type=media_type,
+            exclude_companies=exclude_companies
         )
-
-        # Reconfigure scheduler for this user
-        setup_scheduler(user_id)
 
         return {
             "success": True,
-            "message": "Campaign configured successfully",
+            "message": "Campaign saved with inferred settings",
             "campaign": {
                 "user_prompt": request.user_prompt,
                 "refined_persona": refined_persona,
                 "visual_style": visual_style,
-                "schedule_cron": request.schedule_cron,
-                "media_type": media_type
+                "schedule_cron": schedule_cron,
+                "schedule_description": schedule_description,
+                "media_type": media_type,
+                "exclude_companies": exclude_companies
             }
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to setup campaign: {str(e)}")
+
+
+class CampaignOverridesRequest(BaseModel):
+    refined_persona: Optional[str] = None
+    visual_style: Optional[str] = None
+    media_type: Optional[str] = None
+    schedule_cron: Optional[str] = None
+    exclude_companies: Optional[list[str]] = None
+
+
+@app.put("/api/campaign/settings")
+async def update_campaign_settings(request: CampaignOverridesRequest, user_id: int = Depends(get_current_user_id)):
+    """Save user overrides to inferred campaign settings."""
+    try:
+        campaign = get_campaign(user_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="No campaign configured. Set up a campaign first.")
+
+        kwargs = {}
+        if request.refined_persona is not None:
+            kwargs["refined_persona"] = request.refined_persona
+        if request.visual_style is not None:
+            kwargs["visual_style"] = request.visual_style
+        if request.media_type is not None:
+            if request.media_type not in ("image", "video"):
+                raise HTTPException(status_code=400, detail="media_type must be 'image' or 'video'")
+            kwargs["media_type"] = request.media_type
+        if request.schedule_cron is not None:
+            parts = request.schedule_cron.split()
+            if len(parts) != 5:
+                raise HTTPException(status_code=400, detail="Invalid cron expression (need 5 fields)")
+            kwargs["schedule_cron"] = request.schedule_cron
+        if request.exclude_companies is not None:
+            kwargs["exclude_companies"] = [c.strip() for c in request.exclude_companies if c.strip()]
+
+        if kwargs:
+            update_campaign(user_id=user_id, **kwargs)
+
+        # If scheduler is active, reconfigure it with new settings
+        job_id = f"agent_cycle_user_{user_id}"
+        if scheduler.get_job(job_id):
+            setup_scheduler(user_id)
+
+        updated = get_campaign(user_id)
+        return {
+            "success": True,
+            "campaign": {
+                "user_prompt": updated.get("user_prompt", ""),
+                "refined_persona": updated.get("refined_persona", ""),
+                "visual_style": updated.get("visual_style", ""),
+                "schedule_cron": updated.get("schedule_cron", "0 9 * * *"),
+                "media_type": updated.get("media_type", "image"),
+                "exclude_companies": updated.get("exclude_companies", []),
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
+
+
+@app.post("/api/campaign/activate")
+async def activate_campaign(user_id: int = Depends(get_current_user_id)):
+    """Activate the campaign scheduler. Arms the cron job."""
+    try:
+        campaign = get_campaign(user_id)
+        if not campaign or not campaign.get("user_prompt"):
+            raise HTTPException(status_code=400, detail="No campaign configured. Set up a campaign first.")
+
+        # Check if user has connected social accounts
+        connections = get_connection_status(user_id)
+        has_connections = any(v.get("connected", False) if isinstance(v, dict) else v for v in connections.values())
+        if not has_connections:
+            raise HTTPException(status_code=400, detail="No social accounts connected. Connect at least one platform first.")
+
+        setup_scheduler(user_id)
+
+        job_id = f"agent_cycle_user_{user_id}"
+        is_active = scheduler.get_job(job_id) is not None
+
+        return {
+            "success": True,
+            "is_active": is_active,
+            "schedule_cron": campaign.get("schedule_cron", "0 9 * * *"),
+            "message": "Campaign activated"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to activate campaign: {str(e)}")
+
+
+@app.post("/api/campaign/deactivate")
+async def deactivate_campaign(user_id: int = Depends(get_current_user_id)):
+    """Deactivate the campaign scheduler. Removes the cron job."""
+    try:
+        job_id = f"agent_cycle_user_{user_id}"
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+
+        return {
+            "success": True,
+            "is_active": False,
+            "message": "Campaign deactivated"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to deactivate campaign: {str(e)}")
 
 
 @app.put("/api/campaign/exclude-companies")

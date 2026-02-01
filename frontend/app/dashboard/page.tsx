@@ -214,33 +214,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleActivateCampaign = async (prompt: string) => {
-    if (!token) return;
-    try {
-      const response = await fetch('/api/setup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          user_prompt: prompt,
-          schedule_cron: '0 9 * * *' // Daily at 9 AM
-          // media_type is auto-detected by backend
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to setup campaign');
-      }
-
-      const data = await response.json();
-      showNotification('success', 'Campaign activated successfully! AI is analyzing your prompt...');
-    } catch (error) {
-      showNotification('error', 'Failed to activate campaign');
-      throw error;
-    }
-  };
+  // Campaign setup is now handled entirely inside PromptBox
 
   const handleRunNow = async () => {
     if (!token) return;
@@ -418,9 +392,9 @@ export default function Dashboard() {
               {/* Campaign Prompt */}
               <div className="lg:col-span-3">
                 <PromptBox
-                  onActivate={handleActivateCampaign}
                   onRunNow={handleRunNow}
                   token={token}
+                  showNotification={showNotification}
                 />
               </div>
             </div>

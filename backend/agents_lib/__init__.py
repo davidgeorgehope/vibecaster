@@ -35,6 +35,8 @@ from .intent_parser import (
 )
 from .persona import (
     analyze_user_prompt,
+    infer_excluded_companies,
+    infer_schedule_from_prompt,
     create_fallback_persona,
 )
 from .social_media import (
@@ -132,6 +134,8 @@ __all__ = [
     # Persona
     'analyze_user_prompt',
     'create_fallback_persona',
+    'infer_excluded_companies',
+    'infer_schedule_from_prompt',
     # Social Media
     'post_to_twitter',
     'post_to_linkedin',
