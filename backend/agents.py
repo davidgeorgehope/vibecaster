@@ -16,6 +16,7 @@ from database import get_campaign, get_oauth_tokens, update_last_run, get_recent
 from logger_config import agent_logger as logger
 
 # Import shared utilities from agents_lib
+from agents_lib.content_filter import validate_post_content
 from agents_lib import (
     client,
     LLM_MODEL,
@@ -241,21 +242,33 @@ def run_agent_cycle(user_id: int):
         # Step 5: Post to platforms (using shared topics extracted earlier)
         if twitter_tokens and x_post and shared_image:
             try:
-                logger.info("[6/6] Posting to X...")
-                twitter_success = post_to_twitter(user_id, x_post, shared_image)
-                if twitter_success:
-                    posted_platforms.append("twitter")
-                    save_post_history(user_id, x_post, topics, ["twitter"])
+                # Validate post content (competitor filtering)
+                is_safe, block_reason = validate_post_content(x_post, "twitter")
+                if not is_safe:
+                    logger.warning(f"Skipping X post: {block_reason}")
+                    x_post = None  # Clear so we don't save it
+                else:
+                    logger.info("[6/6] Posting to X...")
+                    twitter_success = post_to_twitter(user_id, x_post, shared_image)
+                    if twitter_success:
+                        posted_platforms.append("twitter")
+                        save_post_history(user_id, x_post, topics, ["twitter"])
             except Exception as e:
                 logger.error(f"Failed to post to X: {e}")
 
         if linkedin_tokens and linkedin_post and shared_image:
             try:
-                logger.info("[6/6] Posting to LinkedIn...")
-                linkedin_success = post_to_linkedin(user_id, linkedin_post, shared_image)
-                if linkedin_success:
-                    posted_platforms.append("linkedin")
-                    save_post_history(user_id, linkedin_post, topics, ["linkedin"])
+                # Validate post content (competitor filtering)
+                is_safe, block_reason = validate_post_content(linkedin_post, "linkedin")
+                if not is_safe:
+                    logger.warning(f"Skipping LinkedIn post: {block_reason}")
+                    linkedin_post = None  # Clear so we don't save it
+                else:
+                    logger.info("[6/6] Posting to LinkedIn...")
+                    linkedin_success = post_to_linkedin(user_id, linkedin_post, shared_image)
+                    if linkedin_success:
+                        posted_platforms.append("linkedin")
+                        save_post_history(user_id, linkedin_post, topics, ["linkedin"])
             except Exception as e:
                 logger.error(f"Failed to post to LinkedIn: {e}")
 

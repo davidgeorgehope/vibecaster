@@ -10,6 +10,7 @@ from .url_utils import validate_url, extract_html_title
 from .post_generator import generate_x_post, generate_linkedin_post
 from .content_generator import generate_image
 from .social_media import post_to_twitter, post_to_linkedin
+from .content_filter import validate_post_content
 from database import get_campaign, get_oauth_tokens, save_post_history
 from logger_config import agent_logger as logger
 
@@ -377,8 +378,11 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
     # Post to Twitter
     if 'twitter' in platforms and x_post:
         try:
-            twitter_tokens = get_oauth_tokens(user_id, "twitter")
-            if not twitter_tokens:
+            # Validate post content (competitor filtering)
+            is_safe, block_reason = validate_post_content(x_post, "twitter")
+            if not is_safe:
+                result["errors"]["twitter"] = f"Blocked: {block_reason}"
+            elif not get_oauth_tokens(user_id, "twitter"):
                 result["errors"]["twitter"] = "Not connected to Twitter"
             else:
                 success = post_to_twitter(user_id, x_post, image_bytes)
@@ -396,8 +400,11 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
     # Post to LinkedIn
     if 'linkedin' in platforms and linkedin_post:
         try:
-            linkedin_tokens = get_oauth_tokens(user_id, "linkedin")
-            if not linkedin_tokens:
+            # Validate post content (competitor filtering)
+            is_safe, block_reason = validate_post_content(linkedin_post, "linkedin")
+            if not is_safe:
+                result["errors"]["linkedin"] = f"Blocked: {block_reason}"
+            elif not get_oauth_tokens(user_id, "linkedin"):
                 result["errors"]["linkedin"] = "Not connected to LinkedIn"
             else:
                 success = post_to_linkedin(user_id, linkedin_post, image_bytes)
