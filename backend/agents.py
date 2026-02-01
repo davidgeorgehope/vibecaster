@@ -116,6 +116,9 @@ def run_agent_cycle(user_id: int):
         user_prompt = campaign["user_prompt"]
         refined_persona = campaign.get("refined_persona", "")
         visual_style = campaign.get("visual_style", "")
+        exclude_companies = campaign.get("exclude_companies", [])
+        if exclude_companies:
+            logger.info(f"Content filter active — excluding: {exclude_companies}")
 
         logger.info(f"Campaign: {user_prompt}")
         logger.info(f"Persona: {refined_persona[:100]}...")
@@ -243,7 +246,7 @@ def run_agent_cycle(user_id: int):
         if twitter_tokens and x_post and shared_image:
             try:
                 # Validate post content (competitor filtering)
-                is_safe, block_reason = validate_post_content(x_post, "twitter")
+                is_safe, block_reason = validate_post_content(x_post, exclude_companies, "twitter")
                 if not is_safe:
                     logger.warning(f"Skipping X post: {block_reason}")
                     x_post = None  # Clear so we don't save it
@@ -259,7 +262,7 @@ def run_agent_cycle(user_id: int):
         if linkedin_tokens and linkedin_post and shared_image:
             try:
                 # Validate post content (competitor filtering)
-                is_safe, block_reason = validate_post_content(linkedin_post, "linkedin")
+                is_safe, block_reason = validate_post_content(linkedin_post, exclude_companies, "linkedin")
                 if not is_safe:
                     logger.warning(f"Skipping LinkedIn post: {block_reason}")
                     linkedin_post = None  # Clear so we don't save it

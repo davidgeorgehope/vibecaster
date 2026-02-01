@@ -367,6 +367,11 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
         "errors": {}
     }
 
+    # Load user's exclude_companies list from campaign config
+    from database import get_campaign as _get_campaign
+    _campaign = _get_campaign(user_id)
+    exclude_companies = _campaign.get("exclude_companies", []) if _campaign else []
+
     # Decode image if provided
     image_bytes = None
     if image_base64:
@@ -379,7 +384,7 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
     if 'twitter' in platforms and x_post:
         try:
             # Validate post content (competitor filtering)
-            is_safe, block_reason = validate_post_content(x_post, "twitter")
+            is_safe, block_reason = validate_post_content(x_post, exclude_companies, "twitter")
             if not is_safe:
                 result["errors"]["twitter"] = f"Blocked: {block_reason}"
             elif not get_oauth_tokens(user_id, "twitter"):
@@ -401,7 +406,7 @@ def post_url_content(user_id: int, x_post: Optional[str], linkedin_post: Optiona
     if 'linkedin' in platforms and linkedin_post:
         try:
             # Validate post content (competitor filtering)
-            is_safe, block_reason = validate_post_content(linkedin_post, "linkedin")
+            is_safe, block_reason = validate_post_content(linkedin_post, exclude_companies, "linkedin")
             if not is_safe:
                 result["errors"]["linkedin"] = f"Blocked: {block_reason}"
             elif not get_oauth_tokens(user_id, "linkedin"):

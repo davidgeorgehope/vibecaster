@@ -80,6 +80,10 @@ class SetupRequest(BaseModel):
     media_type: Optional[str] = None  # Auto-detected from prompt if not provided
 
 
+class ExcludeCompaniesRequest(BaseModel):
+    exclude_companies: list[str] = []
+
+
 def detect_media_type_from_prompt(prompt: str) -> str:
     """
     Auto-detect whether the user wants video or image content based on their prompt.
@@ -371,7 +375,8 @@ async def get_campaign_info(user_id: int = Depends(get_current_user_id)):
         "refined_persona": campaign.get("refined_persona", ""),
         "visual_style": campaign.get("visual_style", ""),
         "schedule_cron": campaign.get("schedule_cron", "0 9 * * *"),
-        "last_run": campaign.get("last_run", 0)
+        "last_run": campaign.get("last_run", 0),
+        "exclude_companies": campaign.get("exclude_companies", []),
     }
 
 
@@ -421,6 +426,31 @@ async def setup_campaign(request: SetupRequest, user_id: int = Depends(get_curre
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to setup campaign: {str(e)}")
+
+
+@app.put("/api/campaign/exclude-companies")
+async def update_exclude_companies(request: ExcludeCompaniesRequest, user_id: int = Depends(get_current_user_id)):
+    """Update the list of companies to exclude from automated posts."""
+    try:
+        # Ensure campaign exists
+        campaign = get_campaign(user_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="No campaign configured. Set up a campaign first.")
+
+        # Clean the list (strip whitespace, remove empties)
+        cleaned = [c.strip() for c in request.exclude_companies if c.strip()]
+
+        update_campaign(user_id=user_id, exclude_companies=cleaned)
+
+        return {
+            "success": True,
+            "exclude_companies": cleaned,
+            "message": f"Updated exclude list: {len(cleaned)} companies"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update exclude list: {str(e)}")
 
 
 @app.post("/api/run-now")
@@ -682,9 +712,8 @@ UPLOAD_EXPIRY_SECONDS = 30 * 60  # 30 minutes
 # Store partial uploads: {upload_id: {chunks: {index: bytes}, filename, content_type, total_size, created_at}}
 pending_uploads: Dict[str, dict] = {}
 
-# Store processed videos for posting: {video_ref: {bytes, content_type, created_at, user_id}}
-# This avoids sending huge base64 strings to the browser
-processed_videos: Dict[str, dict] = {}
+# Use shared video storage module
+from video_storage import processed_videos, cleanup_expired_videos as cleanup_expired_videos_storage
 
 
 class UploadInitRequest(BaseModel):
@@ -706,16 +735,12 @@ def cleanup_stale_uploads():
         del pending_uploads[upload_id]
         logger.info(f"[ChunkedUpload] Cleaned up expired upload: {upload_id}")
 
-    # Clean up processed videos (same expiry)
-    expired_videos = [
-        video_ref for video_ref, data in processed_videos.items()
-        if now - data.get('created_at', 0) > UPLOAD_EXPIRY_SECONDS
-    ]
-    for video_ref in expired_videos:
-        del processed_videos[video_ref]
-        logger.info(f"[VideoPost] Cleaned up expired video: {video_ref}")
+    # Clean up processed videos using shared storage module
+    expired_videos_count = cleanup_expired_videos_storage()
+    if expired_videos_count > 0:
+        logger.info(f"[VideoPost] Cleaned up {expired_videos_count} expired video(s)")
 
-    return len(expired) + len(expired_videos)
+    return len(expired) + expired_videos_count
 
 
 @app.post("/api/upload/init")
@@ -727,12 +752,15 @@ async def upload_init_endpoint(
     Initialize a chunked upload session.
     Returns an upload_id to use for subsequent chunk uploads.
     """
-    # Validate content type
+    # Validate content type (video or audio)
     video_types = {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}
-    if request.content_type not in video_types:
+    audio_types = {"audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/mp4", "audio/ogg", "audio/aac", "audio/flac"}
+    allowed_types = video_types | audio_types
+
+    if request.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Only video files allowed. Supported: mp4, webm, mov. Got: {request.content_type}"
+            detail=f"File type not supported. Supported: mp4, webm, mov, mp3, wav, m4a, ogg, aac, flac. Got: {request.content_type}"
         )
 
     # Validate total size
@@ -1326,6 +1354,123 @@ async def post_video_endpoint(
         else:
             yield f"data: {json.dumps({'type': 'complete', 'result': result_container['result'], 'timestamp': time_module.time()})}\n\n"
 
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.get("/api/video/download/{video_ref}")
+async def download_video_ref_endpoint(
+    video_ref: str,
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Download a video from in-memory storage by video_ref.
+    Used for downloading videos generated from VideoPostBox.
+    """
+    from fastapi.responses import Response
+
+    # Retrieve video from server storage
+    if video_ref not in processed_videos:
+        raise HTTPException(status_code=404, detail="Video not found or expired. Please regenerate.")
+
+    video_data = processed_videos[video_ref]
+    if video_data['user_id'] != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    return Response(
+        content=video_data['bytes'],
+        media_type=video_data.get('content_type', 'video/mp4'),
+        headers={
+            "Content-Disposition": "attachment; filename=\"video.mp4\""
+        }
+    )
+
+
+# ===== SONG VIDEO ENDPOINTS =====
+
+from song_video import SUPPORTED_AUDIO_TYPES, generate_song_video_stream
+
+
+@app.post("/api/generate-song-video-stream")
+async def generate_song_video_stream_endpoint(
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    user_id: int = Depends(get_current_user_id)
+):
+    """
+    Stream song-to-video generation with karaoke-style captions.
+
+    Accepts audio files (MP3, WAV, M4A, OGG, AAC, FLAC) and:
+    1. Transcribes lyrics with word-level timestamps
+    2. Generates cover art based on mood/lyrics
+    3. Creates video with karaoke-style captions
+    4. Generates promotional posts for X, LinkedIn, YouTube
+
+    Uses SSE for real-time progress updates.
+    """
+    import json
+
+    audio_types = SUPPORTED_AUDIO_TYPES
+
+    # Get file bytes from either direct upload or chunked upload
+    if upload_id:
+        # Retrieve from chunked upload
+        if upload_id not in pending_uploads:
+            raise HTTPException(status_code=404, detail="Upload not found or expired")
+
+        upload_data = pending_uploads[upload_id]
+        if upload_data['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+
+        if 'file_bytes' not in upload_data:
+            raise HTTPException(status_code=400, detail="Upload not complete. Call /api/upload/complete first")
+
+        file_bytes = upload_data['file_bytes']
+        content_type = upload_data['content_type']
+        filename = upload_data['filename']
+
+        # Clean up the pending upload after retrieving
+        del pending_uploads[upload_id]
+        logger.info(f"[SongVideo] User {user_id} processing chunked upload {upload_id}: {filename} ({len(file_bytes)} bytes)")
+
+    elif file:
+        # Direct file upload
+        content_type = file.content_type or ""
+        if content_type not in audio_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only audio files allowed. Supported: mp3, wav, m4a, ogg, aac, flac. Got: {content_type}"
+            )
+
+        file_bytes = await file.read()
+        filename = file.filename
+
+        if len(file_bytes) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size: {MAX_UPLOAD_SIZE // (1024*1024)}MB"
+            )
+
+        if len(file_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        logger.info(f"[SongVideo] User {user_id} uploading {filename} ({len(file_bytes)} bytes)")
+
+    else:
+        raise HTTPException(status_code=400, detail="Either file or upload_id is required")
+
+    def generate():
+        for chunk in generate_song_video_stream(user_id, file_bytes, filename, content_type):
+            yield f"data: {chunk}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

@@ -181,6 +181,13 @@ def init_database():
             cursor.execute("ALTER TABLE campaign ADD COLUMN media_type TEXT DEFAULT 'image'")
             print("Migration: Added media_type column to campaign table")
 
+        # Migration: Add exclude_companies column to campaign table
+        cursor.execute("PRAGMA table_info(campaign)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'exclude_companies' not in columns:
+            cursor.execute("ALTER TABLE campaign ADD COLUMN exclude_companies TEXT")
+            print("Migration: Added exclude_companies column to campaign table")
+
         # Set admin flag for the admin email
         cursor.execute("""
             UPDATE users SET is_admin = 1 WHERE email = 'email.djhope@gmail.com'
@@ -267,7 +274,8 @@ def delete_oauth_tokens(user_id: int, service: str):
 # Campaign table operations
 def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_persona: Optional[str] = None,
                    visual_style: Optional[str] = None, schedule_cron: Optional[str] = None,
-                   include_links: Optional[bool] = None, media_type: Optional[str] = None):
+                   include_links: Optional[bool] = None, media_type: Optional[str] = None,
+                   exclude_companies: Optional[list] = None):
     """Update or create campaign configuration for a user."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -299,6 +307,10 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
             if media_type is not None:
                 updates.append("media_type = ?")
                 params.append(media_type)
+            if exclude_companies is not None:
+                import json as _json
+                updates.append("exclude_companies = ?")
+                params.append(_json.dumps(exclude_companies))
 
             if updates:
                 query = f"UPDATE campaign SET {', '.join(updates)} WHERE user_id = ?"
@@ -306,11 +318,13 @@ def update_campaign(user_id: int, user_prompt: Optional[str] = None, refined_per
                 cursor.execute(query, params)
         else:
             # Create new campaign
+            import json as _json
             cursor.execute("""
-                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron, include_links, media_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO campaign (user_id, user_prompt, refined_persona, visual_style, schedule_cron, include_links, media_type, exclude_companies)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (user_id, user_prompt or "", refined_persona or "", visual_style or "",
-                  schedule_cron or "0 9 * * *", 1 if include_links else 0, media_type or "image"))
+                  schedule_cron or "0 9 * * *", 1 if include_links else 0, media_type or "image",
+                  _json.dumps(exclude_companies) if exclude_companies else None))
 
 
 def get_campaign(user_id: int) -> Optional[Dict[str, Any]]:
@@ -319,7 +333,19 @@ def get_campaign(user_id: int) -> Optional[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM campaign WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        campaign = dict(row)
+        # Parse exclude_companies JSON
+        if campaign.get("exclude_companies"):
+            import json as _json
+            try:
+                campaign["exclude_companies"] = _json.loads(campaign["exclude_companies"])
+            except (json.JSONDecodeError, TypeError):
+                campaign["exclude_companies"] = []
+        else:
+            campaign["exclude_companies"] = []
+        return campaign
 
 
 def update_last_run(user_id: int, timestamp: int):
@@ -329,18 +355,40 @@ def update_last_run(user_id: int, timestamp: int):
         cursor.execute("UPDATE campaign SET last_run = ? WHERE user_id = ?", (timestamp, user_id))
 
 
-def get_connection_status(user_id: int) -> Dict[str, bool]:
-    """Check which services are connected for a user."""
+def get_connection_status(user_id: int) -> Dict[str, Any]:
+    """Check which services are connected for a user.
+
+    Returns dict with connection status and expiry info:
+    {
+        "twitter": {"connected": True, "expired": False},
+        "linkedin": {"connected": True, "expired": True},
+        "youtube": {"connected": False, "expired": False}
+    }
+    """
+    import time
+
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT service FROM secrets WHERE user_id = ?", (user_id,))
-        connected_services = {row[0] for row in cursor.fetchall()}
+        cursor.execute("SELECT service, expires_at FROM secrets WHERE user_id = ?", (user_id,))
+        rows = cursor.fetchall()
 
-        return {
-            "twitter": "twitter" in connected_services,
-            "linkedin": "linkedin" in connected_services,
-            "youtube": "youtube" in connected_services
+        now = int(time.time())
+        result = {
+            "twitter": {"connected": False, "expired": False},
+            "linkedin": {"connected": False, "expired": False},
+            "youtube": {"connected": False, "expired": False}
         }
+
+        for row in rows:
+            service = row[0]
+            expires_at = row[1]
+            if service in result:
+                result[service]["connected"] = True
+                # Check if token is expired (with 5 minute buffer)
+                if expires_at and expires_at < (now + 300):
+                    result[service]["expired"] = True
+
+        return result
 
 
 # Post history operations
