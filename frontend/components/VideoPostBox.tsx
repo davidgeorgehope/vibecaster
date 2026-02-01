@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Upload, Loader2, FileVideo, Check, AlertCircle, Twitter, Linkedin, Youtube, Copy, FileText } from 'lucide-react';
+import { Upload, Loader2, FileVideo, FileAudio, Music, Check, AlertCircle, Twitter, Linkedin, Youtube, Copy, FileText, Image, Download } from 'lucide-react';
 import { fetchWithRetry } from '@/utils/fetchWithRetry';
 
 interface VideoPostBoxProps {
@@ -14,14 +14,20 @@ interface VideoPostBoxProps {
   showNotification: (type: 'success' | 'error' | 'info', message: string) => void;
 }
 
-type ProgressStep = 'idle' | 'uploading' | 'transcribing' | 'generating_posts' | 'complete' | 'error';
+type ProgressStep = 'idle' | 'uploading' | 'analyzing' | 'transcribing' | 'generating_image' | 'composing_video' | 'generating_posts' | 'complete' | 'error';
 
-const ACCEPTED_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+const ACCEPTED_VIDEO = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+const ACCEPTED_AUDIO = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/ogg', 'audio/aac', 'audio/flac'];
+const ACCEPTED_TYPES = [...ACCEPTED_VIDEO, ...ACCEPTED_AUDIO];
 const MAX_SIZE_MB = 500;
 const CHUNK_SIZE_MB = 50;
 
 interface GeneratedContent {
   transcript: string | null;
+  lyrics: string | null;  // For audio files
+  mood: string | null;    // Song mood
+  song_title: string | null;  // Detected song title
+  cover_image: string | null; // Base64 cover image for audio
   x_post: string | null;
   linkedin_post: string | null;
   youtube_title: string | null;
@@ -38,6 +44,10 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   const [statusMessage, setStatusMessage] = useState('');
   const [content, setContent] = useState<GeneratedContent>({
     transcript: null,
+    lyrics: null,
+    mood: null,
+    song_title: null,
+    cover_image: null,
     x_post: null,
     linkedin_post: null,
     youtube_title: null,
@@ -59,11 +69,16 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isAudioFile = (file: File): boolean => {
+    return ACCEPTED_AUDIO.includes(file.type);
+  };
 
   const validateFile = (file: File): string | null => {
     if (!ACCEPTED_TYPES.includes(file.type)) {
-      return `Unsupported file type: ${file.type || 'unknown'}. Use MP4, WebM, or MOV.`;
+      return `Unsupported file type: ${file.type || 'unknown'}. Use MP4, WebM, MOV for video or MP3, WAV, M4A, OGG for audio.`;
     }
     if (file.size > MAX_SIZE_MB * 1024 * 1024) {
       return `File too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Max: ${MAX_SIZE_MB}MB`;
@@ -83,6 +98,10 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     // Reset outputs
     setContent({
       transcript: null,
+      lyrics: null,
+      mood: null,
+      song_title: null,
+      cover_image: null,
       x_post: null,
       linkedin_post: null,
       youtube_title: null,
@@ -184,13 +203,21 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   const handleGenerate = async () => {
     if (!selectedFile || !token) return;
 
+    const isAudio = isAudioFile(selectedFile);
+    const fileTypeLabel = isAudio ? 'audio' : 'video';
+    const endpoint = isAudio ? '/api/generate-song-video-stream' : '/api/generate-video-post-stream';
+
     setIsProcessing(true);
     setError(null);
     setProgress('uploading');
-    setStatusMessage('Uploading video...');
+    setStatusMessage(`Uploading ${fileTypeLabel}...`);
     setUploadProgress(null);
     setContent({
       transcript: null,
+      lyrics: null,
+      mood: null,
+      song_title: null,
+      cover_image: null,
       x_post: null,
       linkedin_post: null,
       youtube_title: null,
@@ -210,11 +237,11 @@ export default function VideoPostBox({ token, connections, showNotification }: V
         const uploadId = await uploadFileChunked(selectedFile);
 
         // Now process with upload_id
-        setStatusMessage('Processing video...');
+        setStatusMessage(`Processing ${fileTypeLabel}...`);
         const formData = new FormData();
         formData.append('upload_id', uploadId);
 
-        response = await fetchWithRetry('/api/generate-video-post-stream', {
+        response = await fetchWithRetry(endpoint, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`
@@ -226,7 +253,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
         const formData = new FormData();
         formData.append('file', selectedFile);
 
-        response = await fetchWithRetry('/api/generate-video-post-stream', {
+        response = await fetchWithRetry(endpoint, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`
@@ -273,8 +300,25 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                     setProgress(data.step as ProgressStep);
                     setStatusMessage(data.message || '');
                     break;
+                  case 'keepalive':
+                    // Update status message but don't change progress step
+                    setStatusMessage(data.message || '');
+                    break;
                   case 'transcript':
                     setContent(prev => ({ ...prev, transcript: data.transcript }));
+                    break;
+                  case 'lyrics':
+                    // Song video: lyrics with mood and title
+                    setContent(prev => ({
+                      ...prev,
+                      lyrics: data.lyrics,
+                      mood: data.mood || null,
+                      song_title: data.title || null
+                    }));
+                    break;
+                  case 'image_ready':
+                    // Song video: cover image generated
+                    setContent(prev => ({ ...prev, cover_image: data.image_base64 }));
                     break;
                   case 'x_post':
                     setContent(prev => ({ ...prev, x_post: data.x_post }));
@@ -417,10 +461,42 @@ export default function VideoPostBox({ token, connections, showNotification }: V
     }
   };
 
+  const handleDownload = async () => {
+    if (!token || !content.video_ref) return;
+
+    setIsDownloading(true);
+    try {
+      const response = await fetch(`/api/video/download/${content.video_ref}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to download video');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = selectedFile?.name?.replace(/\.[^/.]+$/, '') + '_processed.mp4' || 'video.mp4';
+      a.click();
+      window.URL.revokeObjectURL(url);
+      showNotification('success', 'Video downloaded');
+    } catch (err) {
+      showNotification('error', 'Failed to download video');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleReset = () => {
     setSelectedFile(null);
     setContent({
       transcript: null,
+      lyrics: null,
+      mood: null,
+      song_title: null,
+      cover_image: null,
       x_post: null,
       linkedin_post: null,
       youtube_title: null,
@@ -440,15 +516,25 @@ export default function VideoPostBox({ token, connections, showNotification }: V
   };
 
   const hasContent = content.x_post || content.linkedin_post || content.youtube_title;
+  const isAudio = selectedFile ? isAudioFile(selectedFile) : false;
 
-  const progressSteps = [
+  // Different progress steps for audio vs video
+  const progressSteps = isAudio ? [
+    { key: 'uploading', label: 'Upload' },
+    { key: 'transcribing', label: 'Lyrics' },
+    { key: 'generating_image', label: 'Cover' },
+    { key: 'composing_video', label: 'Video' },
+    { key: 'generating_posts', label: 'Posts' },
+  ] : [
     { key: 'uploading', label: 'Upload' },
     { key: 'transcribing', label: 'Transcribe' },
     { key: 'generating_posts', label: 'Generate' },
   ];
 
   const getStepStatus = (stepKey: string) => {
-    const stepOrder = ['uploading', 'transcribing', 'generating_posts', 'complete'];
+    const stepOrder = isAudio
+      ? ['uploading', 'analyzing', 'transcribing', 'generating_image', 'composing_video', 'generating_posts', 'complete']
+      : ['uploading', 'transcribing', 'generating_posts', 'complete'];
     const currentIndex = stepOrder.indexOf(progress);
     const stepIndex = stepOrder.indexOf(stepKey);
     if (currentIndex > stepIndex) return 'complete';
@@ -458,15 +544,16 @@ export default function VideoPostBox({ token, connections, showNotification }: V
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Left Panel: Video Upload */}
+      {/* Left Panel: Media Upload */}
       <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-lg p-4 space-y-4">
         <h3 className="text-xl font-semibold text-white flex items-center gap-2">
           <Upload className="w-6 h-6 text-purple-500" />
-          Upload Video
+          Upload Media
         </h3>
 
         <p className="text-gray-400 text-sm">
-          Upload a video to generate promotional posts for X, LinkedIn, and YouTube.
+          Upload a video or audio file to generate promotional posts for X, LinkedIn, and YouTube.
+          {' '}<span className="text-purple-400">Audio files</span> will be converted to karaoke-style lyric videos.
         </p>
 
         {/* Drop Zone */}
@@ -494,17 +581,22 @@ export default function VideoPostBox({ token, connections, showNotification }: V
 
           {selectedFile ? (
             <div className="space-y-2">
-              <FileVideo className="w-12 h-12 mx-auto text-green-400" />
+              {isAudio ? (
+                <Music className="w-12 h-12 mx-auto text-green-400" />
+              ) : (
+                <FileVideo className="w-12 h-12 mx-auto text-green-400" />
+              )}
               <p className="text-white font-medium">{selectedFile.name}</p>
               <p className="text-gray-400 text-sm">
                 {(selectedFile.size / (1024 * 1024)).toFixed(1)} MB
+                {isAudio && <span className="text-purple-400 ml-2">Song</span>}
               </p>
             </div>
           ) : (
             <div className="space-y-2">
               <Upload className="w-12 h-12 mx-auto text-gray-500" />
-              <p className="text-gray-300">Drop video here or click to browse</p>
-              <p className="text-gray-500 text-sm">MP4, WebM, MOV. Max {MAX_SIZE_MB}MB</p>
+              <p className="text-gray-300">Drop video or audio here</p>
+              <p className="text-gray-500 text-sm">Video: MP4, WebM, MOV | Audio: MP3, WAV, M4A, OGG. Max {MAX_SIZE_MB}MB</p>
             </div>
           )}
         </div>
@@ -571,7 +663,7 @@ export default function VideoPostBox({ token, connections, showNotification }: V
                       </span>
                     </div>
                     {index < progressSteps.length - 1 && (
-                      <div className={`w-12 h-0.5 mx-2 ${status === 'complete' ? 'bg-green-500' : 'bg-gray-700'}`} />
+                      <div className={`${progressSteps.length > 3 ? 'w-6 mx-1' : 'w-12 mx-2'} h-0.5 ${status === 'complete' ? 'bg-green-500' : 'bg-gray-700'}`} />
                     )}
                   </div>
                 );
@@ -789,6 +881,54 @@ export default function VideoPostBox({ token, connections, showNotification }: V
           </div>
         )}
 
+        {/* Cover Image Preview (for audio/song files) */}
+        {content.cover_image && (
+          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Image className="w-5 h-5 text-purple-400" />
+              <span className="text-white font-medium">Cover Art</span>
+              {content.mood && (
+                <span className="text-xs text-purple-400 ml-auto">Mood: {content.mood}</span>
+              )}
+            </div>
+            <div className="flex justify-center">
+              <img
+                src={`data:image/png;base64,${content.cover_image}`}
+                alt="Generated cover art"
+                className="max-w-[200px] rounded-lg shadow-lg"
+              />
+            </div>
+            {content.song_title && (
+              <p className="text-center text-sm text-gray-400 mt-2">{content.song_title}</p>
+            )}
+          </div>
+        )}
+
+        {/* Lyrics Preview (for audio/song files) */}
+        {content.lyrics && (
+          <details className="bg-gray-800/50 border border-gray-700 rounded-lg" open>
+            <summary className="p-4 cursor-pointer text-white font-medium flex items-center gap-2">
+              <Music className="w-5 h-5 text-purple-400" />
+              Lyrics
+              {content.mood && (
+                <span className="text-xs text-purple-400 ml-auto">{content.mood}</span>
+              )}
+            </summary>
+            <div className="px-4 pb-4">
+              <p className="text-gray-300 text-sm whitespace-pre-wrap max-h-48 overflow-y-auto">
+                {content.lyrics}
+              </p>
+              <button
+                onClick={() => handleCopy(content.lyrics!, 'Lyrics')}
+                className="mt-2 text-sm text-purple-400 hover:text-purple-300 flex items-center gap-1"
+              >
+                <Copy className="w-3 h-3" />
+                Copy lyrics
+              </button>
+            </div>
+          </details>
+        )}
+
         {/* Blog Post Preview (collapsible) */}
         {content.blog_post && (
           <details className="bg-gray-800/50 border border-gray-700 rounded-lg" open>
@@ -834,6 +974,23 @@ export default function VideoPostBox({ token, connections, showNotification }: V
               </button>
             </div>
           </details>
+        )}
+
+        {/* Download Button */}
+        {content.video_ref && (
+          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+            <button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="w-full py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50"
+            >
+              {isDownloading ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Downloading...</>
+              ) : (
+                <><Download className="w-4 h-4" /> Download Video</>
+              )}
+            </button>
+          </div>
         )}
       </div>
     </div>

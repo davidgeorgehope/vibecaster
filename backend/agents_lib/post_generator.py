@@ -4,7 +4,7 @@ from typing import Tuple, Optional
 from google.genai import types
 
 from .config import client, LLM_MODEL
-from .utils import strip_markdown_formatting
+from .utils import strip_markdown_formatting, sanitize_for_linkedin
 from .linkedin_mentions import apply_linkedin_mentions
 from logger_config import agent_logger as logger
 
@@ -174,6 +174,9 @@ def generate_linkedin_post(
 
             # Strip any markdown formatting (LinkedIn doesn't support it)
             post_text = strip_markdown_formatting(post_text)
+
+            # Replace pipe characters that cause LinkedIn truncation
+            post_text = sanitize_for_linkedin(post_text)
 
             # Apply LinkedIn company mentions (converts company names to mention format)
             post_text = apply_linkedin_mentions(post_text)

@@ -9,7 +9,7 @@ from typing import Optional
 from google.genai import types
 
 from .config import client, LLM_MODEL
-from .utils import is_network_error, emit_agent_event, strip_markdown_formatting
+from .utils import is_network_error, emit_agent_event, strip_markdown_formatting, sanitize_for_linkedin
 from .intent_parser import agent_intent_parser
 from .agent_tools import agent_search, agent_post_generator, agent_brainstorm, agent_generate_campaign_prompt
 from .content_generator import generate_image
@@ -400,7 +400,7 @@ def parse_generated_posts(response_text: str) -> dict:
     # Extract LinkedIn post
     li_match = re.search(r'---LINKEDIN_POST_START---\s*(.*?)\s*---LINKEDIN_POST_END---', response_text, re.DOTALL)
     if li_match:
-        result["linkedin_post"] = strip_markdown_formatting(li_match.group(1).strip())
+        result["linkedin_post"] = sanitize_for_linkedin(strip_markdown_formatting(li_match.group(1).strip()))
 
     return result
 

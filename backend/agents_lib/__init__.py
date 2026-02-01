@@ -6,7 +6,7 @@ The main implementation is still in agents.py at the backend root.
 These sub-modules provide shared utilities and configuration.
 """
 from .config import client, LLM_MODEL, LLM_FALLBACK, IMAGE_MODEL, QUIC_ERROR_PATTERNS, TOPIC_STOPWORDS
-from .utils import is_network_error, emit_agent_event, strip_markdown_formatting
+from .utils import is_network_error, emit_agent_event, strip_markdown_formatting, sanitize_for_linkedin
 from .exceptions import AgentError, SearchError, NetworkError, URLValidationError, GenerationError
 from .url_utils import (
     resolve_redirect_url,
@@ -99,6 +99,7 @@ __all__ = [
     'is_network_error',
     'emit_agent_event',
     'strip_markdown_formatting',
+    'sanitize_for_linkedin',
     # URL Utils
     'resolve_redirect_url',
     'clean_url_text',

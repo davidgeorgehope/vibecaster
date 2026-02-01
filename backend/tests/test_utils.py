@@ -8,6 +8,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from agents import is_network_error, emit_agent_event, strip_markdown_formatting
+from agents_lib.utils import sanitize_for_linkedin
 
 
 class TestIsNetworkError:
@@ -131,3 +132,42 @@ class TestStripMarkdownFormatting:
         """Test that plain text is preserved."""
         result = strip_markdown_formatting("Plain text without formatting")
         assert result == "Plain text without formatting"
+
+
+class TestSanitizeForLinkedin:
+    """Tests for LinkedIn pipe character sanitization."""
+
+    def test_replaces_pipe_character(self):
+        """Test that ASCII pipe is replaced with Unicode lookalike."""
+        result = sanitize_for_linkedin("ES|QL")
+        assert "|" not in result
+        assert "ES\u23d0QL" == result
+
+    def test_replaces_multiple_pipes(self):
+        """Test that all pipe characters are replaced."""
+        result = sanitize_for_linkedin("a|b|c|d")
+        assert "|" not in result
+        assert result == "a\u23d0b\u23d0c\u23d0d"
+
+    def test_no_change_without_pipes(self):
+        """Test that text without pipes is unchanged."""
+        text = "Hello world, no pipes here!"
+        assert sanitize_for_linkedin(text) == text
+
+    def test_empty_string(self):
+        """Test handling of empty string."""
+        assert sanitize_for_linkedin("") == ""
+
+    def test_idempotent(self):
+        """Test that applying twice doesn't double-transform."""
+        text = "ES|QL query language"
+        once = sanitize_for_linkedin(text)
+        twice = sanitize_for_linkedin(once)
+        assert once == twice
+
+    def test_preserves_surrounding_text(self):
+        """Test that surrounding text is preserved intact."""
+        result = sanitize_for_linkedin("Learn ES|QL for Elasticsearch queries #data")
+        assert result.startswith("Learn ES")
+        assert result.endswith("queries #data")
+        assert "|" not in result

@@ -7,6 +7,7 @@ import requests
 
 from database import get_oauth_tokens
 from logger_config import agent_logger as logger
+from agents_lib.utils import sanitize_for_linkedin
 
 
 def post_to_twitter(user_id: int, post_text: str, image_bytes: Optional[bytes] = None) -> bool:
@@ -131,6 +132,9 @@ def post_to_linkedin(user_id: int, post_text: str, image_bytes: Optional[bytes] 
         author_urn = _get_linkedin_author_urn(headers)
         if not author_urn:
             return False
+
+        # Sanitize pipe characters that cause LinkedIn truncation
+        post_text = sanitize_for_linkedin(post_text)
 
         # Handle image upload if provided
         image_urn = None

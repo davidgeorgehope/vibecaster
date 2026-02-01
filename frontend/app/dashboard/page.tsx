@@ -16,19 +16,24 @@ import VideoPostBox from '@/components/VideoPostBox';
 
 type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs';
 
+interface ConnectionInfo {
+  connected: boolean;
+  expired: boolean;
+}
+
 interface ConnectionStatus {
-  twitter: boolean;
-  linkedin: boolean;
-  youtube: boolean;
+  twitter: ConnectionInfo;
+  linkedin: ConnectionInfo;
+  youtube: ConnectionInfo;
 }
 
 export default function Dashboard() {
   const { user, token, logout, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const [connections, setConnections] = useState<ConnectionStatus>({
-    twitter: false,
-    linkedin: false,
-    youtube: false
+    twitter: { connected: false, expired: false },
+    linkedin: { connected: false, expired: false },
+    youtube: { connected: false, expired: false }
   });
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'info';
@@ -258,6 +263,16 @@ export default function Dashboard() {
     }
   };
 
+  // Helper to convert connection status to simple booleans for child components
+  const simpleConnections = {
+    twitter: connections.twitter.connected,
+    linkedin: connections.linkedin.connected,
+    youtube: connections.youtube.connected
+  };
+
+  // Check if any connections are expired
+  const hasExpiredConnections = connections.linkedin.expired || connections.twitter.expired || connections.youtube.expired;
+
   // Show loading state while checking authentication
   if (authLoading) {
     return (
@@ -360,11 +375,26 @@ export default function Dashboard() {
       <main className="container mx-auto px-6 py-12">
         {activeTab === 'campaign' && (
           <>
+            {/* Token Expiry Warning */}
+            {hasExpiredConnections && (
+              <div className="max-w-7xl mx-auto mb-6">
+                <div className="p-3 bg-yellow-900/20 border border-yellow-700/30 rounded-lg flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-yellow-400 flex-shrink-0" />
+                  <p className="text-sm text-yellow-400">
+                    {connections.linkedin.expired && 'LinkedIn connection has expired. '}
+                    {connections.twitter.expired && 'Twitter connection has expired. '}
+                    {connections.youtube.expired && 'YouTube connection has expired. '}
+                    Please reconnect to continue posting.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
               {/* Box 1: Twitter Connection */}
               <ConnectionBox
                 service="twitter"
-                connected={connections.twitter}
+                connected={connections.twitter.connected}
                 onConnect={handleTwitterConnect}
                 onDisconnect={handleTwitterDisconnect}
               />
@@ -372,7 +402,7 @@ export default function Dashboard() {
               {/* Box 2: LinkedIn Connection */}
               <ConnectionBox
                 service="linkedin"
-                connected={connections.linkedin}
+                connected={connections.linkedin.connected}
                 onConnect={handleLinkedInConnect}
                 onDisconnect={handleLinkedInDisconnect}
               />
@@ -380,7 +410,7 @@ export default function Dashboard() {
               {/* Box 3: YouTube Connection */}
               <ConnectionBox
                 service="youtube"
-                connected={connections.youtube}
+                connected={connections.youtube.connected}
                 onConnect={handleYouTubeConnect}
                 onDisconnect={handleYouTubeDisconnect}
               />
@@ -422,7 +452,7 @@ export default function Dashboard() {
         <div className={activeTab === 'url' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <URLPostBox
             token={token}
-            connections={connections}
+            connections={simpleConnections}
             showNotification={showNotification}
           />
         </div>
@@ -430,7 +460,7 @@ export default function Dashboard() {
         <div className={activeTab === 'builder' ? 'max-w-6xl mx-auto' : 'hidden'}>
           <PostBuilder
             token={token}
-            connections={connections}
+            connections={simpleConnections}
             showNotification={showNotification}
           />
         </div>
@@ -452,7 +482,7 @@ export default function Dashboard() {
         <div className={activeTab === 'video-post' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <VideoPostBox
             token={token}
-            connections={connections}
+            connections={simpleConnections}
             showNotification={showNotification}
           />
         </div>
