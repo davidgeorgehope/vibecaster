@@ -2,6 +2,7 @@
 import json
 import time
 from typing import Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from google.genai import types
 
@@ -15,6 +16,17 @@ from .url_utils import (
     validate_and_select_url,
 )
 from logger_config import agent_logger as logger
+
+# Safety limits
+MAX_SEARCH_CONTEXT_FOR_LLM = 50_000   # 50KB max for search context passed to LLM
+LLM_CALL_TIMEOUT = 90                  # seconds per LLM call (generous for thinking models)
+
+
+def _llm_call_with_timeout(func, timeout=LLM_CALL_TIMEOUT):
+    """Run an LLM call with a timeout to prevent infinite hangs."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func)
+        return future.result(timeout=timeout)
 
 
 def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics: list = None, max_search_retries: int = 3, validate_urls: bool = True) -> Tuple[str, list, Optional[str]]:
@@ -83,17 +95,26 @@ Provide:
 """
 
             # Use Google Search grounding with Gemini 3
-            response = client.models.generate_content(
-                model=LLM_MODEL,
-                contents=search_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7 + (search_attempt * 0.1),  # Slightly increase temperature on retries for variety
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level="HIGH"
+            _search_temp = 0.7 + (search_attempt * 0.1)
+            try:
+                response = _llm_call_with_timeout(
+                    lambda: client.models.generate_content(
+                        model=LLM_MODEL,
+                        contents=search_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=_search_temp,  # Slightly increase temperature on retries for variety
+                            tools=[types.Tool(google_search=types.GoogleSearch())],
+                            thinking_config=types.ThinkingConfig(
+                                thinking_level="HIGH"
+                            )
+                        )
                     )
                 )
-            )
+            except FuturesTimeoutError:
+                logger.error(f"LLM call timed out after {LLM_CALL_TIMEOUT}s in search_trending_topics (attempt {search_attempt + 1})")
+                if search_attempt < max_search_retries - 1:
+                    continue
+                return f"General discussion about {user_prompt}", [], None
 
             # Debug: Log the full response structure when text is None
             if not response.text:
@@ -184,6 +205,11 @@ def select_single_topic(search_context: str, source_urls: list, user_prompt: str
         - selected_url: The URL selected by the LLM (validated for 404s only)
         - html_content: The HTML content from the URL (for additional context)
     """
+    # Truncate search_context to prevent LLM hangs on massive content
+    if len(search_context) > MAX_SEARCH_CONTEXT_FOR_LLM:
+        logger.warning(f"Truncating search_context from {len(search_context)} to {MAX_SEARCH_CONTEXT_FOR_LLM} chars")
+        search_context = search_context[:MAX_SEARCH_CONTEXT_FOR_LLM] + "\n...[truncated]"
+
     broken_urls = []  # Only track URLs that are actually broken (404, etc.)
 
     for attempt in range(max_selection_attempts):
@@ -270,17 +296,26 @@ RESPOND IN THIS EXACT JSON FORMAT:
 }}
 """
 
-            response = client.models.generate_content(
-                model=LLM_MODEL,
-                contents=selection_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5 + (attempt * 0.1),  # Slightly increase temp on retries
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level="HIGH"
+            _select_temp = 0.5 + (attempt * 0.1)
+            try:
+                response = _llm_call_with_timeout(
+                    lambda: client.models.generate_content(
+                        model=LLM_MODEL,
+                        contents=selection_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=_select_temp,  # Slightly increase temp on retries
+                            response_mime_type="application/json",
+                            thinking_config=types.ThinkingConfig(
+                                thinking_level="HIGH"
+                            )
+                        )
                     )
                 )
-            )
+            except FuturesTimeoutError:
+                logger.error(f"LLM call timed out after {LLM_CALL_TIMEOUT}s in select_single_topic (attempt {attempt + 1})")
+                if attempt < max_selection_attempts - 1:
+                    continue
+                return search_context, None, None
 
             result = json.loads(response.text)
 
