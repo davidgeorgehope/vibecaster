@@ -8,6 +8,9 @@ import requests
 from .config import TOPIC_STOPWORDS
 from logger_config import agent_logger as logger
 
+# Maximum HTML content size to fetch (100KB) - prevents memory/LLM issues with massive pages
+MAX_HTML_CONTENT_SIZE = 100_000
+
 
 def resolve_redirect_url(url: str) -> str:
     """
@@ -202,6 +205,10 @@ def validate_url(url: str, fetch_content: bool = True) -> Tuple[bool, Optional[s
 
         if is_valid and fetch_content:
             html_content = response.text
+            # Truncate large HTML to prevent downstream issues (LLM hangs, memory)
+            if len(html_content) > MAX_HTML_CONTENT_SIZE:
+                logger.warning(f"Truncating HTML from {len(html_content)} to {MAX_HTML_CONTENT_SIZE} chars for {url[:60]}...")
+                html_content = html_content[:MAX_HTML_CONTENT_SIZE]
             # Check for soft 404 (200 status but 404-like content)
             if is_soft_404(html_content, url):
                 logger.warning(f"URL is soft 404: {url[:60]}... (status: {status_code})")
