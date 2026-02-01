@@ -19,7 +19,7 @@ from logger_config import agent_logger as logger
 
 # Safety limits
 MAX_SEARCH_CONTEXT_FOR_LLM = 50_000   # 50KB max for search context passed to LLM
-LLM_CALL_TIMEOUT = 90                  # seconds per LLM call (generous for thinking models)
+LLM_CALL_TIMEOUT = 300                  # seconds per LLM call (generous for thinking models)
 
 
 def _llm_call_with_timeout(func, timeout=LLM_CALL_TIMEOUT):
