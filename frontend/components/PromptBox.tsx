@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Play, Trash2, Image, Video } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Sparkles, Loader2, Play, Trash2, Image, Video, Shield, X, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface PromptBoxProps {
   onActivate: (prompt: string) => Promise<void>;
@@ -16,6 +16,31 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
   const [isRunning, setIsRunning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [campaignConfigured, setCampaignConfigured] = useState(false);
+
+  // Excluded companies state
+  const [excludeCompanies, setExcludeCompanies] = useState<string[]>([]);
+  const [newCompany, setNewCompany] = useState('');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [isSavingFilter, setIsSavingFilter] = useState(false);
+
+  const saveExcludeCompanies = useCallback(async (companies: string[]) => {
+    if (!token) return;
+    setIsSavingFilter(true);
+    try {
+      await fetch('/api/campaign/exclude-companies', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ exclude_companies: companies }),
+      });
+    } catch (err) {
+      console.error('Failed to save excluded companies:', err);
+    } finally {
+      setIsSavingFilter(false);
+    }
+  }, [token]);
 
   useEffect(() => {
     // Check if campaign is configured
@@ -34,6 +59,9 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
           if (data.media_type) {
             setDetectedMediaType(data.media_type);
           }
+          if (data.exclude_companies && Array.isArray(data.exclude_companies)) {
+            setExcludeCompanies(data.exclude_companies);
+          }
         }
       })
       .catch(() => {
@@ -41,6 +69,25 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
         setCampaignConfigured(false);
       });
   }, [token]);
+
+  const handleAddCompany = () => {
+    const trimmed = newCompany.trim();
+    if (!trimmed) return;
+    if (excludeCompanies.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+      setNewCompany('');
+      return;
+    }
+    const updated = [...excludeCompanies, trimmed];
+    setExcludeCompanies(updated);
+    setNewCompany('');
+    saveExcludeCompanies(updated);
+  };
+
+  const handleRemoveCompany = (company: string) => {
+    const updated = excludeCompanies.filter(c => c !== company);
+    setExcludeCompanies(updated);
+    saveExcludeCompanies(updated);
+  };
 
   const handleActivate = async () => {
     if (!prompt.trim()) return;
@@ -83,6 +130,8 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
 
       setPrompt('');
       setCampaignConfigured(false);
+      setExcludeCompanies([]);
+      setFilterOpen(false);
     } catch (error) {
       console.error('Failed to reset campaign:', error);
       alert('Failed to reset campaign');
@@ -122,6 +171,94 @@ export default function PromptBox({ onActivate, onRunNow, token }: PromptBoxProp
               <Image className="w-4 h-4 text-purple-400" />
               <span>AI detected: <span className="text-purple-400">Image</span> (default)</span>
             </>
+          )}
+        </div>
+      )}
+
+      {/* Content Filter - Excluded Companies */}
+      {campaignConfigured && (
+        <div className="mb-4 border border-gray-700/50 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setFilterOpen(!filterOpen)}
+            className="w-full flex items-center justify-between px-4 py-3 bg-gray-800/30 hover:bg-gray-800/50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-purple-400" />
+              <span className="text-sm font-medium text-gray-300">Content Filter</span>
+              {excludeCompanies.length > 0 && (
+                <span className="text-xs bg-purple-600/30 text-purple-300 px-2 py-0.5 rounded-full">
+                  {excludeCompanies.length}
+                </span>
+              )}
+            </div>
+            {filterOpen ? (
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-gray-500" />
+            )}
+          </button>
+
+          {filterOpen && (
+            <div className="px-4 py-3 space-y-3">
+              <p className="text-xs text-gray-500">
+                Posts mentioning these companies will be blocked before publishing.
+              </p>
+
+              {/* Add company input */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newCompany}
+                  onChange={(e) => setNewCompany(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCompany();
+                    }
+                  }}
+                  placeholder="Company name..."
+                  className="flex-1 bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/20"
+                />
+                <button
+                  onClick={handleAddCompany}
+                  disabled={!newCompany.trim()}
+                  className="px-3 py-2 bg-purple-600/20 border border-purple-500/30 text-purple-400 rounded-lg text-sm hover:bg-purple-600/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add
+                </button>
+              </div>
+
+              {/* Company chips */}
+              {excludeCompanies.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {excludeCompanies.map((company) => (
+                    <span
+                      key={company}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-800 border border-gray-700 rounded-full text-sm text-gray-300"
+                    >
+                      {company}
+                      <button
+                        onClick={() => handleRemoveCompany(company)}
+                        className="text-gray-500 hover:text-red-400 transition-colors"
+                        title={`Remove ${company}`}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-600 italic">No companies excluded yet.</p>
+              )}
+
+              {isSavingFilter && (
+                <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Saving...
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
