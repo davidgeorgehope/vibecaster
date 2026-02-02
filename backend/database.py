@@ -369,7 +369,7 @@ def get_connection_status(user_id: int) -> Dict[str, Any]:
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT service, expires_at FROM secrets WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT service, expires_at, refresh_token FROM secrets WHERE user_id = ?", (user_id,))
         rows = cursor.fetchall()
 
         now = int(time.time())
@@ -382,10 +382,12 @@ def get_connection_status(user_id: int) -> Dict[str, Any]:
         for row in rows:
             service = row[0]
             expires_at = row[1]
+            refresh_token = row[2]
             if service in result:
                 result[service]["connected"] = True
-                # Check if token is expired (with 5 minute buffer)
-                if expires_at and expires_at < (now + 300):
+                # Only mark expired if access token expired AND no refresh token available
+                # (platforms like YouTube use short-lived access tokens with refresh tokens - that is normal)
+                if expires_at and expires_at < (now + 300) and not refresh_token:
                     result[service]["expired"] = True
 
         return result
