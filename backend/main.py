@@ -241,7 +241,7 @@ def _setup_user_scheduler(user_id: int):
         connections = get_connection_status(user_id)
         has_connections = any(connections.values())
 
-        if campaign and campaign.get("user_prompt") and has_connections:
+        if campaign and campaign.get("user_prompt") and has_connections and campaign.get("is_active"):
             cron_schedule = campaign.get("schedule_cron", "0 9 * * *")
 
             # Parse cron schedule (minute hour day month day_of_week)
@@ -372,9 +372,8 @@ async def get_campaign_info(user_id: int = Depends(get_current_user_id)):
     if not campaign:
         raise HTTPException(status_code=404, detail="No campaign configured")
 
-    # Check if scheduler job exists for this user
-    job_id = f"agent_cycle_user_{user_id}"
-    is_active = scheduler.get_job(job_id) is not None
+    # Check DB for active state (persisted across restarts)
+    is_active = bool(campaign.get('is_active', False))
 
     return {
         "user_prompt": campaign.get("user_prompt", ""),
@@ -558,6 +557,12 @@ async def activate_campaign(user_id: int = Depends(get_current_user_id)):
         if not has_connections:
             raise HTTPException(status_code=400, detail="No social accounts connected. Connect at least one platform first.")
 
+        # Persist active state to DB
+        from database import get_db
+        conn = get_db()
+        conn.execute("UPDATE campaign SET is_active = 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+
         setup_scheduler(user_id)
 
         job_id = f"agent_cycle_user_{user_id}"
@@ -580,6 +585,12 @@ async def activate_campaign(user_id: int = Depends(get_current_user_id)):
 async def deactivate_campaign(user_id: int = Depends(get_current_user_id)):
     """Deactivate the campaign scheduler. Removes the cron job."""
     try:
+        # Persist inactive state to DB
+        from database import get_db
+        conn = get_db()
+        conn.execute("UPDATE campaign SET is_active = 0 WHERE user_id = ?", (user_id,))
+        conn.commit()
+
         job_id = f"agent_cycle_user_{user_id}"
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
