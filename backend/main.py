@@ -558,10 +558,11 @@ async def activate_campaign(user_id: int = Depends(get_current_user_id)):
             raise HTTPException(status_code=400, detail="No social accounts connected. Connect at least one platform first.")
 
         # Persist active state to DB
-        from database import get_db
-        conn = get_db()
-        conn.execute("UPDATE campaign SET is_active = 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
+        import sqlite3 as _sql
+        _conn = _sql.connect('vibecaster.db')
+        _conn.execute("UPDATE campaign SET is_active = 1 WHERE user_id = ?", (user_id,))
+        _conn.commit()
+        _conn.close()
 
         setup_scheduler(user_id)
 
@@ -586,10 +587,11 @@ async def deactivate_campaign(user_id: int = Depends(get_current_user_id)):
     """Deactivate the campaign scheduler. Removes the cron job."""
     try:
         # Persist inactive state to DB
-        from database import get_db
-        conn = get_db()
-        conn.execute("UPDATE campaign SET is_active = 0 WHERE user_id = ?", (user_id,))
-        conn.commit()
+        import sqlite3 as _sql
+        _conn = _sql.connect('vibecaster.db')
+        _conn.execute("UPDATE campaign SET is_active = 0 WHERE user_id = ?", (user_id,))
+        _conn.commit()
+        _conn.close()
 
         job_id = f"agent_cycle_user_{user_id}"
         if scheduler.get_job(job_id):
