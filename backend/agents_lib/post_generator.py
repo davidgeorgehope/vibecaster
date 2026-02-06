@@ -89,28 +89,40 @@ TOPIC CONTEXT (pick ONE specific concept to focus on):
 
 YOUR TASK: Write ONE polished, publication-ready X/Twitter post about a SINGLE topic from the context above.
 
-STRUCTURE YOUR POST:
-1. Start with a hook that introduces the topic (what problem/concept?)
-2. Add the insight/lesson (what's the takeaway?)
-3. End with engagement (question, call-to-action, or hashtags)
+STRUCTURE YOUR POST (bullet format preferred for higher engagement):
+1. Hook line - grabs attention (question or bold statement)
+2. 2-3 bullet points with key insights (use • or - symbols)
+3. Call-to-action or hashtags
+
+FORMATTING RULES (data shows bullets get 79% higher impressions):
+- PREFER bullet points over prose paragraphs
+- Keep sentences SHORT (under 12 words each)
+- Front-load the value - put the hook FIRST
+- Each bullet = one clear insight
 
 CRITICAL RULES:
 - Pick ONE specific topic/concept - do NOT list multiple options
-- Write a SINGLE cohesive post, not bullet points or fragments
 - Write FROM the persona's voice/tone: {refined_persona}
 - DO NOT describe the image - the image will accompany this text
 - DO NOT write an image generation prompt
 - DO NOT write "Option 1/2/3" or multiple alternatives
 
+HOOK PATTERNS THAT WORK:
+- "Ever wondered why...?"
+- "Here's what most people get wrong about..."
+- "X just changed everything. Here's why:"
+- Direct statement + supporting bullets
+
 QUALITY CHECK (self-review before outputting):
-- Is it ONE flowing post (not fragmented/bullet points)?
-- Does it have a clear hook that introduces the topic?
+- Does it use bullet points for scannability?
+- Is each sentence under 12 words?
+- Does it have a clear hook FIRST?
 - Is it under {max_text_length} characters?
 - Does it match the persona's voice?
 
 X/TWITTER REQUIREMENTS:
 - MAXIMUM {max_text_length} characters - this is STRICT
-- Engaging, conversational tone with a clear hook
+- Engaging, punchy tone with a clear hook
 - Can use 1-2 relevant hashtags or emojis
 - DO NOT include URLs - we'll add that separately{avoidance_text}
 
@@ -221,22 +233,47 @@ CRITICAL INSTRUCTIONS:
 - Write FROM the persona's voice: {refined_persona}
 - You CAN mention that there's a unique visual/tutorial format, but keep it brief and focus on the VALUE/INSIGHTS
 
+STRUCTURE FOR ENGAGEMENT:
+1. Opening hook (1-2 sentences max) - pose a question or bold statement
+2. Key insights - use bullet points or short paragraphs
+3. Takeaway - what should the reader do or think differently?
+4. Hashtags (2-3 max)
+
+FORMATTING GUIDANCE:
+- Keep sentences SHORT and punchy (under 15 words ideal)
+- Use line breaks between ideas for scannability
+- Bullet points work well for listing insights
+- Front-load the value - hook FIRST, context SECOND
+
+HOOK PATTERNS THAT WORK:
+- "Ever wondered why...?"
+- "Here's what most engineers miss about..."
+- "I used to think X. Then I learned Y."
+- Problem statement + "Here's how to fix it:"
+
 EXAMPLES OF WHAT TO DO:
-✓ "Ever dealt with messy traces clogging your OTEL collector? Here's why proper trace management matters (explained in a fun, visual way that makes complex concepts stick). Key takeaway: configure your BadTrace filters early! #OpenTelemetry"
-✓ "Teaching observability concepts doesn't have to be dry. This visual breakdown of OTEL trace flow shows exactly why your collector configuration matters. The analogy? Think of it like detention for bad data 📊 #ObservabilityEngineering"
+✓ "Ever dealt with messy traces clogging your OTEL collector?
+
+Here's why proper trace management matters:
+• Bad traces waste storage and compute
+• They obscure real issues in your data
+• Early filtering saves 40%+ on costs
+
+Key takeaway: configure your BadTrace filters early! #OpenTelemetry"
 
 EXAMPLES OF WHAT NOT TO DO:
 ✗ "Check out this anime sketch showing a girl pointing at a whiteboard..."
 ✗ "New diagram series featuring a character teaching..."
+✗ Long, dense paragraphs without breaks
 
 QUALITY CHECK (self-review before outputting):
 - Is this a professional post about the TOPIC (not an image description)?
-- Does it provide real value/insights to readers?
-- Is the tone professional and appropriate for LinkedIn?
+- Does it have a clear hook in the first 1-2 sentences?
+- Is it scannable (short sentences, line breaks, bullets)?
 - Is it free of markdown formatting (no **bold**, __italics__, etc.)?
 
 LINKEDIN REQUIREMENTS:
-- 1-3 paragraphs (no strict character limit)
+- 1-3 short paragraphs or hook + bullets
 - Professional, insightful tone
 - Provide VALUE to readers - what will they learn?
 - Engage the professional community
