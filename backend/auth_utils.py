@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 
@@ -14,7 +14,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -48,9 +48,57 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
-async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> int:
+def _extract_user_id_from_jwt(token: str) -> Optional[int]:
+    """Extract user_id from a JWT token. Returns None if invalid."""
+    payload = decode_access_token(token)
+    if payload is None:
+        return None
+    user_id_str = payload.get("sub")
+    if user_id_str is None:
+        return None
+    try:
+        return int(user_id_str)
+    except (ValueError, TypeError):
+        return None
+
+
+async def get_current_user_id(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> int:
     """
-    Dependency to get the current authenticated user ID from JWT token.
+    Dependency to get the current authenticated user ID.
+    Tries Bearer JWT first, then falls back to X-API-Key header.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # 1. Try Bearer JWT token
+    if credentials and credentials.credentials:
+        user_id = _extract_user_id_from_jwt(credentials.credentials)
+        if user_id is not None:
+            return user_id
+
+    # 2. Try X-API-Key header
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        from database import validate_api_key
+        user_id = validate_api_key(api_key)
+        if user_id is not None:
+            return user_id
+
+    raise credentials_exception
+
+
+async def get_current_user_id_jwt_only(
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+) -> int:
+    """
+    Dependency that ONLY accepts JWT Bearer tokens.
+    Used for endpoints that should not accept API keys (e.g., creating API keys).
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -59,44 +107,33 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
     )
 
     token = credentials.credentials
-    payload = decode_access_token(token)
-
-    if payload is None:
+    user_id = _extract_user_id_from_jwt(token)
+    if user_id is None:
         raise credentials_exception
-
-    user_id_str = payload.get("sub")
-    if user_id_str is None:
-        raise credentials_exception
-
-    try:
-        user_id = int(user_id_str)
-    except (ValueError, TypeError):
-        raise credentials_exception
-
     return user_id
 
 
 async def get_optional_user_id(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
 ) -> Optional[int]:
     """
     Dependency to optionally get the current authenticated user ID.
     Returns None if no valid token is provided.
+    Checks Bearer JWT first, then X-API-Key header.
     """
-    if credentials is None:
-        return None
+    # 1. Try Bearer JWT token
+    if credentials and credentials.credentials:
+        user_id = _extract_user_id_from_jwt(credentials.credentials)
+        if user_id is not None:
+            return user_id
 
-    token = credentials.credentials
-    payload = decode_access_token(token)
+    # 2. Try X-API-Key header
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        from database import validate_api_key
+        user_id = validate_api_key(api_key)
+        if user_id is not None:
+            return user_id
 
-    if payload is None:
-        return None
-
-    user_id_str = payload.get("sub")
-    if user_id_str is None:
-        return None
-
-    try:
-        return int(user_id_str)
-    except (ValueError, TypeError):
-        return None
+    return None

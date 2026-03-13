@@ -193,6 +193,21 @@ def init_database():
             UPDATE users SET is_admin = 1 WHERE email = 'email.djhope@gmail.com'
         """)
 
+        # Create api_keys table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                key_prefix TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER,
+                is_active INTEGER DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
         # Seed LinkedIn mentions if table is empty
         cursor.execute("SELECT COUNT(*) FROM linkedin_mentions")
         if cursor.fetchone()[0] == 0:
@@ -1071,3 +1086,87 @@ def run_cleanup(video_job_hours: int = 24, post_history_days: int = 90) -> dict:
         "video_jobs_deleted": video_jobs_deleted,
         "post_history_deleted": posts_deleted
     }
+
+
+# ===== API KEY FUNCTIONS =====
+
+def create_api_key(user_id: int, name: str) -> Dict[str, Any]:
+    """Create a new API key for a user. Returns dict with the full key (shown only once)."""
+    import secrets
+    import hashlib
+
+    # Generate a secure random key with vb_ prefix
+    raw_key = secrets.token_hex(32)  # 64 hex chars
+    full_key = f"vb_{raw_key}"
+    key_prefix = full_key[:11]  # "vb_" + first 8 hex chars
+    key_hash = hashlib.sha256(full_key.encode()).hexdigest()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        now = int(time.time())
+        cursor.execute("""
+            INSERT INTO api_keys (user_id, key_prefix, key_hash, name, created_at, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+        """, (user_id, key_prefix, key_hash, name, now))
+        key_id = cursor.lastrowid
+
+    return {
+        "id": key_id,
+        "key": full_key,  # Only returned once at creation
+        "key_prefix": key_prefix,
+        "name": name,
+        "created_at": now,
+    }
+
+
+def list_api_keys(user_id: int) -> list:
+    """List all API keys for a user (never returns full key)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, key_prefix, name, created_at, last_used_at, is_active
+            FROM api_keys
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        """, (user_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def revoke_api_key(user_id: int, key_id: int) -> bool:
+    """Revoke an API key. Returns True if key was found and revoked."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE api_keys SET is_active = 0
+            WHERE id = ? AND user_id = ?
+        """, (key_id, user_id))
+        return cursor.rowcount > 0
+
+
+def validate_api_key(api_key: str) -> Optional[int]:
+    """Validate an API key. Returns user_id if valid, None otherwise."""
+    import hashlib
+
+    if not api_key or not api_key.startswith("vb_"):
+        return None
+
+    key_prefix = api_key[:11]
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, user_id FROM api_keys
+            WHERE key_prefix = ? AND key_hash = ? AND is_active = 1
+        """, (key_prefix, key_hash))
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        # Update last_used_at
+        cursor.execute("""
+            UPDATE api_keys SET last_used_at = ? WHERE id = ?
+        """, (int(time.time()), row['id']))
+
+        return row['user_id']

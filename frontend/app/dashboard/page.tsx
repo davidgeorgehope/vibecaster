@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload, Key } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
 import TranscribeBox from '@/components/TranscribeBox';
@@ -13,8 +13,9 @@ import BioBox from '@/components/BioBox';
 import VideoBuilder from '@/components/VideoBuilder';
 import JobsPanel from '@/components/JobsPanel';
 import VideoPostBox from '@/components/VideoPostBox';
+import ApiKeysBox from '@/components/ApiKeysBox';
 
-type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs';
+type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs' | 'api-keys';
 
 interface ConnectionInfo {
   connected: boolean;
@@ -326,7 +327,8 @@ export default function Dashboard() {
               { id: 'video', label: 'Video Gen', icon: Video },
               { id: 'video-post', label: 'Video Post', icon: Upload },
               { id: 'bio', label: 'Bio', icon: User },
-              { id: 'jobs', label: 'Jobs', icon: ListTodo }
+              { id: 'jobs', label: 'Jobs', icon: ListTodo },
+              { id: 'api-keys', label: 'API Keys', icon: Key }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -470,6 +472,13 @@ export default function Dashboard() {
 
         <div className={activeTab === 'jobs' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <JobsPanel
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
+
+        <div className={activeTab === 'api-keys' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <ApiKeysBox
             token={token}
             showNotification={showNotification}
           />
