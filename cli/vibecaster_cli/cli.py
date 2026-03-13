@@ -199,6 +199,112 @@ def create(prompt, platforms, no_image):
         click.echo(click.style(f"  Failed: {job.get('error', 'Unknown')}", fg="red"))
 
 
+# ===== POST (direct, no AI) =====
+
+@cli.command("post")
+@click.argument("text")
+@click.option("--media", "-m", type=click.Path(exists=True), help="Path to image or video file.")
+@click.option("--platform", "-p", "platforms", multiple=True,
+              type=click.Choice(["twitter", "linkedin", "all"]), default=["linkedin"],
+              help="Platform(s) to post to.")
+def post_direct(text, media, platforms):
+    """Post directly with your own text + optional media. No AI generation.
+
+    Examples:
+      vibecaster post "Check out this demo!" --media video.mp4 --platform linkedin
+      vibecaster post "Quick update" --platform all
+      vibecaster post "Look at this" --media screenshot.png -p twitter -p linkedin
+    """
+    client = VibecasterClient()
+
+    platform_list = []
+    for p in platforms:
+        if p == "all":
+            platform_list.extend(["twitter", "linkedin"])
+        else:
+            platform_list.append(p)
+    platform_list = list(set(platform_list))
+
+    click.echo(click.style(f"\n  Direct post → {', '.join(platform_list)}", fg="cyan", bold=True))
+    if media:
+        click.echo(f"  Media: {media}")
+
+    # Use multipart form upload for direct post
+    import os
+    files = {}
+    if media:
+        files["media"] = (os.path.basename(media), open(media, "rb"),
+                         "video/mp4" if media.endswith(".mp4") else
+                         "image/png" if media.endswith(".png") else
+                         "image/jpeg")
+
+    data = {
+        "text": text,
+        "platforms": ",".join(platform_list),
+    }
+
+    # Submit job via multipart form
+    import requests
+    client._ensure_auth()
+    url = f"{client.api_url}/cli/direct-post"
+    headers = {"X-API-Key": client.api_key}
+
+    try:
+        response = requests.post(url, data=data, files=files if files else None,
+                                headers=headers, timeout=30)
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", response.text)
+            except ValueError:
+                detail = response.text
+            click.echo(click.style(f"  Error: {detail}", fg="red"))
+            return
+        result = response.json()
+    except requests.ConnectionError:
+        click.echo(click.style(f"  Error: Could not connect to {client.api_url}", fg="red"))
+        return
+
+    job_id = result.get("job_id")
+    if not job_id:
+        click.echo(click.style("  Error: No job ID returned", fg="red"))
+        return
+
+    # Poll for completion
+    import time
+    spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    idx = 0
+    start = time.time()
+
+    while time.time() - start < 300:
+        try:
+            job = client.get(f"/cli/jobs/{job_id}")
+        except Exception:
+            time.sleep(2)
+            continue
+
+        status = job.get("status", "unknown")
+        if status == "complete":
+            click.echo(f"\r  {click.style('✓', fg='green')} Done!   ")
+            job_result = job.get("result", {})
+            posted = job_result.get("posted", [])
+            errors = job_result.get("errors", {})
+            for p in posted:
+                click.echo(f"  {click.style('✓', fg='green')} Posted to {p}")
+            for platform, error in errors.items():
+                click.echo(f"  {click.style('✗', fg='red')} {platform}: {error}")
+            click.echo()
+            return
+        elif status == "failed":
+            click.echo(f"\r  {click.style('✗', fg='red')} Failed: {job.get('error', 'Unknown')}   ")
+            return
+
+        click.echo(f"\r  {spinner[idx % len(spinner)]} Posting...", nl=False)
+        idx += 1
+        time.sleep(1.5)
+
+    click.echo(f"\n  Timed out. Job ID: {job_id}")
+
+
 # ===== GENERATE (async) =====
 
 @cli.command()

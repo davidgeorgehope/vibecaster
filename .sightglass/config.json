@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "agents": {
+    "claude-code": {
+      "enabled": true,
+      "logPath": "/root/.claude/projects"
+    },
+    "cursor": {
+      "enabled": false,
+      "logPath": null
+    },
+    "windsurf": {
+      "enabled": false,
+      "logPath": null
+    },
+    "copilot": {
+      "enabled": false,
+      "logPath": null
+    }
+  },
+  "analysis": {
+    "autoClassify": true,
+    "checkVulnerabilities": true,
+    "checkDeprecations": true
+  },
+  "privacy": {
+    "shareAnonymousData": true,
+    "redactPaths": true,
+    "redactEnvVars": true,
+    "apiUrl": "https://sightglass.dev",
+    "apiKey": "29b218a6-9d90-4277-9e59-90c4bd1697cb"
+  }
+}

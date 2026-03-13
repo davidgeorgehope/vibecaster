@@ -7,6 +7,7 @@ import threading
 import traceback
 import base64
 from typing import Optional
+import fastapi
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
 from auth_utils import get_current_user_id
@@ -197,6 +198,50 @@ def _worker_generate_from_url(job_id: str, user_id: int, url: str, platforms: li
         _update_job(job_id, "failed", error=str(e))
 
 
+def _worker_direct_post(job_id: str, user_id: int, text: str, platforms: list, media_bytes: bytes = None, media_type: str = None):
+    """Post directly with custom text and optional media. No AI generation."""
+    try:
+        _update_job(job_id, "posting")
+
+        posted = []
+        errors = {}
+
+        if "linkedin" in platforms:
+            if media_type and media_type.startswith("video"):
+                from agents_lib.video_posting import upload_video_to_linkedin
+                success, result = upload_video_to_linkedin(user_id, media_bytes, text)
+                if success:
+                    posted.append("linkedin")
+                else:
+                    errors["linkedin"] = str(result)
+            else:
+                from agents_lib.social_media import post_to_linkedin
+                success = post_to_linkedin(user_id, text, media_bytes if media_type and media_type.startswith("image") else None)
+                if success:
+                    posted.append("linkedin")
+                else:
+                    errors["linkedin"] = "Failed to post"
+
+        if "twitter" in platforms:
+            from agents_lib.social_media import post_to_twitter
+            success = post_to_twitter(user_id, text[:280], media_bytes if media_type and media_type.startswith("image") else None)
+            if success:
+                posted.append("twitter")
+            else:
+                errors["twitter"] = "Failed to post"
+
+        _update_job(job_id, "complete", result={
+            "text": text,
+            "has_media": media_bytes is not None,
+            "posted": posted,
+            "errors": errors,
+        })
+
+    except Exception as e:
+        logger.error(f"CLI direct post job {job_id} failed: {e}\n{traceback.format_exc()}")
+        _update_job(job_id, "failed", error=str(e))
+
+
 # ===== API endpoints =====
 
 class CreatePostRequest(BaseModel):
@@ -246,6 +291,42 @@ async def generate_from_url_job(request: GenerateFromURLJobRequest, user_id: int
     thread = threading.Thread(
         target=_worker_generate_from_url,
         args=(job_id, user_id, request.url, request.platforms),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.post("/direct-post", status_code=status.HTTP_202_ACCEPTED)
+async def direct_post_job(
+    text: str = fastapi.Form(...),
+    platforms: str = fastapi.Form("linkedin"),  # comma-separated
+    media: Optional[fastapi.UploadFile] = fastapi.File(None),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Post directly with custom text and optional media file. No AI generation."""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+
+    platform_list = [p.strip() for p in platforms.split(",") if p.strip()]
+
+    media_bytes = None
+    media_content_type = None
+    if media:
+        media_bytes = await media.read()
+        media_content_type = media.content_type
+
+    job_id = _create_job(user_id, "direct_post", {
+        "text": text,
+        "platforms": platform_list,
+        "has_media": media_bytes is not None,
+        "media_type": media_content_type,
+    })
+
+    thread = threading.Thread(
+        target=_worker_direct_post,
+        args=(job_id, user_id, text.strip(), platform_list, media_bytes, media_content_type),
         daemon=True,
     )
     thread.start()
