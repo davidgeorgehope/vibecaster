@@ -9,6 +9,9 @@ import { registerCampaign } from './campaign.js';
 import { registerRun } from './run.js';
 import { registerJob } from './job.js';
 import { registerKeys } from './keys.js';
+import { registerTranscribe } from './transcribe.js';
+import { registerVideo } from './video.js';
+import { registerVideoPost } from './video-post.js';
 
 export const program = new Command();
 
@@ -27,3 +30,6 @@ registerCampaign(program);
 registerRun(program);
 registerJob(program);
 registerKeys(program);
+registerTranscribe(program);
+registerVideo(program);
+registerVideoPost(program);

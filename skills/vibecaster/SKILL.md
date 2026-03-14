@@ -1,10 +1,9 @@
 ---
 name: vibecaster
-description: Manage Vibecaster campaigns and posts via the `vibecaster` CLI. Use when a user asks to check Vibecaster status, manage social media campaigns, generate or post content from URLs, trigger campaign runs, or manage Vibecaster API keys. Vibecaster is an AI-powered social media automation platform (Twitter/X, LinkedIn, YouTube).
+description: Manage Vibecaster social media posts via the vibecaster CLI. Vibecaster is a skill for AI agents that generates and posts content to Twitter/X, LinkedIn, and YouTube. Use when a user asks to post to social media, manage campaigns, transcribe media, generate video, or manage API keys.
 metadata:
-  {
-    "openclaw": { "emoji": "📣", "requires": { "anyBins": ["vibecaster"] } }
-  }
+  author: davidgeorgehope
+  version: "1.0.0"
 ---
 
 # Vibecaster CLI
@@ -36,13 +35,35 @@ vibecaster campaign setup "prompt"   # Create/update campaign with AI prompt
 vibecaster campaign activate         # Start automated posting
 vibecaster campaign deactivate       # Pause posting
 vibecaster run                       # Trigger immediate campaign run
+vibecaster campaign edit --schedule daily --time 09:00  # Edit campaign settings
+vibecaster campaign reset                                # Delete and reset campaign
 ```
 
 ### Content Generation
 
 ```bash
+vibecaster create "topic"            # AI-generate a post from a prompt
 vibecaster generate <url>            # Generate posts from URL (preview only)
 vibecaster post <url>                # Generate + post to connected platforms
+```
+
+### Direct Posting
+
+```bash
+vibecaster post "text" --platform linkedin          # Post custom text
+vibecaster post "text" --media image.png            # Post with image/video
+vibecaster post "text" --imagegen "prompt"           # Post with AI-generated image
+```
+
+### Transcribe & Video
+
+```bash
+vibecaster transcribe <file>            # Transcribe audio/video → transcript, summary, blog post
+vibecaster transcribe <file> -o ./out   # Save output to files
+vibecaster video "topic"                # Generate multi-scene AI video
+vibecaster video "topic" --style educational --duration 24
+vibecaster video-post <file>            # Transcribe video + generate platform posts
+vibecaster video-post <file> -p all     # Transcribe + post to all platforms
 ```
 
 ### API Key Management
@@ -62,12 +83,3 @@ All API calls use `X-API-Key` header. Keys are prefixed `vb_` and stored hashed 
 ## API Base
 
 - Production: `https://vibecaster.ai/api`
-- Proxied through Cloudflare tunnel → Hetzner backend (FastAPI + SQLite)
-
-## Infrastructure
-
-- Backend: `/root/vibecaster/backend/` on Hetzner (FastAPI, port 8001)
-- Frontend: `/root/vibecaster/frontend/` (Next.js, port 3001)
-- CLI source: `/root/vibecaster/cli/` (Node.js + commander)
-- Start/stop: `/root/vibecaster/start.sh` / `/root/vibecaster/stop.sh`
-- DB: `/root/vibecaster/backend/vibecaster.db` (SQLite)

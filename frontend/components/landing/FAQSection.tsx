@@ -6,27 +6,27 @@ import { ChevronDown } from 'lucide-react';
 const faqs = [
   {
     question: 'What is Vibecaster?',
-    answer: 'Vibecaster is an AI-powered social media automation platform that generates and posts content to X (Twitter), LinkedIn, and YouTube using Google Gemini and Imagen. It allows creators and businesses to maintain a consistent social media presence without manual daily posting.',
+    answer: 'Vibecaster is a skill for AI coding agents (like Claude Code, Codex, and Cursor) that gives them the ability to post to X (Twitter), LinkedIn, and YouTube. Install it once with a single command, then just tell your agent what to post.',
   },
   {
-    question: 'How does AI content generation work?',
-    answer: 'Vibecaster uses Google Gemini AI to analyze your brand voice and generate platform-optimized posts. You set your content strategy and tone once through a simple prompt, and AI creates unique posts tailored to each platform\'s best practices and character limits.',
+    question: 'Which AI agents are supported?',
+    answer: 'Vibecaster works with any agent that supports the skills protocol — over 40 agents including Claude Code, OpenAI Codex, Cursor, Windsurf, Cline, Aider, and more. You can also use the CLI directly with npx vibecaster.',
+  },
+  {
+    question: 'How does it work?',
+    answer: 'After installing the skill, your AI agent can call Vibecaster commands to generate and post content. It uses Google Gemini AI for content generation and Imagen for image creation. You connect your social accounts via OAuth in the web dashboard, and your agent handles the rest.',
   },
   {
     question: 'Which social media platforms are supported?',
-    answer: 'Vibecaster supports X (Twitter), LinkedIn, and YouTube. Connect your accounts securely via OAuth authentication and post to all platforms simultaneously or individually. We never store your social media passwords.',
+    answer: 'Vibecaster supports X (Twitter), LinkedIn, and YouTube. Connect your accounts securely via OAuth in the dashboard. Your agent can post to one or all platforms with a single command.',
   },
   {
     question: 'Is Vibecaster free to use?',
-    answer: 'Yes, Vibecaster is completely free during the beta period. You get full access to all features including AI post generation, video creation with Google Veo, audio transcription, and campaign automation at no cost.',
-  },
-  {
-    question: 'How do I get started with Vibecaster?',
-    answer: 'Getting started takes less than 5 minutes: Sign up for a free account, connect your social media accounts via OAuth, set your content prompt describing your brand voice and topics, and Vibecaster will automatically generate and post content based on your schedule.',
+    answer: 'Yes, Vibecaster is completely free during the beta period. You get full access to all features including direct posting, AI content generation, image generation, video processing, campaign automation, and transcription.',
   },
   {
     question: 'Is my data and social media accounts secure?',
-    answer: 'Vibecaster uses OAuth for secure authentication with all social platforms. We never store your social media passwords. Your credentials and data are protected with industry-standard encryption, and you can disconnect your accounts at any time.',
+    answer: 'Vibecaster uses OAuth for secure authentication with all social platforms — we never store your social media passwords. API keys are hashed server-side. You can revoke access or disconnect accounts at any time from the dashboard.',
   },
 ];
 

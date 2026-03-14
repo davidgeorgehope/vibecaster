@@ -4,18 +4,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
-import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload, Terminal } from 'lucide-react';
-import URLPostBox from '@/components/URLPostBox';
-import PostBuilder from '@/components/PostBuilder';
-import TranscribeBox from '@/components/TranscribeBox';
+import { Zap, AlertCircle, LogOut, Link, User, ListTodo, Terminal, Key } from 'lucide-react';
 import BioBox from '@/components/BioBox';
-import VideoBuilder from '@/components/VideoBuilder';
 import JobsPanel from '@/components/JobsPanel';
-import VideoPostBox from '@/components/VideoPostBox';
 import CLIBox from '@/components/CLIBox';
+import KeysBox from '@/components/KeysBox';
 
-type Tab = 'cli' | 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs';
+type Tab = 'cli' | 'keys' | 'connections' | 'bio' | 'jobs';
 
 interface ConnectionInfo {
   connected: boolean;
@@ -215,36 +210,6 @@ export default function Dashboard() {
     }
   };
 
-  // Campaign setup is now handled entirely inside PromptBox
-
-  const handleRunNow = async () => {
-    if (!token) return;
-    try {
-      const response = await fetch('/api/run-now', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to run campaign');
-      }
-
-      showNotification('info', 'Campaign started! Check connected platforms for new posts.');
-    } catch (error) {
-      showNotification('error', 'Failed to run campaign');
-      throw error;
-    }
-  };
-
-  // Helper to convert connection status to simple booleans for child components
-  const simpleConnections = {
-    twitter: connections.twitter.connected,
-    linkedin: connections.linkedin.connected,
-    youtube: connections.youtube.connected
-  };
-
   // Check if any connections are expired
   const hasExpiredConnections = connections.linkedin.expired || connections.twitter.expired || connections.youtube.expired;
 
@@ -295,7 +260,7 @@ export default function Dashboard() {
                 </h1>
               </div>
               <p className="text-gray-400 mt-2">
-                AI-powered social media automation platform
+                Social media for AI agents
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -321,12 +286,8 @@ export default function Dashboard() {
           <div className="flex flex-wrap gap-1">
             {[
               { id: 'cli', label: 'CLI', icon: Terminal },
-              { id: 'campaign', label: 'Campaign', icon: Megaphone },
-              { id: 'url', label: 'URL Post', icon: Link },
-              { id: 'builder', label: 'Post Builder', icon: MessageSquare },
-              { id: 'transcribe', label: 'Transcribe', icon: Mic },
-              { id: 'video', label: 'Video Gen', icon: Video },
-              { id: 'video-post', label: 'Video Post', icon: Upload },
+              { id: 'keys', label: 'API Keys', icon: Key },
+              { id: 'connections', label: 'Connections', icon: Link },
               { id: 'bio', label: 'Bio', icon: User },
               { id: 'jobs', label: 'Jobs', icon: ListTodo }
             ].map(tab => (
@@ -349,7 +310,18 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="container mx-auto px-6 py-12">
-        {activeTab === 'campaign' && (
+        <div className={activeTab === 'cli' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <CLIBox />
+        </div>
+
+        <div className={activeTab === 'keys' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <KeysBox
+            token={token}
+            showNotification={showNotification}
+          />
+        </div>
+
+        {activeTab === 'connections' && (
           <>
             {/* Token Expiry Warning */}
             {hasExpiredConnections && (
@@ -367,101 +339,27 @@ export default function Dashboard() {
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
-              {/* Box 1: Twitter Connection */}
               <ConnectionBox
                 service="twitter"
                 connected={connections.twitter.connected}
                 onConnect={handleTwitterConnect}
                 onDisconnect={handleTwitterDisconnect}
               />
-
-              {/* Box 2: LinkedIn Connection */}
               <ConnectionBox
                 service="linkedin"
                 connected={connections.linkedin.connected}
                 onConnect={handleLinkedInConnect}
                 onDisconnect={handleLinkedInDisconnect}
               />
-
-              {/* Box 3: YouTube Connection */}
               <ConnectionBox
                 service="youtube"
                 connected={connections.youtube.connected}
                 onConnect={handleYouTubeConnect}
                 onDisconnect={handleYouTubeDisconnect}
               />
-
-              {/* Campaign Prompt */}
-              <div className="lg:col-span-3">
-                <PromptBox
-                  onRunNow={handleRunNow}
-                  token={token}
-                  showNotification={showNotification}
-                />
-              </div>
-            </div>
-
-            {/* Info Section */}
-            <div className="max-w-7xl mx-auto mt-12">
-              <div className="bg-gray-900/30 backdrop-blur-sm border border-gray-800 rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-white mb-4">How it works</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-gray-300">
-                  <div>
-                    <div className="text-purple-400 font-semibold mb-2">1. Connect</div>
-                    <p className="text-sm">Link your X (Twitter) and LinkedIn accounts securely via OAuth</p>
-                  </div>
-                  <div>
-                    <div className="text-purple-400 font-semibold mb-2">2. Configure</div>
-                    <p className="text-sm">Set your content prompt - AI will analyze and create a persona</p>
-                  </div>
-                  <div>
-                    <div className="text-purple-400 font-semibold mb-2">3. Automate</div>
-                    <p className="text-sm">AI generates and posts content daily using Google Gemini & Imagen</p>
-                  </div>
-                </div>
-              </div>
             </div>
           </>
         )}
-
-        {/* Keep components mounted but hidden to preserve state across tab switches */}
-        <div className={activeTab === 'url' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <URLPostBox
-            token={token}
-            connections={simpleConnections}
-            showNotification={showNotification}
-          />
-        </div>
-
-        <div className={activeTab === 'builder' ? 'max-w-6xl mx-auto' : 'hidden'}>
-          <PostBuilder
-            token={token}
-            connections={simpleConnections}
-            showNotification={showNotification}
-          />
-        </div>
-
-        <div className={activeTab === 'transcribe' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <TranscribeBox
-            token={token}
-            showNotification={showNotification}
-          />
-        </div>
-
-        <div className={activeTab === 'video' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <VideoBuilder
-            token={token}
-            showNotification={showNotification}
-          />
-        </div>
-
-        <div className={activeTab === 'video-post' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <VideoPostBox
-            token={token}
-            connections={simpleConnections}
-            showNotification={showNotification}
-          />
-        </div>
 
         <div className={activeTab === 'bio' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <BioBox
@@ -472,13 +370,6 @@ export default function Dashboard() {
 
         <div className={activeTab === 'jobs' ? 'max-w-4xl mx-auto' : 'hidden'}>
           <JobsPanel
-            token={token}
-            showNotification={showNotification}
-          />
-        </div>
-
-        <div className={activeTab === 'cli' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <CLIBox
             token={token}
             showNotification={showNotification}
           />

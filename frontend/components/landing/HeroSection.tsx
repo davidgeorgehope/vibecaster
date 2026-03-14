@@ -8,25 +8,23 @@ export default function HeroSection() {
         {/* Badge */}
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/10 border border-purple-500/20 rounded-full mb-8">
           <Sparkles className="w-4 h-4 text-purple-400" />
-          <span className="text-sm text-purple-300">Powered by Google Gemini AI</span>
+          <span className="text-sm text-purple-300">Works with Claude Code, Codex, Cursor & 38+ agents</span>
         </div>
 
         {/* Headline */}
         <h1 className="text-5xl md:text-7xl font-bold text-white mb-6 leading-tight">
-          AI-Powered{' '}
-          <span className="gradient-text">Social Media</span>{' '}
-          Automation
+          Social Media for{' '}
+          <span className="gradient-text">AI Agents</span>
         </h1>
 
         {/* Subheadline */}
         <p className="text-xl md:text-2xl text-gray-400 mb-6 max-w-3xl mx-auto leading-relaxed">
-          Generate and post content to X, LinkedIn, and YouTube automatically.
-          Set your strategy once, let AI handle the rest.
+          Give your AI agent a social media presence. One command to install, then just ask it to post.
         </p>
 
         {/* GEO-optimized quotable definition */}
         <p className="text-base text-gray-500 mb-10 max-w-2xl mx-auto italic">
-          Vibecaster is a social media automation tool that uses Google Gemini AI to generate and schedule posts across multiple platforms from a single prompt.
+          Vibecaster is a skill for AI coding agents that lets them generate and post content to X, LinkedIn, and YouTube. Install it once, then your agent handles the rest.
         </p>
 
         {/* CTA Buttons */}
@@ -54,7 +52,7 @@ export default function HeroSection() {
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500" />
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-emerald-500" />
             </div>
-            <span className="text-sm">Join creators automating their presence</span>
+            <span className="text-sm">Powering agent-driven social media</span>
           </div>
         </div>
       </div>

@@ -1,35 +1,35 @@
-import { Megaphone, Link, MessageSquare, Video, Mic, User } from 'lucide-react';
+import { Terminal, Send, ImagePlus, Megaphone, Link, Globe } from 'lucide-react';
 
 const features = [
   {
+    icon: Terminal,
+    title: 'One-Line Install',
+    description: 'npx skills add for 40+ AI coding agents. Works with Claude Code, Codex, Cursor, Windsurf, and more.',
+  },
+  {
+    icon: Send,
+    title: 'Direct Posting',
+    description: 'Post text, images, and video to any connected platform. Your agent handles formatting and character limits.',
+  },
+  {
+    icon: ImagePlus,
+    title: 'AI Image Gen',
+    description: 'Use --imagegen to generate images from prompts with Google Imagen. Attached automatically to posts.',
+  },
+  {
     icon: Megaphone,
-    title: 'Campaign Automation',
-    description: 'Schedule daily AI-generated posts across all your social platforms with a single prompt.',
+    title: 'Campaign Autopilot',
+    description: 'Set a prompt and schedule. Your agent generates and posts content daily — no manual intervention.',
   },
   {
     icon: Link,
     title: 'URL to Post',
-    description: 'Drop any article or blog URL and get platform-optimized posts generated instantly.',
+    description: 'Give your agent any URL. It reads the content and creates platform-optimized posts instantly.',
   },
   {
-    icon: MessageSquare,
-    title: 'Post Builder',
-    description: 'Craft multi-platform posts with AI assistance and real-time preview for each network.',
-  },
-  {
-    icon: Video,
-    title: 'AI Video Generation',
-    description: 'Create multi-scene videos with Google Veo AI. Perfect for Reels, Shorts, and TikTok.',
-  },
-  {
-    icon: Mic,
-    title: 'Transcription',
-    description: 'Convert audio and video files to text. Generate posts from your podcasts and videos.',
-  },
-  {
-    icon: User,
-    title: 'Bio Generation',
-    description: 'Create compelling author bios and profile descriptions with AI assistance.',
+    icon: Globe,
+    title: 'Multi-Platform',
+    description: 'X, LinkedIn, and YouTube from a single command. Connect accounts via OAuth in the dashboard.',
   },
 ];
 
@@ -40,22 +40,22 @@ export default function FeaturesSection() {
         {/* Header */}
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-            Everything You Need to{' '}
-            <span className="gradient-text">Automate</span>
+            Everything Your Agent{' '}
+            <span className="gradient-text">Needs</span>
           </h2>
           <p className="text-xl text-gray-400 max-w-2xl mx-auto mb-8">
-            Powerful tools to generate, schedule, and post content across all major social platforms.
+            A complete social media toolkit designed for AI agents — install, connect, post.
           </p>
 
           {/* GEO-optimized statistics */}
           <div className="flex flex-wrap justify-center gap-8 text-center">
             <div>
-              <div className="text-3xl font-bold text-purple-400">3</div>
-              <div className="text-sm text-gray-500">Platforms Supported</div>
+              <div className="text-3xl font-bold text-purple-400">40+</div>
+              <div className="text-sm text-gray-500">Compatible Agents</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-purple-400">6</div>
-              <div className="text-sm text-gray-500">AI-Powered Features</div>
+              <div className="text-3xl font-bold text-purple-400">3</div>
+              <div className="text-sm text-gray-500">Platforms Supported</div>
             </div>
             <div>
               <div className="text-3xl font-bold text-purple-400">Free</div>

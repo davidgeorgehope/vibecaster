@@ -13,12 +13,12 @@ export default function CTASection() {
           {/* Content */}
           <div className="relative">
             <h2 className="text-4xl md:text-5xl font-bold text-white mb-6">
-              Ready to Automate Your{' '}
-              <span className="gradient-text">Social Presence</span>?
+              Ready to Give Your Agent{' '}
+              <span className="gradient-text">a Voice</span>?
             </h2>
             <p className="text-xl text-gray-300 mb-10 max-w-2xl mx-auto">
-              Join creators and businesses using AI to stay consistent on social media.
-              Start for free today.
+              Install the Vibecaster skill and let your AI agent manage your social media.
+              Free during beta.
             </p>
 
             {/* Buttons */}

@@ -2,21 +2,21 @@ import { Quote } from 'lucide-react';
 
 const testimonials = [
   {
-    quote: "Vibecaster has completely transformed how I manage my social presence. I save hours every week.",
+    quote: "I added Vibecaster to Claude Code and now I just say 'post about the release' at the end of every deploy. My LinkedIn has never been more active.",
     name: "Alex Chen",
-    title: "Content Creator",
+    title: "DevRel Engineer",
     avatar: "from-purple-500 to-pink-500",
   },
   {
-    quote: "The AI-generated content is surprisingly good. My engagement has increased significantly since I started using it.",
+    quote: "The campaign autopilot is incredible. Set it up once, and my agent posts three times a week with content that actually matches my voice.",
     name: "Sarah Miller",
-    title: "Marketing Manager",
+    title: "Startup Founder",
     avatar: "from-blue-500 to-cyan-500",
   },
   {
-    quote: "Finally, a tool that understands my brand voice. The video generation feature is a game-changer.",
+    quote: "We integrated Vibecaster into our CI pipeline. Every release automatically gets a LinkedIn post and tweet. Zero manual work.",
     name: "Jordan Lee",
-    title: "Startup Founder",
+    title: "Platform Engineer",
     avatar: "from-green-500 to-emerald-500",
   },
 ];
@@ -28,10 +28,10 @@ export default function TestimonialsSection() {
         {/* Header */}
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-            Loved by <span className="gradient-text">Creators</span>
+            Loved by <span className="gradient-text">Developers</span>
           </h2>
           <p className="text-xl text-gray-400 max-w-2xl mx-auto">
-            See what our users have to say about Vibecaster.
+            See how teams are using Vibecaster with their AI agents.
           </p>
         </div>
 
@@ -47,7 +47,7 @@ export default function TestimonialsSection() {
 
               {/* Quote Text */}
               <p className="text-gray-300 mb-6 leading-relaxed">
-                "{testimonial.quote}"
+                &ldquo;{testimonial.quote}&rdquo;
               </p>
 
               {/* Author */}

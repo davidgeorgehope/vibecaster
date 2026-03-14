@@ -1,23 +1,26 @@
-import { Link2, Settings, Zap } from 'lucide-react';
+import { Terminal, Link2, MessageSquare } from 'lucide-react';
 
 const steps = [
   {
     number: '01',
-    icon: Link2,
-    title: 'Connect',
-    description: 'Link your X (Twitter), LinkedIn, and YouTube accounts securely via OAuth. Your credentials stay safe.',
+    icon: Terminal,
+    title: 'Install',
+    description: 'Run npx skills add davidgeorgehope/vibecaster in your terminal. Works with any AI coding agent that supports skills.',
+    code: 'npx skills add davidgeorgehope/vibecaster',
   },
   {
     number: '02',
-    icon: Settings,
-    title: 'Configure',
-    description: 'Set your content prompt and preferences. Our AI analyzes your style and creates a unique persona.',
+    icon: Link2,
+    title: 'Connect',
+    description: 'Link your X, LinkedIn, and YouTube accounts via OAuth in the dashboard. Create an API key for your agent.',
+    code: null,
   },
   {
     number: '03',
-    icon: Zap,
-    title: 'Automate',
-    description: 'Sit back as AI generates and posts content daily using Google Gemini & Imagen. Stay consistent effortlessly.',
+    icon: MessageSquare,
+    title: 'Post',
+    description: 'Tell your agent "Post to LinkedIn about..." — it generates the content, formats it for each platform, and posts.',
+    code: '"Post to LinkedIn: Just shipped v2.0 with 3x faster builds"',
   },
 ];
 
@@ -31,7 +34,7 @@ export default function HowItWorksSection() {
             How It <span className="gradient-text">Works</span>
           </h2>
           <p className="text-xl text-gray-400 max-w-2xl mx-auto">
-            Get started in minutes. No complex setup required.
+            Three steps. One minute to install. Then your agent handles the rest.
           </p>
         </div>
 
@@ -41,7 +44,7 @@ export default function HowItWorksSection() {
           <div className="hidden md:block absolute top-1/2 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-500/0 via-purple-500/50 to-purple-500/0 -translate-y-1/2" />
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-12">
-            {steps.map((step, index) => (
+            {steps.map((step) => (
               <div key={step.number} className="relative">
                 {/* Step Card */}
                 <div className="bg-gray-950 border border-gray-800 rounded-xl p-8 text-center hover:border-purple-500/50 transition-colors">
@@ -59,9 +62,16 @@ export default function HowItWorksSection() {
                   <h3 className="text-2xl font-semibold text-white mb-3">
                     {step.title}
                   </h3>
-                  <p className="text-gray-400 text-sm leading-relaxed">
+                  <p className="text-gray-400 text-sm leading-relaxed mb-4">
                     {step.description}
                   </p>
+
+                  {/* Code snippet */}
+                  {step.code && (
+                    <div className="bg-gray-900/80 rounded-lg px-3 py-2 font-mono text-xs text-purple-300 text-left overflow-x-auto">
+                      {step.code}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
