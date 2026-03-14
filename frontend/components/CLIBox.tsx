@@ -320,7 +320,7 @@ export default function CLIBox({ token, showNotification }: CLIBoxProps) {
           <h4 className="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-2">Configure</h4>
           <div className="bg-gray-950/70 rounded-lg p-4 font-mono text-sm text-gray-300 space-y-1">
             <p className="text-gray-500"># Login with your API key</p>
-            <p>npx vibecaster login</p>
+            <p>vibecaster login</p>
             <p className="text-gray-500 mt-1"># → API URL: https://vibecaster.ai/api</p>
             <p className="text-gray-500"># → API Key: vb_your_key_here</p>
           </div>
@@ -331,19 +331,19 @@ export default function CLIBox({ token, showNotification }: CLIBoxProps) {
           <h4 className="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-2">Commands</h4>
           <div className="bg-gray-950/70 rounded-lg p-4 font-mono text-sm text-gray-300 space-y-2">
             <div className="grid grid-cols-[180px_1fr] gap-x-4 gap-y-1">
-              <span className="text-purple-400">npx vibecaster status</span>
+              <span className="text-purple-400">vibecaster status</span>
               <span className="text-gray-400">Check connection & campaign status</span>
-              <span className="text-purple-400">npx vibecaster campaign</span>
+              <span className="text-purple-400">vibecaster campaign</span>
               <span className="text-gray-400">View your active campaign</span>
-              <span className="text-purple-400">npx vibecaster create</span>
+              <span className="text-purple-400">vibecaster create</span>
               <span className="text-gray-400">AI-generate a post from a prompt</span>
-              <span className="text-purple-400">npx vibecaster generate</span>
+              <span className="text-purple-400">vibecaster generate</span>
               <span className="text-gray-400">Generate a post from URL (preview)</span>
-              <span className="text-purple-400">npx vibecaster run</span>
+              <span className="text-purple-400">vibecaster run</span>
               <span className="text-gray-400">Trigger immediate campaign run</span>
-              <span className="text-purple-400">npx vibecaster post</span>
+              <span className="text-purple-400">vibecaster post</span>
               <span className="text-gray-400">Post custom text/media directly</span>
-              <span className="text-purple-400">npx vibecaster keys</span>
+              <span className="text-purple-400">vibecaster keys</span>
               <span className="text-gray-400">List your API keys</span>
             </div>
           </div>
@@ -354,11 +354,11 @@ export default function CLIBox({ token, showNotification }: CLIBoxProps) {
           <h4 className="text-sm font-semibold text-purple-400 uppercase tracking-wide mb-2">Direct Posting</h4>
           <div className="bg-gray-950/70 rounded-lg p-4 font-mono text-sm text-gray-300 space-y-1">
             <p className="text-gray-500"># Post text to LinkedIn</p>
-            <p>npx vibecaster post &quot;Your post text here&quot; --platform linkedin</p>
+            <p>vibecaster post &quot;Your post text here&quot; --platform linkedin</p>
             <p className="text-gray-500 mt-3"># Post with an image</p>
-            <p>npx vibecaster post &quot;Caption here&quot; --media image.png --platform linkedin</p>
+            <p>vibecaster post &quot;Caption here&quot; --media image.png --platform linkedin</p>
             <p className="text-gray-500 mt-3"># Post video to X</p>
-            <p>npx vibecaster post &quot;Check this out&quot; --media video.mp4 --platform twitter</p>
+            <p>vibecaster post &quot;Check this out&quot; --media video.mp4 --platform twitter</p>
           </div>
         </div>
 
