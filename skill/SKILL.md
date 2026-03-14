@@ -13,11 +13,16 @@ AI-powered social media automation. Generate and post content to Twitter/X, Link
 
 ## Setup
 
-Config lives at `~/.vibecaster/config.json`. Login with an API key created from the Vibecaster web UI (https://vibecaster.ai → Dashboard → API Keys tab).
+Config lives at `~/.vibecaster/config.json`. Login with an API key created from the Vibecaster web UI (https://vibecaster.ai → Dashboard → CLI tab).
 
 ```bash
-vibecaster login
+# No install needed — just use npx
+npx vibecaster login
 # Prompts for API URL (default: https://vibecaster.ai/api) and API key (vb_...)
+
+# Or install globally
+npm install -g vibecaster
+vibecaster login
 ```
 
 ## Commands
@@ -48,7 +53,7 @@ vibecaster keys create "key name"    # Create new key (shown once!) — JWT only
 vibecaster keys revoke <id>          # Revoke a key — JWT only, use web UI
 ```
 
-**Note:** Creating and revoking keys requires JWT auth (web session). Use the web UI at https://vibecaster.ai → Dashboard → API Keys tab. The `keys list` command works with API key auth.
+**Note:** Creating and revoking keys requires JWT auth (web session). Use the web UI at https://vibecaster.ai → Dashboard → CLI tab. The `keys list` command works with API key auth.
 
 ## Auth
 
@@ -63,6 +68,6 @@ All API calls use `X-API-Key` header. Keys are prefixed `vb_` and stored hashed 
 
 - Backend: `/root/vibecaster/backend/` on Hetzner (FastAPI, port 8001)
 - Frontend: `/root/vibecaster/frontend/` (Next.js, port 3001)
-- CLI source: `/root/vibecaster/cli/` (Python + click)
+- CLI source: `/root/vibecaster/cli/` (Node.js + commander)
 - Start/stop: `/root/vibecaster/start.sh` / `/root/vibecaster/stop.sh`
 - DB: `/root/vibecaster/backend/vibecaster.db` (SQLite)

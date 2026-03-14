@@ -87,6 +87,20 @@ E2E test available: `tests/e2e/chunked_upload.test.js` (requires Playwright)
 - Integration tests catch SDK API issues that mocks miss
 - E2E tests: `node tests/e2e/*.test.js` (requires Playwright + chromium)
 
+## CLI
+
+Node.js CLI package in `cli/`. Works with `npx vibecaster` (no install needed) or `npm install -g vibecaster`.
+
+```bash
+# Development
+cd cli && npm install && node bin/vibecaster.js --help
+
+# Test package structure
+cd cli && npm pack
+```
+
+Config stored at `~/.vibecaster/config.json` (same path as the old Python CLI — existing configs work seamlessly).
+
 ## Infrastructure
 
 - Runs behind Cloudflare proxy

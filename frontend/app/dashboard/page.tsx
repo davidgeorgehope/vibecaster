@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import ConnectionBox from '@/components/ConnectionBox';
 import PromptBox from '@/components/PromptBox';
-import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload, Key } from 'lucide-react';
+import { Zap, AlertCircle, LogOut, Megaphone, Link, MessageSquare, Mic, User, Video, ListTodo, Upload, Terminal } from 'lucide-react';
 import URLPostBox from '@/components/URLPostBox';
 import PostBuilder from '@/components/PostBuilder';
 import TranscribeBox from '@/components/TranscribeBox';
@@ -13,9 +13,9 @@ import BioBox from '@/components/BioBox';
 import VideoBuilder from '@/components/VideoBuilder';
 import JobsPanel from '@/components/JobsPanel';
 import VideoPostBox from '@/components/VideoPostBox';
-import ApiKeysBox from '@/components/ApiKeysBox';
+import CLIBox from '@/components/CLIBox';
 
-type Tab = 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs' | 'api-keys';
+type Tab = 'cli' | 'campaign' | 'url' | 'builder' | 'transcribe' | 'video' | 'video-post' | 'bio' | 'jobs';
 
 interface ConnectionInfo {
   connected: boolean;
@@ -40,7 +40,7 @@ export default function Dashboard() {
     type: 'success' | 'error' | 'info';
     message: string;
   } | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('campaign');
+  const [activeTab, setActiveTab] = useState<Tab>('cli');
 
   // Define helper functions with useCallback before useEffect hooks
   const showNotification = useCallback((type: 'success' | 'error' | 'info', message: string) => {
@@ -320,6 +320,7 @@ export default function Dashboard() {
         <div className="container mx-auto px-4 sm:px-6">
           <div className="flex flex-wrap gap-1">
             {[
+              { id: 'cli', label: 'CLI', icon: Terminal },
               { id: 'campaign', label: 'Campaign', icon: Megaphone },
               { id: 'url', label: 'URL Post', icon: Link },
               { id: 'builder', label: 'Post Builder', icon: MessageSquare },
@@ -327,8 +328,7 @@ export default function Dashboard() {
               { id: 'video', label: 'Video Gen', icon: Video },
               { id: 'video-post', label: 'Video Post', icon: Upload },
               { id: 'bio', label: 'Bio', icon: User },
-              { id: 'jobs', label: 'Jobs', icon: ListTodo },
-              { id: 'api-keys', label: 'API Keys', icon: Key }
+              { id: 'jobs', label: 'Jobs', icon: ListTodo }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -477,8 +477,8 @@ export default function Dashboard() {
           />
         </div>
 
-        <div className={activeTab === 'api-keys' ? 'max-w-4xl mx-auto' : 'hidden'}>
-          <ApiKeysBox
+        <div className={activeTab === 'cli' ? 'max-w-4xl mx-auto' : 'hidden'}>
+          <CLIBox
             token={token}
             showNotification={showNotification}
           />
