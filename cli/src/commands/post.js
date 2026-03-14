@@ -10,10 +10,17 @@ export function registerPost(program) {
     .command('post <text>')
     .description('Post directly with your own text + optional media. No AI generation.')
     .option('-m, --media <path>', 'Path to image or video file')
+    .option('--imagegen <prompt>', 'Generate an image from a prompt to attach to the post')
     .option('-p, --platform <platform...>', 'Platform(s) to post to: twitter, linkedin, all', ['linkedin'])
     .action(async (text, options) => {
       const client = new VibecasterClient();
       client.ensureAuth();
+
+      if (options.media && options.imagegen) {
+        console.error(chalk.red('  Error: --media and --imagegen are mutually exclusive'));
+        process.exitCode = 1;
+        return;
+      }
 
       const platforms = expandPlatforms(options.platform);
 
@@ -21,44 +28,77 @@ export function registerPost(program) {
       if (options.media) {
         console.log(`  Media: ${options.media}`);
       }
-
-      // Build multipart form data
-      const formData = new FormData();
-      formData.append('text', text);
-      formData.append('platforms', platforms.join(','));
-
-      if (options.media) {
-        const fileBuffer = readFileSync(options.media);
-        const fileName = basename(options.media);
-        let mimeType = 'application/octet-stream';
-        if (options.media.endsWith('.mp4')) mimeType = 'video/mp4';
-        else if (options.media.endsWith('.png')) mimeType = 'image/png';
-        else if (options.media.endsWith('.jpg') || options.media.endsWith('.jpeg')) mimeType = 'image/jpeg';
-
-        formData.append('media', new Blob([fileBuffer], { type: mimeType }), fileName);
+      if (options.imagegen) {
+        console.log(`  Image prompt: ${options.imagegen}`);
       }
 
       let result;
       try {
-        const response = await fetch(`${client.apiUrl}/cli/direct-post`, {
-          method: 'POST',
-          headers: { 'X-API-Key': client.apiKey },
-          body: formData,
-          signal: AbortSignal.timeout(30000),
-        });
+        if (options.imagegen) {
+          // JSON request to imagegen endpoint
+          const response = await fetch(`${client.apiUrl}/cli/direct-post-imagegen`, {
+            method: 'POST',
+            headers: {
+              'X-API-Key': client.apiKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text,
+              platforms,
+              image_prompt: options.imagegen,
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
 
-        if (response.status >= 400) {
-          let detail;
-          try {
-            const json = await response.json();
-            detail = json.detail || response.statusText;
-          } catch {
-            detail = response.statusText;
+          if (response.status >= 400) {
+            let detail;
+            try {
+              const json = await response.json();
+              detail = json.detail || response.statusText;
+            } catch {
+              detail = response.statusText;
+            }
+            console.error(chalk.red(`  Error: ${detail}`));
+            return;
           }
-          console.error(chalk.red(`  Error: ${detail}`));
-          return;
+          result = await response.json();
+        } else {
+          // Multipart form data to direct-post endpoint
+          const formData = new FormData();
+          formData.append('text', text);
+          formData.append('platforms', platforms.join(','));
+
+          if (options.media) {
+            const fileBuffer = readFileSync(options.media);
+            const fileName = basename(options.media);
+            let mimeType = 'application/octet-stream';
+            if (options.media.endsWith('.mp4')) mimeType = 'video/mp4';
+            else if (options.media.endsWith('.png')) mimeType = 'image/png';
+            else if (options.media.endsWith('.jpg') || options.media.endsWith('.jpeg')) mimeType = 'image/jpeg';
+
+            formData.append('media', new Blob([fileBuffer], { type: mimeType }), fileName);
+          }
+
+          const response = await fetch(`${client.apiUrl}/cli/direct-post`, {
+            method: 'POST',
+            headers: { 'X-API-Key': client.apiKey },
+            body: formData,
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (response.status >= 400) {
+            let detail;
+            try {
+              const json = await response.json();
+              detail = json.detail || response.statusText;
+            } catch {
+              detail = response.statusText;
+            }
+            console.error(chalk.red(`  Error: ${detail}`));
+            return;
+          }
+          result = await response.json();
         }
-        result = await response.json();
       } catch (err) {
         if (err.name === 'TimeoutError') {
           console.error(chalk.red('  Error: Request timed out'));
@@ -75,7 +115,8 @@ export function registerPost(program) {
       }
 
       // Poll for completion
-      const spinner = ora({ text: 'Posting...', color: 'cyan' }).start();
+      const spinnerText = options.imagegen ? 'Generating image...' : 'Posting...';
+      const spinner = ora({ text: spinnerText, color: 'cyan' }).start();
       const start = Date.now();
 
       while ((Date.now() - start) / 1000 < 300) {
@@ -106,7 +147,11 @@ export function registerPost(program) {
           return;
         }
 
-        spinner.text = 'Posting...';
+        if (status === 'generating_image') {
+          spinner.text = 'Generating image...';
+        } else if (status === 'posting') {
+          spinner.text = 'Posting...';
+        }
         await new Promise((r) => setTimeout(r, 1500));
       }
 

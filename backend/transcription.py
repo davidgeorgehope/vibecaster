@@ -19,7 +19,7 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Model for transcription and generation
-LLM_MODEL = "gemini-3-pro-preview"
+LLM_MODEL = "gemini-3.1-pro-preview"
 
 # Supported MIME types
 SUPPORTED_AUDIO = {

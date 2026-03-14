@@ -33,7 +33,7 @@ def test_raw_gemini_search():
     client = genai.Client(api_key=api_key)
 
     # Use the same model as agents.py
-    model = "gemini-3-pro-preview"
+    model = "gemini-3.1-pro-preview"
 
     test_prompt = """
 USER'S FULL INSTRUCTIONS: Find recent Elastic Security content from the last week.
@@ -197,7 +197,7 @@ def test_response_text_property():
     print("\n[TEST 1] Simple prompt without Google Search...")
     try:
         response = client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-3.1-pro-preview",
             contents="Say hello in one word.",
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -221,7 +221,7 @@ def test_response_text_property():
     print("\n[TEST 2] Prompt with Google Search grounding...")
     try:
         response = client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-3.1-pro-preview",
             contents="What is the current date? Just tell me today's date.",
             config=types.GenerateContentConfig(
                 temperature=0.1,

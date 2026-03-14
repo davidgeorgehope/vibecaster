@@ -27,8 +27,8 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Models
-LLM_MODEL = "gemini-3-pro-preview"
-IMAGE_MODEL = "gemini-3-pro-image-preview"
+LLM_MODEL = "gemini-3.1-pro-preview"
+IMAGE_MODEL = "gemini-3.1-flash-image-preview"  # Nano Banana 2
 
 # Supported audio MIME types
 SUPPORTED_AUDIO_TYPES = {

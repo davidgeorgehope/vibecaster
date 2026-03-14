@@ -11,7 +11,7 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Model configurations
-LLM_MODEL = "gemini-3-pro-preview"
+LLM_MODEL = "gemini-3.1-pro-preview"
 
 def test_search_with_urls():
     """Test if we can get URLs from Google Search grounding."""

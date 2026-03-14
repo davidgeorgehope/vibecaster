@@ -113,11 +113,11 @@ def test_api_call():
 
     client = genai.Client(api_key=api_key)
 
-    # Test 1: gemini-3-pro-preview with thinking_config
-    print("[TEST] Testing gemini-3-pro-preview with thinking_config...")
+    # Test 1: gemini-3.1-pro-preview with thinking_config
+    print("[TEST] Testing gemini-3.1-pro-preview with thinking_config...")
     try:
         response = client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-3.1-pro-preview",
             contents="What is 2+2? Reply with just the number.",
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -129,16 +129,16 @@ def test_api_call():
         result = response.text.strip()
         print(f"[TEST] Response: {result}")
         assert "4" in result, f"Unexpected response: {result}"
-        print("[PASS] gemini-3-pro-preview with thinking_config works")
+        print("[PASS] gemini-3.1-pro-preview with thinking_config works")
     except Exception as e:
-        print(f"[FAIL] gemini-3-pro-preview failed: {e}")
+        print(f"[FAIL] gemini-3.1-pro-preview failed: {e}")
         return False
 
-    # Test 2: gemini-3-pro-preview with JSON response
-    print("[TEST] Testing gemini-3-pro-preview with JSON response...")
+    # Test 2: gemini-3.1-pro-preview with JSON response
+    print("[TEST] Testing gemini-3.1-pro-preview with JSON response...")
     try:
         response = client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-3.1-pro-preview",
             contents='Return a JSON object with key "answer" and value 4',
             config=types.GenerateContentConfig(
                 temperature=0.1,
@@ -151,13 +151,13 @@ def test_api_call():
         result = response.text.strip()
         print(f"[TEST] JSON Response: {result}")
         assert "4" in result, f"Unexpected response: {result}"
-        print("[PASS] gemini-3-pro-preview with JSON response works")
+        print("[PASS] gemini-3.1-pro-preview with JSON response works")
     except Exception as e:
-        print(f"[FAIL] gemini-3-pro-preview JSON failed: {e}")
+        print(f"[FAIL] gemini-3.1-pro-preview JSON failed: {e}")
         return False
 
-    # Test 3: gemini-3-pro-image-preview (just verify model exists)
-    print("[TEST] Testing gemini-3-pro-image-preview availability...")
+    # Test 3: gemini-3.1-flash-image-preview (just verify model exists)
+    print("[TEST] Testing gemini-3.1-flash-image-preview availability...")
     try:
         # Just test that we can create a valid config for image generation
         config = types.GenerateContentConfig(
@@ -167,10 +167,10 @@ def test_api_call():
             )
         )
         print(f"[TEST] Image config created: {config.response_modalities}")
-        print("[PASS] gemini-3-pro-image-preview config works")
+        print("[PASS] gemini-3.1-flash-image-preview config works")
         print("[INFO] Skipping actual image generation to save API costs")
     except Exception as e:
-        print(f"[FAIL] gemini-3-pro-image-preview config failed: {e}")
+        print(f"[FAIL] gemini-3.1-flash-image-preview config failed: {e}")
         return False
 
     return True

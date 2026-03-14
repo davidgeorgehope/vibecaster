@@ -22,8 +22,8 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Models
-IMAGE_MODEL = "gemini-3-pro-image-preview"  # Nano Banana Pro
-LLM_MODEL = "gemini-3-pro-preview"
+IMAGE_MODEL = "gemini-3.1-flash-image-preview"  # Nano Banana 2
+LLM_MODEL = "gemini-3.1-pro-preview"
 
 
 def generate_character_reference(
@@ -34,7 +34,7 @@ def generate_character_reference(
     """
     Generate a character reference image from a text description.
 
-    Uses Nano Banana Pro (gemini-3-pro-image-preview) to create a consistent
+    Uses Nano Banana Pro (gemini-3.1-flash-image-preview) to create a consistent
     character portrait that can be used as reference for other generations.
 
     Args:
