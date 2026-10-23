@@ -98,6 +98,8 @@ def get_test_token():
         "password": "testtest"
     })
 
+    if response.status_code == 202:
+        return None
     if response.status_code == 201:
         return response.json()["access_token"]
 

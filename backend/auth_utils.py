@@ -62,6 +62,24 @@ def _extract_user_id_from_jwt(token: str) -> Optional[int]:
         return None
 
 
+def _active_user_id(user_id: Optional[int]) -> Optional[int]:
+    """Return the user id only when that account is active."""
+    if user_id is None:
+        return None
+    from database import get_user_by_id
+    user = get_user_by_id(user_id)
+    if not user or not user.get("is_active", 1):
+        return None
+    return user_id
+
+
+def _inactive_account():
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Account is inactive",
+    )
+
+
 async def get_current_user_id(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -78,7 +96,10 @@ async def get_current_user_id(
 
     # 1. Try Bearer JWT token
     if credentials and credentials.credentials:
-        user_id = _extract_user_id_from_jwt(credentials.credentials)
+        raw_user_id = _extract_user_id_from_jwt(credentials.credentials)
+        user_id = _active_user_id(raw_user_id)
+        if raw_user_id is not None and user_id is None:
+            raise _inactive_account()
         if user_id is not None:
             return user_id
 
@@ -86,7 +107,10 @@ async def get_current_user_id(
     api_key = request.headers.get("X-API-Key")
     if api_key:
         from database import validate_api_key
-        user_id = validate_api_key(api_key)
+        raw_user_id = validate_api_key(api_key)
+        user_id = _active_user_id(raw_user_id)
+        if raw_user_id is not None and user_id is None:
+            raise _inactive_account()
         if user_id is not None:
             return user_id
 
@@ -107,7 +131,10 @@ async def get_current_user_id_jwt_only(
     )
 
     token = credentials.credentials
-    user_id = _extract_user_id_from_jwt(token)
+    raw_user_id = _extract_user_id_from_jwt(token)
+    user_id = _active_user_id(raw_user_id)
+    if raw_user_id is not None and user_id is None:
+        raise _inactive_account()
     if user_id is None:
         raise credentials_exception
     return user_id
@@ -124,7 +151,7 @@ async def get_optional_user_id(
     """
     # 1. Try Bearer JWT token
     if credentials and credentials.credentials:
-        user_id = _extract_user_id_from_jwt(credentials.credentials)
+        user_id = _active_user_id(_extract_user_id_from_jwt(credentials.credentials))
         if user_id is not None:
             return user_id
 
@@ -132,7 +159,7 @@ async def get_optional_user_id(
     api_key = request.headers.get("X-API-Key")
     if api_key:
         from database import validate_api_key
-        user_id = validate_api_key(api_key)
+        user_id = _active_user_id(validate_api_key(api_key))
         if user_id is not None:
             return user_id
 

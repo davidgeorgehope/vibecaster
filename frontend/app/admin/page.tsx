@@ -20,6 +20,7 @@ interface User {
   created_at: number;
   is_active: number;
   is_admin: number;
+  approval_status?: string;
   connections: {
     twitter: boolean;
     linkedin: boolean;
@@ -102,6 +103,21 @@ export default function AdminPage() {
       setUsersPagination({ page: data.page, pages: data.pages, total: data.total });
     }
   }, [token]);
+
+  const setUserApproval = async (targetId: number, action: 'approve' | 'reject') => {
+    if (!token) return;
+    setError(null);
+    const res = await fetch(`/api/admin/users/${targetId}/${action}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.detail || 'Could not update the user');
+      return;
+    }
+    await fetchUsers(usersPagination.page);
+  };
 
   const fetchCampaigns = useCallback(async (page: number = 1) => {
     if (!token) return;
@@ -422,11 +438,35 @@ export default function AdminPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`px-2 py-1 text-xs rounded ${
-                              user.is_active ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
-                            }`}>
-                              {user.is_active ? 'Active' : 'Inactive'}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-1 text-xs rounded ${
+                                user.approval_status === 'pending'
+                                  ? 'bg-yellow-900/50 text-yellow-300'
+                                  : user.is_active
+                                    ? 'bg-green-900/50 text-green-400'
+                                    : 'bg-red-900/50 text-red-400'
+                              }`}>
+                                {user.approval_status === 'pending' ? 'Pending' : user.is_active ? 'Active' : 'Rejected'}
+                              </span>
+                              {!user.is_active ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setUserApproval(user.id, 'approve')}
+                                  className="px-2 py-1 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded"
+                                >
+                                  Approve
+                                </button>
+                              ) : null}
+                              {user.is_active && !user.is_admin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setUserApproval(user.id, 'reject')}
+                                  className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded"
+                                >
+                                  Shut off
+                                </button>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       ))}

@@ -19,7 +19,8 @@ from database import (
     update_linkedin_mention,
     delete_linkedin_mention,
     get_linkedin_mention,
-    get_all_linkedin_mentions
+    get_all_linkedin_mentions,
+    set_user_approval,
 )
 
 
@@ -84,6 +85,27 @@ async def admin_users(page: int = 1, per_page: int = 20, user_id: int = Depends(
     for user in result["items"]:
         user["connections"] = get_connection_status(user["id"])
     return result
+
+
+@router.post("/users/{target_user_id}/approve")
+async def approve_user(target_user_id: int, user_id: int = Depends(require_admin)):
+    # Approve a waitlisted user.
+    if not set_user_approval(target_user_id, True):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return {"id": target_user_id, "is_active": 1, "approval_status": "approved"}
+
+
+@router.post("/users/{target_user_id}/reject")
+async def reject_user(target_user_id: int, user_id: int = Depends(require_admin)):
+    # Reject a user and keep the account inactive.
+    if target_user_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot reject your own account",
+        )
+    if not set_user_approval(target_user_id, False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return {"id": target_user_id, "is_active": 0, "approval_status": "rejected"}
 
 
 @router.get("/campaigns")

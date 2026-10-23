@@ -3,7 +3,16 @@ from fastapi.testclient import TestClient
 import os
 import sqlite3
 from main import app
-from database import init_database, DB_PATH
+from database import init_database, DB_PATH, get_user_by_email, set_user_approval
+
+
+def approve_test_user(email: str) -> None:
+    """Approve a waitlisted test user so a later login check can pass."""
+    user = get_user_by_email(email)
+    assert user is not None
+    assert user["is_active"] == 0
+    assert user["approval_status"] == "pending"
+    assert set_user_approval(user["id"], True)
 
 # Create a test client
 client = TestClient(app)
@@ -42,12 +51,13 @@ class TestSignup:
             json={"email": "test@example.com", "password": "password123"}
         )
 
-        assert response.status_code == 201
+        assert response.status_code == 202
         data = response.json()
-        assert "access_token" in data
-        assert data["token_type"] == "bearer"
-        assert isinstance(data["access_token"], str)
-        assert len(data["access_token"]) > 0
+        assert data["status"] == "pending"
+        assert "access_token" not in data
+        user = get_user_by_email("test@example.com")
+        assert user["is_active"] == 0
+        assert user["approval_status"] == "pending"
 
     def test_signup_short_password(self):
         """Test signup with password too short."""
@@ -96,6 +106,7 @@ class TestLogin:
             "/api/auth/signup",
             json={"email": "test@example.com", "password": "password123"}
         )
+        approve_test_user("test@example.com")
 
         # Login
         response = client.post(
@@ -125,6 +136,19 @@ class TestLogin:
         assert response.status_code == 401
         assert "Incorrect email or password" in response.json()["detail"]
 
+    def test_login_pending_user(self):
+        """A waitlisted user cannot log in."""
+        client.post(
+            "/api/auth/signup",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        response = client.post(
+            "/api/auth/login",
+            json={"email": "test@example.com", "password": "password123"}
+        )
+        assert response.status_code == 403
+        assert "waiting for approval" in response.json()["detail"]
+
     def test_login_nonexistent_user(self):
         """Test login with non-existent user."""
         response = client.post(
@@ -146,7 +170,11 @@ class TestAuthenticatedEndpoints:
             "/api/auth/signup",
             json={"email": "test@example.com", "password": "password123"}
         )
-        token = signup_response.json()["access_token"]
+        approve_test_user("test@example.com")
+        token = client.post(
+            "/api/auth/login",
+            json={"email": "test@example.com", "password": "password123"}
+        ).json()["access_token"]
 
         # Get current user
         response = client.get(
@@ -164,7 +192,7 @@ class TestAuthenticatedEndpoints:
         """Test getting current user without token."""
         response = client.get("/api/auth/me")
 
-        assert response.status_code == 403  # Forbidden (no credentials)
+        assert response.status_code == 401  # No credentials
 
     def test_get_current_user_invalid_token(self):
         """Test getting current user with invalid token."""
@@ -182,7 +210,7 @@ class TestAuthenticatedEndpoints:
             headers={"Authorization": "Bearer"}
         )
 
-        assert response.status_code == 403  # No credentials
+        assert response.status_code == 401  # Malformed Authorization header
 
 
 class TestSignupLoginFlow:
@@ -196,8 +224,12 @@ class TestSignupLoginFlow:
             json={"email": "test@example.com", "password": "password123"}
         )
 
-        assert signup_response.status_code == 201
-        token = signup_response.json()["access_token"]
+        assert signup_response.status_code == 202
+        approve_test_user("test@example.com")
+        token = client.post(
+            "/api/auth/login",
+            json={"email": "test@example.com", "password": "password123"}
+        ).json()["access_token"]
 
         # Immediately fetch user data (this was failing before the fix)
         user_response = client.get(
@@ -218,7 +250,8 @@ class TestSignupLoginFlow:
             "/api/auth/signup",
             json={"email": "test@example.com", "password": "password123"}
         )
-        assert signup_response.status_code == 201
+        assert signup_response.status_code == 202
+        approve_test_user("test@example.com")
 
         # Login
         login_response = client.post(
@@ -243,7 +276,11 @@ class TestSignupLoginFlow:
             "/api/auth/signup",
             json={"email": "test@example.com", "password": "password123"}
         )
-        token = signup_response.json()["access_token"]
+        approve_test_user("test@example.com")
+        token = client.post(
+            "/api/auth/login",
+            json={"email": "test@example.com", "password": "password123"}
+        ).json()["access_token"]
 
         # Make multiple requests with the same token
         for _ in range(3):

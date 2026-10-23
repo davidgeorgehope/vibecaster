@@ -28,16 +28,21 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class PendingSignupResponse(BaseModel):
+    status: str = "pending"
+    detail: str = "Account is waiting for approval"
+
+
 class UserResponse(BaseModel):
     id: int
     email: str
     created_at: int
 
 
-@router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/signup", response_model=PendingSignupResponse, status_code=status.HTTP_202_ACCEPTED)
 async def signup(request: SignupRequest):
     """
-    Create a new user account.
+    Create a waitlisted user. The account cannot log in until an admin approves it.
     """
     # Check if user already exists
     existing_user = get_user_by_email(request.email)
@@ -54,7 +59,7 @@ async def signup(request: SignupRequest):
             detail="Password must be at least 8 characters long"
         )
 
-    # Create user
+    # Create an inactive waitlist user. Do not issue a token.
     hashed_password = get_password_hash(request.password)
     user_id = create_user(request.email, hashed_password)
 
@@ -62,10 +67,7 @@ async def signup(request: SignupRequest):
     import threading
     threading.Thread(target=send_signup_notification, args=(request.email, user_id)).start()
 
-    # Create access token (sub must be a string)
-    access_token = create_access_token(data={"sub": str(user_id)})
-
-    return TokenResponse(access_token=access_token)
+    return PendingSignupResponse()
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -90,9 +92,13 @@ async def login(request: LoginRequest):
 
     # Check if user is active
     if not user.get("is_active", 1):
+        if user.get("approval_status") == "pending":
+            detail = "Account is waiting for approval"
+        else:
+            detail = "Account is inactive"
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is inactive"
+            detail=detail,
         )
 
     # Create access token (sub must be a string)

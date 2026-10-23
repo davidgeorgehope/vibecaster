@@ -43,7 +43,7 @@ export default function PricingSection() {
 
             {/* Description */}
             <p className="relative text-gray-400 mb-8">
-              Get full access to all features while we're in beta.
+              Get full access to all features while {"we're"} in beta.
               Help shape the future of Vibecaster with your feedback.
             </p>
 

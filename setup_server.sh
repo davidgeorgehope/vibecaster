@@ -53,16 +53,16 @@ echo -e "${GREEN}[3/5] Installing Node.js and npm...${NC}"
 # Check if Node.js is already installed and version is adequate
 if command -v node &> /dev/null; then
     NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-    if [ "$NODE_VERSION" -ge 18 ]; then
+    if [ "$NODE_VERSION" -ge 22 ]; then
         echo -e "   ✅ Node.js $(node -v) already installed"
     else
         echo "   Upgrading Node.js (current version too old)..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt-get install -y -qq nodejs
     fi
 else
-    # Install Node.js 20.x
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    # Install Node.js 22.x LTS
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y -qq nodejs
 fi
 

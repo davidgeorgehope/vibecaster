@@ -31,15 +31,16 @@ def send_signup_notification(user_email: str, user_id: int):
         msg = MIMEMultipart()
         msg["From"] = ADMIN_EMAIL
         msg["To"] = ADMIN_EMAIL
-        msg["Subject"] = f"🎉 New Vibecaster Signup: {user_email}"
+        msg["Subject"] = f"Vibecaster waitlist: {user_email}"
 
         body = f"""
-New user signed up for Vibecaster!
+A new Vibecaster account is waiting for approval.
 
 Email: {user_email}
 User ID: {user_id}
+Status: pending
 
-View all users at your admin dashboard.
+The account cannot log in until you approve it in the admin dashboard.
 """
         msg.attach(MIMEText(body, "plain"))
 
