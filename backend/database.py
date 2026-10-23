@@ -34,7 +34,8 @@ def init_database():
                 email TEXT UNIQUE NOT NULL,
                 hashed_password TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
-                is_active INTEGER DEFAULT 1
+                is_active INTEGER DEFAULT 1,
+                approval_status TEXT DEFAULT 'approved'
             )
         """)
 
@@ -174,6 +175,15 @@ def init_database():
             cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
             print("Migration: Added is_admin column to users table")
 
+        # Migration: waitlist flag. Existing active users stay approved.
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        if 'approval_status' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN approval_status TEXT DEFAULT 'approved'")
+            cursor.execute("UPDATE users SET approval_status = 'rejected' WHERE is_active = 0")
+            cursor.execute("UPDATE users SET approval_status = 'approved' WHERE is_active = 1")
+            print("Migration: Added approval_status column to users table")
+
         # Migration: Add media_type column to campaign table for video support
         cursor.execute("PRAGMA table_info(campaign)")
         columns = [column[1] for column in cursor.fetchall()]
@@ -233,8 +243,8 @@ def create_user(email: str, hashed_password: str) -> int:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (email, hashed_password, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO users (email, hashed_password, created_at, is_active, approval_status)
+            VALUES (?, ?, ?, 0, 'pending')
         """, (email, hashed_password, int(time.time())))
         return cursor.lastrowid
 
@@ -255,6 +265,23 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
+
+
+def set_user_approval(user_id: int, approved: bool) -> bool:
+    """Approve or reject a user. Returns False when the user does not exist."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if approved:
+            cursor.execute(
+                "UPDATE users SET is_active = 1, approval_status = 'approved' WHERE id = ?",
+                (user_id,),
+            )
+        else:
+            cursor.execute(
+                "UPDATE users SET is_active = 0, approval_status = 'rejected' WHERE id = ?",
+                (user_id,),
+            )
+        return cursor.rowcount == 1
 
 
 # Secrets table operations
@@ -805,7 +832,7 @@ def get_all_users(page: int = 1, per_page: int = 20) -> dict:
         total = cursor.fetchone()[0]
         # Get paginated results
         cursor.execute("""
-            SELECT id, email, created_at, is_active, is_admin
+            SELECT id, email, created_at, is_active, is_admin, approval_status
             FROM users
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?

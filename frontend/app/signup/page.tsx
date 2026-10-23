@@ -12,6 +12,7 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [submittedEmail, setSubmittedEmail] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,6 +32,7 @@ export default function SignupPage() {
 
     try {
       await signup(email, password);
+      setSubmittedEmail(email);
     } catch (err: any) {
       setError(err.message || 'Signup failed');
     } finally {
@@ -50,12 +52,20 @@ export default function SignupPage() {
             </h1>
           </div>
           <p className="text-gray-400">
-            Create your account
+            Request an account
           </p>
         </div>
 
         {/* Signup Form */}
         <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-lg p-8">
+          {submittedEmail ? (
+            <div className="space-y-3 text-center">
+              <h2 className="text-xl font-semibold text-white">You're on the waitlist.</h2>
+              <p className="text-gray-300 text-sm">
+                {submittedEmail} cannot log in until the account is approved.
+              </p>
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Email Field */}
             <div>
@@ -129,9 +139,10 @@ export default function SignupPage() {
               disabled={isLoading}
               className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900"
             >
-              {isLoading ? 'Creating account...' : 'Sign Up'}
+              {isLoading ? 'Sending request...' : 'Join the waitlist'}
             </button>
           </form>
+          )}
 
           {/* Login Link */}
           <div className="mt-6 text-center">

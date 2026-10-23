@@ -99,13 +99,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await response.json();
-    const { access_token } = data;
-
-    localStorage.setItem('vibecaster_token', access_token);
-    setToken(access_token);
-
-    await fetchUser(access_token);
-    router.push('/dashboard');
+    if (data.status !== 'pending') {
+      throw new Error('Signup did not join the waitlist');
+    }
   };
 
   const logout = () => {
