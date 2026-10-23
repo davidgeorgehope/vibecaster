@@ -61,7 +61,7 @@ vibecaster/
 3. All required Python packages in `requirements.txt`
 
 ### Frontend
-1. Node.js 18+ installed
+1. Node.js 22+ installed
 2. All npm dependencies installed
 
 ## Production Checklist

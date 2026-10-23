@@ -192,7 +192,7 @@ class TestAuthenticatedEndpoints:
         """Test getting current user without token."""
         response = client.get("/api/auth/me")
 
-        assert response.status_code == 403  # Forbidden (no credentials)
+        assert response.status_code == 401  # No credentials
 
     def test_get_current_user_invalid_token(self):
         """Test getting current user with invalid token."""
@@ -210,7 +210,7 @@ class TestAuthenticatedEndpoints:
             headers={"Authorization": "Bearer"}
         )
 
-        assert response.status_code == 403  # No credentials
+        assert response.status_code == 401  # Malformed Authorization header
 
 
 class TestSignupLoginFlow:

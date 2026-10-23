@@ -25,7 +25,7 @@ Vibecaster is a monolithic localhost application that uses Google Gemini AI and 
 ## Prerequisites
 
 - Python 3.12 or higher
-- Node.js 18 or higher
+- Node.js 22 or higher
 - npm or yarn
 - Google AI API Key (Gemini/Imagen access)
 - X (Twitter) Developer Account with OAuth 2.0 credentials

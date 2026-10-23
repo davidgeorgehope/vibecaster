@@ -60,7 +60,7 @@ export default function SignupPage() {
         <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-lg p-8">
           {submittedEmail ? (
             <div className="space-y-3 text-center">
-              <h2 className="text-xl font-semibold text-white">You're on the waitlist.</h2>
+              <h2 className="text-xl font-semibold text-white">{"You're on the waitlist."}</h2>
               <p className="text-gray-300 text-sm">
                 {submittedEmail} cannot log in until the account is approved.
               </p>
