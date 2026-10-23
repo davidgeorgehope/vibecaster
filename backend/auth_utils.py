@@ -107,7 +107,10 @@ async def get_current_user_id(
     api_key = request.headers.get("X-API-Key")
     if api_key:
         from database import validate_api_key
-        user_id = validate_api_key(api_key)
+        raw_user_id = validate_api_key(api_key)
+        user_id = _active_user_id(raw_user_id)
+        if raw_user_id is not None and user_id is None:
+            raise _inactive_account()
         if user_id is not None:
             return user_id
 
@@ -156,7 +159,7 @@ async def get_optional_user_id(
     api_key = request.headers.get("X-API-Key")
     if api_key:
         from database import validate_api_key
-        user_id = validate_api_key(api_key)
+        user_id = _active_user_id(validate_api_key(api_key))
         if user_id is not None:
             return user_id
 

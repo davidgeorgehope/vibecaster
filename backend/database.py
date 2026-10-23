@@ -240,12 +240,21 @@ def init_database():
 def create_user(email: str, hashed_password: str) -> int:
     """Create a new user and return their ID."""
     import time
+    # The bootstrap admin must be able to log in to approve everyone else.
+    is_bootstrap_admin = email == 'email.djhope@gmail.com'
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO users (email, hashed_password, created_at, is_active, approval_status)
-            VALUES (?, ?, ?, 0, 'pending')
-        """, (email, hashed_password, int(time.time())))
+            INSERT INTO users (email, hashed_password, created_at, is_active, is_admin, approval_status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            email,
+            hashed_password,
+            int(time.time()),
+            1 if is_bootstrap_admin else 0,
+            1 if is_bootstrap_admin else 0,
+            'approved' if is_bootstrap_admin else 'pending',
+        ))
         return cursor.lastrowid
 
 

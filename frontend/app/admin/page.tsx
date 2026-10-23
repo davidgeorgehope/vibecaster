@@ -448,7 +448,7 @@ export default function AdminPage() {
                               }`}>
                                 {user.approval_status === 'pending' ? 'Pending' : user.is_active ? 'Active' : 'Rejected'}
                               </span>
-                              {user.approval_status === 'pending' ? (
+                              {!user.is_active ? (
                                 <button
                                   type="button"
                                   onClick={() => setUserApproval(user.id, 'approve')}
