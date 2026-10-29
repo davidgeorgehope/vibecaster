@@ -78,7 +78,7 @@ Call generate_posts() with the posts you create."""
         call, _ = call_function(POST_GEN_PROMPT, POST_BUILDER_FUNCTIONS, temperature=0.9)
 
         # Extract function call result
-        if call:
+        if call and call[0] == "generate_posts" and (call[1].get("x_post") or call[1].get("linkedin_post")):
             _name, args = call
             return {
                 "x_post": args.get("x_post", ""),

@@ -178,8 +178,8 @@ def call_function(
         fn = calls[0].get("function", {})
         try:
             args = json.loads(fn.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            args = {}
+        except json.JSONDecodeError as e:
+            raise XaiError(f"xAI returned invalid tool-call arguments: {e}") from e
         return (fn.get("name", ""), args), msg.get("content") or ""
     return None, msg.get("content") or ""
 
@@ -288,8 +288,14 @@ def understand_media(data: bytes, filename: str, mime_type: str = "", *, timesta
     """
     ext = os.path.splitext(filename)[1].lower() or MIME_EXT.get(mime_type, ".mp4")
     name = os.path.splitext(filename)[0] + ext
-    transcript = format_transcript(transcribe(data, name), timestamps=timestamps).strip()
-    if transcript or not (mime_type.startswith("video/") or ext in (".mp4", ".mov", ".webm", ".m4v")):
+    is_video = mime_type.startswith("video/") or ext in (".mp4", ".mov", ".webm", ".m4v")
+    try:
+        transcript = format_transcript(transcribe(data, name), timestamps=timestamps).strip()
+    except (subprocess.CalledProcessError, XaiError):
+        if not is_video:
+            raise
+        transcript = ""  # e.g. video with no audio stream
+    if transcript or not is_video:
         return transcript
     frames = sample_frames(data, 6, ext)
     if not frames:
@@ -380,9 +386,14 @@ def concat_videos(first: bytes, second: bytes) -> bytes:
         open(b, "wb").write(second)
         w, h = _dims(a)
         vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
-        has_audio = _has_audio(a) and _has_audio(b)
-        if has_audio:
-            fc = f"[0:v]{vf}[v0];[1:v]{vf}[v1];[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[v][a]"
+        audio = [_has_audio(a), _has_audio(b)]
+        if any(audio):
+            # Pad a silent clip with generated silence so the other clip's soundtrack survives.
+            af = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+            srcs = [f"[{i}:a]" if has else f"anullsrc=r=48000:cl=stereo,atrim=duration={_duration(p):.3f},"
+                    for i, (p, has) in enumerate(zip((a, b), audio))]
+            fc = (f"[0:v]{vf}[v0];[1:v]{vf}[v1];{srcs[0]}{af}[a0];{srcs[1]}{af}[a1];"
+                  f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]")
             maps = ["-map", "[v]", "-map", "[a]", "-c:a", "aac"]
         else:
             fc = f"[0:v]{vf}[v0];[1:v]{vf}[v1];[v0][v1]concat=n=2:v=1:a=0[v]"
@@ -397,6 +408,12 @@ def _dims(path: str) -> Tuple[int, int]:
                         "-of", "csv=p=0", path], capture_output=True, text=True, timeout=60)
     w, h = (int(x) for x in p.stdout.strip().split(",")[:2])
     return w - w % 2, h - h % 2
+
+
+def _duration(path: str) -> float:
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                       capture_output=True, text=True, timeout=60)
+    return float(p.stdout.strip())
 
 
 def _has_audio(path: str) -> bool:
