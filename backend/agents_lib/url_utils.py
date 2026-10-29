@@ -15,7 +15,7 @@ MAX_HTML_CONTENT_SIZE = 100_000
 def resolve_redirect_url(url: str) -> str:
     """
     Follow redirects to get the actual destination URL.
-    This handles Vertex AI Search grounding API redirect URLs and other redirects.
+    This handles search redirect URLs and other redirects.
 
     Args:
         url: The URL to resolve (may be a redirect)

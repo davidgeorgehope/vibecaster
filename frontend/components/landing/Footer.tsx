@@ -84,7 +84,7 @@ export default function Footer() {
             &copy; {new Date().getFullYear()} Vibecaster. All rights reserved.
           </p>
           <p className="text-gray-500 text-sm">
-            Powered by Google Gemini AI & Imagen
+            Powered by xAI Grok
           </p>
         </div>
       </div>

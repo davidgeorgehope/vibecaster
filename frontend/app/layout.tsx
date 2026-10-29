@@ -8,8 +8,8 @@ export const metadata: Metadata = {
     default: 'Vibecaster - AI Social Media Automation | Auto-Post to X, LinkedIn, YouTube',
     template: '%s | Vibecaster'
   },
-  description: 'Automate your social media with AI. Vibecaster generates and posts content to X (Twitter), LinkedIn, and YouTube using Google Gemini. Free during beta.',
-  keywords: ['social media automation', 'AI content generation', 'Twitter automation', 'LinkedIn automation', 'YouTube automation', 'Google Gemini'],
+  description: 'Automate your social media with AI. Vibecaster generates and posts content to X (Twitter), LinkedIn, and YouTube using xAI Grok. Free during beta.',
+  keywords: ['social media automation', 'AI content generation', 'Twitter automation', 'LinkedIn automation', 'YouTube automation', 'xAI Grok'],
   authors: [{ name: 'Vibecaster' }],
   metadataBase: new URL('https://vibecaster.app'),
   openGraph: {

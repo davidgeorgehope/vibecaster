@@ -14,7 +14,7 @@ export default function JsonLd() {
     '@type': 'WebSite',
     name: 'Vibecaster',
     url: 'https://vibecaster.app',
-    description: 'Automate your social media with AI. Generate and post content to X, LinkedIn, and YouTube using Google Gemini.',
+    description: 'Automate your social media with AI. Generate and post content to X, LinkedIn, and YouTube using xAI Grok.',
     potentialAction: {
       '@type': 'SearchAction',
       target: {
@@ -32,7 +32,7 @@ export default function JsonLd() {
     applicationCategory: 'BusinessApplication',
     operatingSystem: 'Web',
     url: 'https://vibecaster.app',
-    description: 'Vibecaster is an AI-powered social media automation platform that uses Google Gemini to generate and automatically post content to X (Twitter), LinkedIn, and YouTube.',
+    description: 'Vibecaster is an AI-powered social media automation platform that uses xAI Grok to generate and automatically post content to X (Twitter), LinkedIn, and YouTube.',
     offers: {
       '@type': 'Offer',
       price: '0',
@@ -40,11 +40,11 @@ export default function JsonLd() {
       description: 'Free during beta',
     },
     featureList: [
-      'AI content generation with Google Gemini',
+      'AI content generation with xAI Grok',
       'Auto-posting to X (Twitter)',
       'Auto-posting to LinkedIn',
       'Auto-posting to YouTube',
-      'AI video generation with Google Veo',
+      'AI video generation with Grok Imagine Video',
       'Audio transcription',
       'Campaign automation',
     ],

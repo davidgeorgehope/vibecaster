@@ -822,8 +822,8 @@ export default function VideoBuilder({ token, showNotification }: VideoBuilderPr
           <div className="text-sm text-gray-300">
             <p className="font-medium text-purple-300 mb-1">About Video Generation</p>
             <p>
-              Videos are generated using Veo 3.1 with native audio. Scene 1 creates an 8-second base video,
-              then each additional scene extends it by ~7 seconds for seamless continuity.
+              Videos are generated using Grok Imagine Video 1.5 with native audio. Scene 1 creates an 8-second base video,
+              then each additional scene continues from its last frame for ~7 more seconds.
               Set up your author bio for character reference.
             </p>
           </div>

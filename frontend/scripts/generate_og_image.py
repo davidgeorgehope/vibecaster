@@ -126,7 +126,7 @@ def main():
     draw.text((subtitle_x, subtitle_y), subtitle, font=subtitle_font, fill=WHITE)
 
     # Draw tagline
-    tagline = "Auto-post to X, LinkedIn & YouTube with Google Gemini"
+    tagline = "Auto-post to X, LinkedIn & YouTube with xAI Grok"
     tagline_bbox = draw.textbbox((0, 0), tagline, font=tagline_font)
     tagline_width = tagline_bbox[2] - tagline_bbox[0]
     tagline_x = (WIDTH - tagline_width) // 2

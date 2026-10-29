@@ -1,7 +1,5 @@
 """Agent tool functions for search, post generation, brainstorming, and campaigns."""
-from google.genai import types
-
-from .config import client, LLM_MODEL
+from xai_client import call_function, chat, web_search
 from .utils import is_network_error
 from .search import search_trending_topics, select_single_topic
 from logger_config import agent_logger as logger
@@ -77,28 +75,19 @@ Create posts that present the REAL facts above IN THE PERSONA'S VOICE.
 Call generate_posts() with the posts you create."""
 
     try:
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=POST_GEN_PROMPT,
-            config=types.GenerateContentConfig(
-                temperature=0.9,
-                tools=[POST_BUILDER_FUNCTION_TOOL]
-            )
-        )
+        call, _ = call_function(POST_GEN_PROMPT, POST_BUILDER_FUNCTIONS, temperature=0.9)
 
         # Extract function call result
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'function_call') and part.function_call:
-                    args = dict(part.function_call.args) if part.function_call.args else {}
-                    return {
-                        "x_post": args.get("x_post", ""),
-                        "linkedin_post": args.get("linkedin_post", ""),
-                        "persona": args.get("persona", persona),
-                        "visual_style": args.get("visual_style", visual_style),
-                        "source_url": args.get("source_url", source_url or ""),
-                        "success": True
-                    }
+        if call:
+            _name, args = call
+            return {
+                "x_post": args.get("x_post", ""),
+                "linkedin_post": args.get("linkedin_post", ""),
+                "persona": args.get("persona", persona),
+                "visual_style": args.get("visual_style", visual_style),
+                "source_url": args.get("source_url", source_url or ""),
+                "success": True
+            }
 
         return {"success": False, "error": "No posts generated"}
     except Exception as e:
@@ -109,7 +98,7 @@ Call generate_posts() with the posts you create."""
 def agent_brainstorm(topic_area: str) -> dict:
     """
     Agent that explores topic ideas without generating posts.
-    Uses Google Search grounding to find trends.
+    Uses Grok live web search to find trends.
     """
     BRAINSTORM_PROMPT = f"""Explore content ideas about: {topic_area}
 
@@ -122,17 +111,10 @@ Return a helpful list of potential post topics with brief descriptions.
 Format as a bulleted list that's easy to read."""
 
     try:
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=BRAINSTORM_PROMPT,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.7
-            )
-        )
+        suggestions, _sources = web_search(BRAINSTORM_PROMPT, temperature=0.7)
 
         return {
-            "suggestions": response.text,
+            "suggestions": suggestions,
             "success": True
         }
     except Exception as e:
@@ -191,14 +173,7 @@ Current context:
 
 Generate a detailed campaign prompt for this concept."""
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=CAMPAIGN_PROMPT_GENERATOR,
-                temperature=0.7
-            )
-        )
+        response = chat(prompt, system=CAMPAIGN_PROMPT_GENERATOR, temperature=0.7)
 
         return {
             "campaign_prompt": response.text,
@@ -246,73 +221,71 @@ Example:
 IMPORTANT: Use ONLY facts from the provided content. The visual_style should capture how to DRAW the persona."""
 
 # Tool definitions for post builder - just function declarations
-# Google Search grounding is added separately when needed
-POST_BUILDER_FUNCTION_TOOL = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
+POST_BUILDER_FUNCTIONS = [
+        dict(
             name="search_and_fetch",
             description="Search for current content about a topic and fetch article content. Call this FIRST before generating posts to get real, timely information.",
-            parameters=types.Schema(
-                type="OBJECT",
+            parameters=dict(
+                type="object",
                 properties={
-                    "topic": types.Schema(
-                        type="STRING",
+                    "topic": dict(
+                        type="string",
                         description="The topic to search for (e.g., 'kubernetes best practices', 'observability trends', 'AI automation')"
                     ),
-                    "persona_context": types.Schema(
-                        type="STRING",
+                    "persona_context": dict(
+                        type="string",
                         description="Brief description of the creative persona/voice to help find relevant content"
                     )
                 },
                 required=["topic"]
             )
         ),
-        types.FunctionDeclaration(
+        dict(
             name="generate_posts",
             description="Generate social media posts combining the persona with fetched content. Call this AFTER search_and_fetch.",
-            parameters=types.Schema(
-                type="OBJECT",
+            parameters=dict(
+                type="object",
                 properties={
-                    "persona": types.Schema(
-                        type="STRING",
+                    "persona": dict(
+                        type="string",
                         description="The creative persona/voice (e.g., 'Mario and Luigi characters with Italian-American flair')"
                     ),
-                    "x_post": types.Schema(
-                        type="STRING",
+                    "x_post": dict(
+                        type="string",
                         description="The X/Twitter post (under 250 chars, in the persona's voice)"
                     ),
-                    "linkedin_post": types.Schema(
-                        type="STRING",
+                    "linkedin_post": dict(
+                        type="string",
                         description="The LinkedIn post (1-3 paragraphs, in the persona's voice)"
                     ),
-                    "source_url": types.Schema(
-                        type="STRING",
+                    "source_url": dict(
+                        type="string",
                         description="The source URL for the content"
                     ),
-                    "visual_style": types.Schema(
-                        type="STRING",
+                    "visual_style": dict(
+                        type="string",
                         description="Visual style for image generation that captures the persona (e.g., 'Mario and Luigi cartoon characters in Nintendo pixel art style, video game aesthetic, standing at whiteboard')"
                     )
                 },
                 required=["persona", "x_post", "linkedin_post", "visual_style"]
             )
         ),
-        types.FunctionDeclaration(
+        dict(
             name="create_campaign_prompt",
             description="Generate a campaign configuration that can be used to set up automated posting. Call this when user wants to create a campaign.",
-            parameters=types.Schema(
-                type="OBJECT",
+            parameters=dict(
+                type="object",
                 properties={
-                    "campaign_prompt": types.Schema(
-                        type="STRING",
+                    "campaign_prompt": dict(
+                        type="string",
                         description="The full campaign prompt describing persona, topics, and style"
                     ),
-                    "refined_persona": types.Schema(
-                        type="STRING",
+                    "refined_persona": dict(
+                        type="string",
                         description="Detailed persona description for post generation"
                     ),
-                    "visual_style": types.Schema(
-                        type="STRING",
+                    "visual_style": dict(
+                        type="string",
                         description="Visual/image style description"
                     )
                 },
@@ -320,4 +293,3 @@ POST_BUILDER_FUNCTION_TOOL = types.Tool(
             )
         )
     ]
-)

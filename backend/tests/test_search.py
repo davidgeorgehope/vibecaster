@@ -6,6 +6,7 @@ Covers: search_trending_topics, select_single_topic with retry logic, URL valida
 """
 import pytest
 from unittest.mock import patch, Mock, MagicMock
+from tests.xai_mock import make_xai_mock
 import json
 
 from agents_lib.search import (
@@ -19,7 +20,7 @@ class TestSearchTrendingTopics:
 
     @patch('agents_lib.search.validate_and_select_url')
     @patch('agents_lib.search.resolve_redirect_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_returns_search_context_and_urls(self, mock_client, mock_resolve, mock_validate):
         """Should return search context, URLs list, and HTML content."""
         # Setup mock response with grounding metadata
@@ -46,7 +47,7 @@ class TestSearchTrendingTopics:
         assert len(urls) >= 1
         assert "https://example.com/article" in urls
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_handles_empty_response_text(self, mock_client):
         """Should provide fallback context when response text is None."""
         mock_response = Mock()
@@ -66,7 +67,7 @@ class TestSearchTrendingTopics:
     @patch('agents_lib.search.time.sleep')
     @patch('agents_lib.search.validate_and_select_url')
     @patch('agents_lib.search.resolve_redirect_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_retries_when_all_urls_invalid(self, mock_client, mock_resolve, mock_validate, mock_sleep):
         """Should retry search when all URLs fail validation."""
         mock_chunk = Mock()
@@ -99,7 +100,7 @@ class TestSearchTrendingTopics:
 
     @patch('agents_lib.search.is_network_error')
     @patch('agents_lib.search.time.sleep')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_handles_network_errors_with_retry(self, mock_client, mock_sleep, mock_is_network):
         """Should retry with backoff on network errors."""
         # is_network_error returns True for network exceptions
@@ -127,7 +128,7 @@ class TestSearchTrendingTopics:
         # Sleep called twice: once for 1s (2^0), once for 2s (2^1)
         assert mock_sleep.call_count >= 2
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_includes_recent_topics_in_prompt(self, mock_client):
         """Should include recent topics to avoid in the search prompt."""
         mock_response = Mock()
@@ -148,7 +149,7 @@ class TestSearchTrendingTopics:
         assert "kubernetes" in prompt
         assert "DIFFERENT aspects" in prompt
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_skips_validation_when_disabled(self, mock_client):
         """Should skip URL validation when validate_urls=False."""
         mock_chunk = Mock()
@@ -178,7 +179,7 @@ class TestSelectSingleTopic:
     """Tests for select_single_topic function."""
 
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_returns_focused_context_and_url(self, mock_client, mock_validate):
         """Should return focused context, selected URL, and HTML."""
         mock_response = Mock()
@@ -204,7 +205,7 @@ class TestSelectSingleTopic:
         assert html is not None
 
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_selects_url_by_index(self, mock_client, mock_validate):
         """Should select URL using the index from LLM response."""
         mock_response = Mock()
@@ -229,7 +230,7 @@ class TestSelectSingleTopic:
         assert url == "https://second.com"
 
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_rejects_hallucinated_urls(self, mock_client, mock_validate):
         """Should reject URLs not in the provided list (prevent hallucination)."""
         mock_response = Mock()
@@ -255,7 +256,7 @@ class TestSelectSingleTopic:
 
     @patch('agents_lib.search.time.sleep')
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_retries_on_broken_url(self, mock_client, mock_validate, mock_sleep):
         """Should retry with different topic when URL is broken (404)."""
         # First response has broken URL, second picks the remaining valid URL
@@ -293,7 +294,7 @@ class TestSelectSingleTopic:
 
     @patch('agents_lib.search.is_youtube_url')
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_prefers_non_youtube_urls(self, mock_client, mock_validate, mock_is_youtube):
         """Should prefer non-video sources over YouTube links."""
         mock_response = Mock()
@@ -328,7 +329,7 @@ class TestSelectSingleTopic:
         assert "article.com" in prompt
 
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_includes_recent_topics_to_avoid(self, mock_client, mock_validate):
         """Should include recent topics in prompt to avoid repetition."""
         mock_response = Mock()
@@ -353,7 +354,7 @@ class TestSelectSingleTopic:
         assert "kubernetes" in prompt
         assert "AVOID" in prompt
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_handles_empty_urls_list(self, mock_client):
         """Should return None for URL when no URLs available."""
         context, url, html = select_single_topic(
@@ -370,7 +371,7 @@ class TestSelectSingleTopic:
 class TestEdgeCases:
     """Tests for edge cases in search functions."""
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_search_with_empty_prompt(self, mock_client):
         """Should handle empty user prompt gracefully."""
         mock_response = Mock()
@@ -386,7 +387,7 @@ class TestEdgeCases:
 
         assert context is not None
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_select_topic_with_json_parse_error(self, mock_client):
         """Should handle malformed JSON from LLM."""
         mock_response = Mock()
@@ -404,7 +405,7 @@ class TestEdgeCases:
         assert url is None
 
     @patch('agents_lib.search.validate_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_url_with_redirect(self, mock_client, mock_validate):
         """Should use final resolved URL after redirect."""
         mock_response = Mock()
@@ -429,7 +430,7 @@ class TestEdgeCases:
 
     @patch('agents_lib.search.validate_and_select_url')
     @patch('agents_lib.search.resolve_redirect_url')
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_extracts_urls_from_grounding_chunks(self, mock_client, mock_resolve, mock_validate):
         """Should correctly extract URLs from Google Search grounding metadata."""
         # Setup complex grounding structure
@@ -457,7 +458,7 @@ class TestEdgeCases:
         assert len(urls) >= 2
         assert mock_resolve.call_count == 2
 
-    @patch('agents_lib.search.client')
+    @patch('agents_lib.search.xai', new_callable=make_xai_mock)
     def test_all_retries_exhausted(self, mock_client):
         """Should return fallback when all retries fail."""
         mock_client.models.generate_content.side_effect = Exception("API error")

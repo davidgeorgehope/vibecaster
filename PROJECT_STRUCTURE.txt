@@ -1,7 +1,7 @@
 vibecaster/
 ├── backend/
 │   ├── .env.example           # Environment variables template
-│   ├── agents.py              # Gemini/Imagen AI logic (search, generate, post)
+│   ├── agents.py              # Grok AI logic (search, generate, post)
 │   ├── auth.py                # OAuth handlers for X and LinkedIn
 │   ├── database.py            # SQLite schema and operations
 │   ├── main.py                # FastAPI app + APScheduler
@@ -43,5 +43,5 @@ Frontend (Next.js 15 + TailwindCSS)
   • next.config.ts   → Proxies /api → localhost:8000
 
 Configuration
-  • backend/.env     → (You create) API keys for Gemini, X, LinkedIn
+  • backend/.env     → (You create) API keys for xAI, X, LinkedIn
   • .env.example     → Template for environment variables

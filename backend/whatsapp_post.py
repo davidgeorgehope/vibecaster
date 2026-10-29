@@ -64,7 +64,7 @@ def generate_posts(topic: str, user_id: int = 1):
         
         print(json.dumps({"step": "intent_parsing", "status": "done", "persona": persona, "query": search_query}), flush=True)
         
-        # Step 2: Search with grounding
+        # Step 2: Search with Grok web search
         print(json.dumps({"step": "searching", "status": "running", "query": search_query}), flush=True)
         search_result = agent_search(search_query, persona)
         

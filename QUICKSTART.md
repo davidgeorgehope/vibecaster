@@ -23,7 +23,7 @@ cd ..
 ```
 
 You need:
-- **Google Gemini API Key**: Get from [Google AI Studio](https://makersuite.google.com/app/apikey)
+- **xAI API Key**: Get from [xAI Console](https://console.x.ai)
 - **X/Twitter OAuth**: From [Twitter Developer Portal](https://developer.twitter.com/en/portal/dashboard)
 - **LinkedIn OAuth**: From [LinkedIn Developers](https://www.linkedin.com/developers/apps)
 

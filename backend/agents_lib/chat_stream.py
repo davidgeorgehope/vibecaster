@@ -6,9 +6,6 @@ import threading
 import time
 from typing import Optional
 
-from google.genai import types
-
-from .config import client, LLM_MODEL
 from .utils import is_network_error, emit_agent_event, strip_markdown_formatting, sanitize_for_linkedin
 from .intent_parser import agent_intent_parser
 from .agent_tools import agent_search, agent_post_generator, agent_brainstorm, agent_generate_campaign_prompt
@@ -59,106 +56,6 @@ class _KeepaliveTask:
 
 
 # ===== POST BUILDER MULTI-AGENT SYSTEM =====
-
-# Orchestrator system prompt - decides which agents to call
-ORCHESTRATOR_SYSTEM_PROMPT = """You are a conversation orchestrator for a social media post builder.
-
-Your job is to analyze the user's message and call the appropriate agents in the right order.
-
-AVAILABLE AGENTS (call as tools):
-1. call_intent_parser - ALWAYS call this first to understand the user's request
-2. call_search_agent - Search for content about a topic (use OPTIMIZED query from intent parser)
-3. call_post_generator - Generate X and LinkedIn posts using persona + content
-4. call_brainstorm_agent - Explore topic ideas without generating posts
-5. respond_to_user - Send a direct response (for greetings, clarifications)
-
-WORKFLOW FOR POST GENERATION:
-When user says something like "mario and luigi explain kubernetes":
-1. Call call_intent_parser with the message
-   - This extracts: persona="Mario and Luigi", topic="kubernetes", search_query="kubernetes best practices 2024"
-2. Call call_search_agent with the OPTIMIZED search_query (NOT the raw message!)
-3. Call call_post_generator with persona, topic, content, and visual_style
-
-CRITICAL RULES:
-- ALWAYS call call_intent_parser FIRST to understand the request
-- When searching, use the search_query from intent parser, NOT the raw user message
-- "mario and luigi explain observability" should search for "observability" not "mario luigi observability"
-- The persona is HOW to present content, the topic is WHAT to search for
-- If intent is "greeting", just call respond_to_user
-- If intent is "brainstorm", call brainstorm_agent instead of search+generate
-
-EXAMPLES:
-- "mario and luigi explain kubernetes" → intent_parser → search("kubernetes best practices") → post_generator(persona="Mario/Luigi")
-- "what's trending in AI?" → intent_parser → brainstorm_agent("AI trends")
-- "hello" → intent_parser → respond_to_user("Hello! I can help...")
-"""
-
-# Orchestrator tools - the agents it can call
-ORCHESTRATOR_TOOLS = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="call_intent_parser",
-            description="ALWAYS call this FIRST. Analyzes user message to extract intent, persona, topic, and optimized search query.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "message": types.Schema(type="STRING", description="The user's message to analyze")
-                },
-                required=["message"]
-            )
-        ),
-        types.FunctionDeclaration(
-            name="call_search_agent",
-            description="Search for content using an OPTIMIZED query (from intent parser). Do NOT pass the raw user message.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "query": types.Schema(type="STRING", description="Optimized search query from intent parser (e.g., 'kubernetes best practices 2024')"),
-                    "persona_context": types.Schema(type="STRING", description="Brief persona description for context")
-                },
-                required=["query"]
-            )
-        ),
-        types.FunctionDeclaration(
-            name="call_post_generator",
-            description="Generate social media posts using persona + searched content",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "persona": types.Schema(type="STRING", description="Creative persona/voice (e.g., 'Mario and Luigi characters')"),
-                    "topic": types.Schema(type="STRING", description="The topic being discussed"),
-                    "content": types.Schema(type="STRING", description="Real content from search to use in posts"),
-                    "visual_style": types.Schema(type="STRING", description="How to visualize the persona for images"),
-                    "source_url": types.Schema(type="STRING", description="Source URL for attribution")
-                },
-                required=["persona", "topic", "content", "visual_style"]
-            )
-        ),
-        types.FunctionDeclaration(
-            name="call_brainstorm_agent",
-            description="Explore and suggest topic ideas without generating posts",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "topic_area": types.Schema(type="STRING", description="Area to brainstorm about")
-                },
-                required=["topic_area"]
-            )
-        ),
-        types.FunctionDeclaration(
-            name="respond_to_user",
-            description="Send a direct response to user (for greetings, clarifications, errors)",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "message": types.Schema(type="STRING", description="Message to send to user")
-                },
-                required=["message"]
-            )
-        )
-    ]
-)
-
 
 def chat_post_builder_stream(message: str, history: list[dict], user_id: int = None):
     """
@@ -450,7 +347,7 @@ def generate_video_for_post(
     """
     Generate an 8-second video for a social media post using first-frame approach.
 
-    Uses Veo 3.1 prompt refinement for better quality and realism.
+    Uses video prompt refinement for better quality and realism.
 
     Args:
         post_text: The post text to visualize
@@ -471,15 +368,15 @@ def generate_video_for_post(
             logger.error("Failed to generate first frame image")
             return None
 
-        # Step 2: Create and refine motion prompt using Veo 3.1 best practices
+        # Step 2: Create and refine motion prompt using video-model best practices
         style_desc = visual_style or "professional, cinematic"
         base_prompt = f"Subtle cinematic motion, smooth camera movement. Style: {style_desc}. Content: {post_text[:300]}"
 
         # Build full context for character/setting consistency
         full_context = f"Visual Style: {style_desc}\n\nPost Content:\n{post_text}"
 
-        # Refine prompt for Veo 3.1 with realism techniques
-        logger.info("Refining video prompt for Veo 3.1...")
+        # Refine prompt for the video model with realism techniques
+        logger.info("Refining video prompt...")
         refined_prompt = refine_video_prompt(
             video_prompt=base_prompt,
             scene_number=1,

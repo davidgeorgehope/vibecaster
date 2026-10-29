@@ -1,9 +1,8 @@
 """Post generation for X/Twitter and LinkedIn platforms."""
 import time
 from typing import Tuple, Optional
-from google.genai import types
 
-from .config import client, LLM_MODEL
+from xai_client import chat
 from .utils import strip_markdown_formatting, sanitize_for_linkedin
 from .linkedin_mentions import apply_linkedin_mentions
 from logger_config import agent_logger as logger
@@ -129,16 +128,7 @@ X/TWITTER REQUIREMENTS:
 Write ONLY the final post text, nothing else.
 """
 
-    response = client.models.generate_content(
-        model=LLM_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.8,
-            thinking_config=types.ThinkingConfig(
-                thinking_level="HIGH"
-            )
-        )
-    )
+    response = chat(prompt, temperature=0.8)
 
     return response.text.strip()
 
@@ -284,15 +274,6 @@ LINKEDIN REQUIREMENTS:
 Write ONLY the final post text in plain text format, nothing else.
 """
 
-    response = client.models.generate_content(
-        model=LLM_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.7,
-            thinking_config=types.ThinkingConfig(
-                thinking_level="HIGH"
-            )
-        )
-    )
+    response = chat(prompt, temperature=0.7)
 
     return response.text.strip()

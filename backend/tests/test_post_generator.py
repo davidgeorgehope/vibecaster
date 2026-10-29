@@ -19,12 +19,12 @@ from agents_lib.post_generator import (
 class TestGenerateXPostText:
     """Tests for _generate_x_post_text helper function."""
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_generates_post_text(self, mock_client):
         """Should return generated post text from LLM."""
         mock_response = Mock()
         mock_response.text = "  Breaking news about K8s! Check out the latest updates. #kubernetes  "
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = _generate_x_post_text(
             search_context="Kubernetes 1.30 released with new features",
@@ -37,12 +37,12 @@ class TestGenerateXPostText:
         assert "Breaking news about K8s" in result
         assert result == result.strip()  # Should be stripped
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_uses_shorter_length_when_url_provided(self, mock_client):
         """Should use 230 char limit when URL will be added."""
         mock_response = Mock()
         mock_response.text = "Short post"
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         _generate_x_post_text(
             search_context="context",
@@ -52,16 +52,16 @@ class TestGenerateXPostText:
             recent_topics=[]
         )
 
-        call_args = mock_client.models.generate_content.call_args
-        prompt = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        prompt = call_args.args[0]
         assert "230" in prompt
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_uses_full_length_when_no_url(self, mock_client):
         """Should use 280 char limit when no URL."""
         mock_response = Mock()
         mock_response.text = "Short post"
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         _generate_x_post_text(
             search_context="context",
@@ -71,16 +71,16 @@ class TestGenerateXPostText:
             recent_topics=[]
         )
 
-        call_args = mock_client.models.generate_content.call_args
-        prompt = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        prompt = call_args.args[0]
         assert "280" in prompt
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_includes_recent_topics_in_prompt(self, mock_client):
         """Should include recent topics to avoid in prompt."""
         mock_response = Mock()
         mock_response.text = "New post"
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         _generate_x_post_text(
             search_context="context",
@@ -90,8 +90,8 @@ class TestGenerateXPostText:
             recent_topics=["kubernetes", "docker", "observability"]
         )
 
-        call_args = mock_client.models.generate_content.call_args
-        prompt = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        prompt = call_args.args[0]
         assert "kubernetes" in prompt
         assert "docker" in prompt
         assert "FRESH angle" in prompt
@@ -192,12 +192,12 @@ class TestGenerateXPost:
 class TestGenerateLinkedInPostText:
     """Tests for _generate_linkedin_post_text helper function."""
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_generates_professional_post(self, mock_client):
         """Should return generated LinkedIn post text."""
         mock_response = Mock()
         mock_response.text = "  Professional insight about observability...  "
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = _generate_linkedin_post_text(
             search_context="OpenTelemetry best practices",
@@ -209,18 +209,17 @@ class TestGenerateLinkedInPostText:
         assert "Professional insight" in result
         assert result == result.strip()
 
-    @patch('agents_lib.post_generator.client')
+    @patch('agents_lib.post_generator.chat')
     def test_uses_lower_temperature(self, mock_client):
         """Should use temperature 0.7 for professional tone."""
         mock_response = Mock()
         mock_response.text = "Post"
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         _generate_linkedin_post_text("context", "persona", "prompt", [])
 
-        call_args = mock_client.models.generate_content.call_args
-        config = call_args.kwargs['config']
-        assert config.temperature == 0.7
+        call_args = mock_client.call_args
+        assert call_args.kwargs['temperature'] == 0.7
 
 
 class TestGenerateLinkedInPost:

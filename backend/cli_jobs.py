@@ -79,7 +79,7 @@ def _get_job(job_id: str, user_id: int) -> Optional[dict]:
 # ===== Background workers =====
 
 def _worker_create_post(job_id: str, user_id: int, prompt: str, platforms: list, media_type: str):
-    """Generate post text + image from a prompt using Gemini directly, then optionally post."""
+    """Generate post text + image from a prompt using Grok directly, then optionally post."""
     try:
         _update_job(job_id, "generating_text")
 
@@ -297,39 +297,19 @@ def _worker_direct_post_imagegen(job_id: str, user_id: int, text: str, platforms
 def _worker_transcribe(job_id: str, user_id: int, file_bytes: bytes, filename: str, mime_type: str):
     """Transcribe audio/video file and generate summary + blog post."""
     try:
-        from transcription import upload_to_gemini, cleanup_gemini_file, client as gemini_client, LLM_MODEL
-
-        _update_job(job_id, "uploading")
-        media_part, uploaded_file = upload_to_gemini(file_bytes, filename, mime_type)
+        from xai_client import chat, understand_media
 
         _update_job(job_id, "transcribing")
-        transcript_response = gemini_client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                "Generate a complete, accurate, verbatim transcript of this audio/video. "
-                "Include all spoken words exactly as said. Do not summarize or paraphrase. "
-                "If there are multiple speakers, indicate speaker changes where possible.",
-                media_part
-            ]
-        )
-        transcript = transcript_response.text.strip()
+        transcript = understand_media(file_bytes, filename, mime_type).strip()
 
         _update_job(job_id, "summarizing", result={"transcript": transcript})
-        summary_response = gemini_client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                f"Based on this transcript, write a concise summary (3-5 paragraphs) that captures "
+        summary_response = chat(f"Based on this transcript, write a concise summary (3-5 paragraphs) that captures "
                 f"the key points, main topics discussed, and any important conclusions or takeaways.\n\n"
-                f"TRANSCRIPT:\n{transcript}"
-            ]
-        )
+                f"TRANSCRIPT:\n{transcript}")
         summary = summary_response.text.strip()
 
         _update_job(job_id, "generating_blog", result={"transcript": transcript, "summary": summary})
-        blog_response = gemini_client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                f"Write a standalone blog post about the topics and ideas discussed below. "
+        blog_response = chat(f"Write a standalone blog post about the topics and ideas discussed below. "
                 f"The blog should read as an original article - do NOT reference the video, "
                 f"transcript, speaker, or recording. Write as if these are your own insights "
                 f"and expertise on the subject.\n\n"
@@ -345,9 +325,7 @@ def _worker_transcribe(job_id: str, user_id: int, file_bytes: bytes, filename: s
                 f"- Be clear and genuine rather than promotional\n"
                 f"- Let the content speak for itself without overselling\n\n"
                 f"Use markdown formatting.\n\n"
-                f"SOURCE MATERIAL:\n{transcript}"
-            ]
-        )
+                f"SOURCE MATERIAL:\n{transcript}")
         blog_post = blog_response.text.strip()
 
         _update_job(job_id, "complete", result={
@@ -355,8 +333,6 @@ def _worker_transcribe(job_id: str, user_id: int, file_bytes: bytes, filename: s
             "summary": summary,
             "blog_post": blog_post,
         })
-
-        cleanup_gemini_file(uploaded_file)
 
     except Exception as e:
         logger.error(f"CLI transcribe job {job_id} failed: {e}\n{traceback.format_exc()}")
@@ -430,23 +406,10 @@ def _worker_video_gen(job_id: str, user_id: int, topic: str, style: str, target_
 def _worker_video_post(job_id: str, user_id: int, file_bytes: bytes, filename: str, mime_type: str, platforms: list):
     """Transcribe video, generate platform posts, optionally post."""
     try:
-        from transcription import upload_to_gemini, cleanup_gemini_file, client as gemini_client, LLM_MODEL
-
-        _update_job(job_id, "uploading")
-        media_part, uploaded_file = upload_to_gemini(file_bytes, filename, mime_type)
+        from xai_client import understand_media
 
         _update_job(job_id, "transcribing")
-        transcript_response = gemini_client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[
-                "Generate a complete, accurate, verbatim transcript of this video. "
-                "Include all spoken words exactly as said.",
-                media_part
-            ]
-        )
-        transcript = transcript_response.text.strip()
-
-        cleanup_gemini_file(uploaded_file)
+        transcript = understand_media(file_bytes, filename, mime_type).strip()
 
         _update_job(job_id, "generating_posts", result={"transcript": transcript})
 

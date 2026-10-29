@@ -10,11 +10,13 @@ import os
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from tests.xai_mock import make_xai_mock
+
 
 class TestGenerateCharacterReference:
     """Tests for generate_character_reference function."""
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_generates_image_from_description(self, mock_client):
         """Test that character reference is generated from description."""
         from author_bio import generate_character_reference
@@ -40,7 +42,7 @@ class TestGenerateCharacterReference:
         assert result == b'fake_image_bytes'
         mock_client.models.generate_content.assert_called_once()
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_handles_different_styles(self, mock_client):
         """Test that different styles modify the prompt."""
         from author_bio import generate_character_reference
@@ -66,7 +68,7 @@ class TestGenerateCharacterReference:
         prompt = call_args.kwargs['contents']
         assert 'cartoon' in prompt.lower()
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_returns_none_on_error(self, mock_client):
         """Test that None is returned when generation fails."""
         from author_bio import generate_character_reference
@@ -84,7 +86,7 @@ class TestGenerateCharacterReference:
 class TestGenerateImageWithReference:
     """Tests for generate_image_with_reference function."""
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_includes_reference_in_contents(self, mock_client):
         """Test that reference image is included in generation request."""
         from author_bio import generate_image_with_reference
@@ -123,7 +125,7 @@ class TestGenerateImageWithReference:
 class TestSearchAuthorImages:
     """Tests for search_author_images function."""
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_returns_search_results(self, mock_client):
         """Test that search returns structured results."""
         from author_bio import search_author_images
@@ -139,7 +141,7 @@ class TestSearchAuthorImages:
         assert len(results) == 1
         assert results[0]['url'] == "http://example.com/img.jpg"
 
-    @patch('author_bio.client')
+    @patch('author_bio.xai', new_callable=make_xai_mock)
     def test_handles_empty_results(self, mock_client):
         """Test that empty search returns empty list."""
         from author_bio import search_author_images

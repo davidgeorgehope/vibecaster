@@ -2,12 +2,12 @@
 
 > AI-powered local-first social media automation platform
 
-Vibecaster is a monolithic localhost application that uses Google Gemini AI and Imagen to automatically generate and post engaging content to your social media accounts.
+Vibecaster is a monolithic localhost application that uses xAI Grok models to automatically generate and post engaging content to your social media accounts.
 
 ## Features
 
-- **AI-Powered Content Generation**: Uses Google Gemini 3 for intelligent content creation
-- **Image Generation**: Automatic image creation with Imagen 3.0
+- **AI-Powered Content Generation**: Uses Grok 4.7 (with live web search) for intelligent content creation
+- **Image Generation**: Automatic image creation with Grok Imagine Image 2.0
 - **Multi-Platform**: Supports X (Twitter) and LinkedIn
 - **Smart Scheduling**: APScheduler for automated posting
 - **Local-First**: All data stored locally in SQLite
@@ -19,7 +19,7 @@ Vibecaster is a monolithic localhost application that uses Google Gemini AI and 
 - **Backend**: Python 3.12+ with FastAPI
 - **Frontend**: Next.js 15 with App Router
 - **Database**: SQLite (local)
-- **AI**: Google Gen AI SDK (Gemini + Imagen)
+- **AI**: xAI API (grok-4.7, grok-imagine-image-2.0, grok-imagine-video-1.5, speech-to-text)
 - **Scheduler**: APScheduler
 
 ## Prerequisites
@@ -27,7 +27,7 @@ Vibecaster is a monolithic localhost application that uses Google Gemini AI and 
 - Python 3.12 or higher
 - Node.js 22 or higher
 - npm or yarn
-- Google AI API Key (Gemini/Imagen access)
+- xAI API Key
 - X (Twitter) Developer Account with OAuth 2.0 credentials
 - LinkedIn Developer Account with OAuth credentials
 
@@ -66,8 +66,8 @@ cp .env.example .env
 Edit `backend/.env` and add your API credentials:
 
 ```env
-# Google AI (Gemini/Imagen) API Key
-GEMINI_API_KEY=your_gemini_api_key_here
+# xAI API Key
+XAI_API_KEY=your_xai_api_key_here
 
 # Twitter/X OAuth Credentials
 X_API_KEY=your_x_api_key
@@ -87,10 +87,10 @@ FRONTEND_URL=http://localhost:3000
 
 #### Getting API Credentials
 
-**Google AI (Gemini/Imagen)**
-1. Visit [Google AI Studio](https://makersuite.google.com/app/apikey)
+**xAI**
+1. Visit the [xAI Console](https://console.x.ai)
 2. Create a new API key
-3. Copy the key to `GEMINI_API_KEY`
+3. Copy the key to `XAI_API_KEY`
 
 **X (Twitter)**
 1. Go to [Twitter Developer Portal](https://developer.twitter.com/en/portal/dashboard)
@@ -178,7 +178,7 @@ vibecaster/
 ├── backend/
 │   ├── main.py              # FastAPI app + Scheduler
 │   ├── database.py          # SQLite operations
-│   ├── agents.py            # Gemini/Imagen AI logic
+│   ├── agents.py            # Grok AI logic
 │   ├── auth.py              # OAuth handlers
 │   ├── .env                 # Environment variables (create from .env.example)
 │   ├── .env.example         # Environment template
@@ -321,4 +321,4 @@ For issues and questions:
 
 ---
 
-Built with ❤️ using Google Gemini AI and Imagen
+Built with ❤️ using xAI Grok

@@ -1,7 +1,7 @@
 """
 End-to-end tests for video generation pipeline.
 
-These tests use mocks for the Veo API but test actual file handling,
+These tests use mocks for the xAI APIs but test actual file handling,
 database operations, and the full generation flow.
 """
 
@@ -16,6 +16,8 @@ from PIL import Image
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from tests.xai_mock import make_xai_mock
 
 
 def create_test_image_bytes() -> bytes:
@@ -62,8 +64,8 @@ def mock_database():
 
 @pytest.fixture
 def mock_veo_client():
-    """Mock the Veo/Gemini client for video generation."""
-    with patch('video_generation.client') as mock_client:
+    """Mock xai_client (grok-4.7 / grok-imagine-image-2.0 / grok-imagine-video-1.5)."""
+    with patch('video_generation.xai', new_callable=make_xai_mock) as mock_client:
         yield mock_client
 
 
@@ -71,7 +73,7 @@ class TestVideoGenerationFlow:
     """End-to-end tests for the full video generation pipeline."""
 
     def test_full_video_generation_flow(self, mock_database, mock_veo_client):
-        """Test complete video generation with mocked Veo API."""
+        """Test complete video generation with mocked xAI APIs."""
         from video_generation import generate_video_stream
 
         # Mock script planning response
@@ -103,37 +105,16 @@ class TestVideoGenerationFlow:
         image_response = Mock()
         image_response.candidates = [Mock(content=Mock(parts=[mock_image_part]))]
 
-        # Setup mock for video generation
-        mock_video = Mock()
-        mock_video.video = Mock()
-
-        # Mock video.video.save() to write actual bytes to the temp file
-        def save_video(path):
-            with open(path, 'wb') as f:
-                f.write(create_test_video_bytes(50000))
-
-        mock_video.video.save = save_video
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
         mock_veo_client.models.generate_content.side_effect = [script_response, image_response]
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
+        mock_veo_client.generate_video.return_value = iter([('progress', 10), ('complete', create_test_video_bytes(50000))])
 
-        # Mock types.Image.from_file to avoid actual file operations
-        with patch('video_generation.types.Image.from_file') as mock_from_file:
-            mock_from_file.return_value = Mock()
-
-            # Run the stream
-            events = list(generate_video_stream(
-                user_id=1,
-                topic="Test Topic",
-                style="educational",
-                target_duration=8
-            ))
+        # Run the stream
+        events = list(generate_video_stream(
+            user_id=1,
+            topic="Test Topic",
+            style="educational",
+            target_duration=8
+        ))
 
         # Parse events
         event_types = [json.loads(e.strip())['type'] for e in events]
@@ -161,130 +142,62 @@ class TestVideoGenerationErrors:
     """Tests for error handling in video generation."""
 
     def test_timeout_logs_detailed_error(self, mock_database, mock_veo_client):
-        """Test that timeout provides detailed error message."""
+        """Test that a video timeout is logged with details and returns None."""
         from video_generation import generate_video_from_image
+        from xai_client import XaiError
 
-        # Mock operation that never completes
-        mock_operation = Mock()
-        mock_operation.done = False
+        def timeout(*args, **kwargs):
+            yield ('progress', 10)
+            raise XaiError("xAI video request timed out after 900s")
+        mock_veo_client.generate_video.side_effect = timeout
 
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.operations.get = Mock(return_value=mock_operation)
-
-        with patch('video_generation.time.sleep'):  # Skip actual sleep
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                with patch('video_generation.logger') as mock_logger:
-                    result = generate_video_from_image(
-                        first_frame_bytes=create_test_image_bytes(),
-                        video_prompt="Test prompt"
-                    )
+        with patch('video_generation.logger') as mock_logger:
+            result = generate_video_from_image(
+                first_frame_bytes=create_test_image_bytes(),
+                video_prompt="Test prompt"
+            )
 
         assert result is None
-        # Verify timeout was logged with details
         mock_logger.error.assert_called()
         error_call = str(mock_logger.error.call_args_list[-1])
         assert 'timed out' in error_call.lower()
-
     def test_small_video_bytes_returns_none(self, mock_database, mock_veo_client):
         """Test that video smaller than minimum size returns None."""
         from video_generation import generate_video_from_image
 
-        # Mock video that saves only 100 bytes (below MIN_VIDEO_SIZE)
-        mock_video = Mock()
-        mock_video.video = Mock()
+        mock_veo_client.generate_video.return_value = iter([('complete', b'\\x00' * 100)])
 
-        def save_tiny_video(path):
-            with open(path, 'wb') as f:
-                f.write(b'\x00' * 100)  # Only 100 bytes
-
-        mock_video.video.save = save_tiny_video
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         assert result is None
-
-    def test_empty_generated_videos_list_returns_none(self, mock_database, mock_veo_client):
-        """Test that empty generated_videos list returns None."""
+    def test_no_video_returned_returns_none(self, mock_database, mock_veo_client):
+        """Test that a generation that never completes returns None."""
         from video_generation import generate_video_from_image
 
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = []  # Empty list
+        mock_veo_client.generate_video.return_value = iter([('progress', 10)])
 
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         assert result is None
-
-    def test_video_save_failure_returns_none(self, mock_database, mock_veo_client):
-        """Test that failure in video.video.save() returns None."""
+    def test_video_download_failure_returns_none(self, mock_database, mock_veo_client):
+        """Test that a failure fetching the finished video returns None."""
         from video_generation import generate_video_from_image
 
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = Mock(side_effect=Exception("Save failed"))
+        def fail(*args, **kwargs):
+            raise RuntimeError("Download failed")
+            yield  # pragma: no cover
+        mock_veo_client.generate_video.side_effect = fail
 
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
-
-        assert result is None
-
-    def test_missing_video_attribute_returns_none(self, mock_database, mock_veo_client):
-        """Test that video object without .video attribute returns None."""
-        from video_generation import generate_video_from_image
-
-        mock_video = Mock(spec=[])  # Empty spec - no attributes
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         assert result is None
 
@@ -464,90 +377,40 @@ class TestValidVideoBytes:
         """Test that valid video bytes are returned successfully."""
         from video_generation import generate_video_from_image
 
-        video_bytes = create_test_video_bytes(50000)
+        mock_veo_client.generate_video.return_value = iter([('complete', create_test_video_bytes(50000))])
 
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = lambda path: open(path, 'wb').write(video_bytes)
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         assert result is not None
         assert len(result) == 50000
-
     def test_minimum_size_boundary(self, mock_database, mock_veo_client):
         """Test video at exactly minimum size boundary."""
         from video_generation import generate_video_from_image
 
-        # Exactly 10000 bytes (MIN_VIDEO_SIZE)
-        video_bytes = create_test_video_bytes(10000)
+        mock_veo_client.generate_video.return_value = iter([('complete', create_test_video_bytes(10000))])
 
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = lambda path: open(path, 'wb').write(video_bytes)
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         # 10000 bytes is exactly at minimum, should pass
         assert result is not None
-
     def test_below_minimum_size_fails(self, mock_database, mock_veo_client):
         """Test video below minimum size fails."""
         from video_generation import generate_video_from_image
 
-        # 9999 bytes (below MIN_VIDEO_SIZE of 10000)
-        video_bytes = create_test_video_bytes(9999)
+        mock_veo_client.generate_video.return_value = iter([('complete', create_test_video_bytes(9999))])
 
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = lambda path: open(path, 'wb').write(video_bytes)
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_veo_client.models.generate_videos.return_value = mock_operation
-        mock_veo_client.files.download = Mock()
-
-        with patch('video_generation.time.sleep'):
-            with patch('video_generation.types.Image.from_file') as mock_from_file:
-                mock_from_file.return_value = Mock()
-                result = generate_video_from_image(
-                    first_frame_bytes=create_test_image_bytes(),
-                    video_prompt="Test prompt"
-                )
+        result = generate_video_from_image(
+            first_frame_bytes=create_test_image_bytes(),
+            video_prompt="Test prompt"
+        )
 
         assert result is None
-
 
 class TestJobStatusPolling:
     """Tests for job status polling (for frontend resume functionality)."""

@@ -4,9 +4,8 @@ import time
 from typing import Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-from google.genai import types
 
-from .config import client, LLM_MODEL
+import xai_client as xai
 from .utils import is_network_error
 from .url_utils import (
     resolve_redirect_url,
@@ -35,7 +34,7 @@ def search_trending_topics(user_prompt: str, refined_persona: str, recent_topics
     CRITICAL: Finds content that can be presented in the user's specified format,
     not just "trending news".
 
-    Includes URL validation - will retry the Google search if all URLs return 404.
+    Includes URL validation - will retry the web search if all URLs return 404.
 
     Args:
         user_prompt: The user's campaign prompt with creative direction
@@ -94,21 +93,11 @@ Provide:
 3. Source URLs (ONLY from allowed sources if restrictions were specified)
 """
 
-            # Use Google Search grounding with Gemini 3
+            # Use Grok live web search
             _search_temp = 0.7 + (search_attempt * 0.1)
             try:
                 response = _llm_call_with_timeout(
-                    lambda: client.models.generate_content(
-                        model=LLM_MODEL,
-                        contents=search_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=_search_temp,  # Slightly increase temperature on retries for variety
-                            tools=[types.Tool(google_search=types.GoogleSearch())],
-                            thinking_config=types.ThinkingConfig(
-                                thinking_level="HIGH"
-                            )
-                        )
-                    )
+                    lambda: xai.TextResponse(*xai.web_search(search_prompt, temperature=_search_temp))
                 )
             except FuturesTimeoutError:
                 logger.error(f"LLM call timed out after {LLM_CALL_TIMEOUT}s in search_trending_topics (attempt {search_attempt + 1})")
@@ -116,33 +105,9 @@ Provide:
                     continue
                 return f"General discussion about {user_prompt}", [], None
 
-            # Debug: Log the full response structure when text is None
-            if not response.text:
-                logger.warning(f"Response text is None/empty. Full response: {response}")
-                if hasattr(response, 'candidates') and response.candidates:
-                    for i, candidate in enumerate(response.candidates):
-                        logger.warning(f"Candidate {i}: finish_reason={getattr(candidate, 'finish_reason', 'N/A')}")
-                        if hasattr(candidate, 'safety_ratings'):
-                            logger.warning(f"Safety ratings: {candidate.safety_ratings}")
-                        if hasattr(candidate, 'content'):
-                            logger.warning(f"Content: {candidate.content}")
-                else:
-                    logger.warning("No candidates in response")
-
-            # Extract URLs from grounding metadata and resolve redirects
-            urls = []
-            if hasattr(response, 'candidates') and len(response.candidates) > 0:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'grounding_metadata'):
-                    metadata = candidate.grounding_metadata
-                    if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
-                        for chunk in metadata.grounding_chunks:
-                            if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
-                                redirect_url = chunk.web.uri
-                                # Resolve redirect to get actual URL
-                                actual_url = resolve_redirect_url(redirect_url)
-                                urls.append(actual_url)
-                        logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
+            # Extract cited URLs from the web search and resolve redirects
+            urls = [resolve_redirect_url(src["url"]) for src in response.sources]
+            logger.info(f"Extracted and resolved {len(urls)} URLs from search results")
 
             # Get response text, handling None case
             response_text = response.text if response.text else f"General discussion about {user_prompt}"
@@ -299,17 +264,7 @@ RESPOND IN THIS EXACT JSON FORMAT:
             _select_temp = 0.5 + (attempt * 0.1)
             try:
                 response = _llm_call_with_timeout(
-                    lambda: client.models.generate_content(
-                        model=LLM_MODEL,
-                        contents=selection_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=_select_temp,  # Slightly increase temp on retries
-                            response_mime_type="application/json",
-                            thinking_config=types.ThinkingConfig(
-                                thinking_level="HIGH"
-                            )
-                        )
-                    )
+                    lambda: xai.chat(selection_prompt, temperature=_select_temp, json_mode=True)
                 )
             except FuturesTimeoutError:
                 logger.error(f"LLM call timed out after {LLM_CALL_TIMEOUT}s in select_single_topic (attempt {attempt + 1})")

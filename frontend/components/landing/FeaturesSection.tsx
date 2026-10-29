@@ -14,7 +14,7 @@ const features = [
   {
     icon: ImagePlus,
     title: 'AI Image Gen',
-    description: 'Use --imagegen to generate images from prompts with Google Imagen. Attached automatically to posts.',
+    description: 'Use --imagegen to generate images from prompts with Grok Imagine. Attached automatically to posts.',
   },
   {
     icon: Megaphone,

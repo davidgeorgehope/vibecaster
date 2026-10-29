@@ -148,7 +148,7 @@ X_REDIRECT_URI=http://your-domain.com/auth/twitter/callback
 LINKEDIN_REDIRECT_URI=http://your-domain.com/auth/linkedin/callback
 
 # Add your API keys
-GEMINI_API_KEY=your_actual_key
+XAI_API_KEY=your_actual_key
 X_CLIENT_ID=your_actual_client_id
 X_CLIENT_SECRET=your_actual_secret
 LINKEDIN_CLIENT_ID=your_actual_client_id

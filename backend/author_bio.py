@@ -2,28 +2,16 @@
 Author Bio Module - Character/author reference image management.
 
 Provides functionality for:
-- Generating character reference images from descriptions (Nano Banana Pro)
-- Searching for author images online (Google Search grounding)
+- Generating character reference images from descriptions (grok-imagine-image-2.0)
+- Searching for author images online (Grok web search)
 - Managing author bio data
 """
 
-import os
 import base64
 from typing import Optional, Dict, Any, List
 from io import BytesIO
-from google import genai
-from google.genai import types
-from dotenv import load_dotenv
 from logger_config import agent_logger as logger
-
-load_dotenv()
-
-# Initialize Google GenAI client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Models
-IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
-LLM_MODEL = "gemini-3.1-pro-preview"
+import xai_client as xai
 
 
 def generate_character_reference(
@@ -34,7 +22,7 @@ def generate_character_reference(
     """
     Generate a character reference image from a text description.
 
-    Uses Nano Banana Pro (gemini-3.1-flash-image) to create a consistent
+    Uses grok-imagine-image-2.0 to create a consistent
     character portrait that can be used as reference for other generations.
 
     Args:
@@ -43,7 +31,7 @@ def generate_character_reference(
         additional_context: Extra context about the character's role/purpose
 
     Returns:
-        Image bytes (PNG) or None if generation fails
+        Image bytes or None if generation fails
     """
     style_prompts = {
         "real_person": "photorealistic portrait photograph, professional headshot, natural lighting, high quality",
@@ -75,39 +63,9 @@ Generate a single, high-quality portrait image."""
     try:
         logger.info(f"🎨 Generating character reference in {style} style...")
 
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"]
-            )
-        )
-
-        # Extract image from response
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        # Try inline_data first (raw bytes - most reliable)
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                logger.info(f"Character reference generated successfully ({len(part.inline_data.data)} bytes)")
-                                return part.inline_data.data
-
-                        # Try as_image method as fallback
-                        if hasattr(part, 'as_image'):
-                            try:
-                                image = part.as_image()
-                                if image and hasattr(image, 'save'):
-                                    img_byte_arr = BytesIO()
-                                    image.save(img_byte_arr, format='PNG')
-                                    logger.info(f"Character reference generated via as_image() ({len(img_byte_arr.getvalue())} bytes)")
-                                    return img_byte_arr.getvalue()
-                            except Exception as e:
-                                logger.warning(f"as_image() method failed: {e}")
-
-        logger.warning("No image found in response candidates")
-        return None
+        image_bytes = xai.generate_image(prompt)
+        logger.info(f"Character reference generated successfully ({len(image_bytes)} bytes)")
+        return image_bytes
 
     except Exception as e:
         logger.error(f"Error generating character reference: {e}", exc_info=True)
@@ -122,7 +80,7 @@ def generate_character_references_batch(
     Generate reference images for multiple characters (up to 3).
 
     Creates consistent reference portraits for each character that can be
-    passed to Veo 3.1 for visual consistency across video scenes.
+    passed to the video model for visual consistency across video scenes.
 
     Args:
         characters: List of character dicts with:
@@ -193,36 +151,7 @@ Generate a single, high-quality character reference portrait."""
         try:
             logger.info(f"🎨 Generating reference for {char_name} ({char_style})...")
 
-            response = client.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
-                )
-            )
-
-            # Extract image from response
-            image_bytes = None
-            if hasattr(response, 'candidates'):
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'inline_data') and part.inline_data:
-                                if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                    image_bytes = part.inline_data.data
-                                    break
-                            if hasattr(part, 'as_image'):
-                                try:
-                                    image = part.as_image()
-                                    if image and hasattr(image, 'save'):
-                                        img_byte_arr = BytesIO()
-                                        image.save(img_byte_arr, format='PNG')
-                                        image_bytes = img_byte_arr.getvalue()
-                                        break
-                                except Exception:
-                                    pass
-                    if image_bytes:
-                        break
+            image_bytes = xai.generate_image(prompt)
 
             if image_bytes:
                 references[char_id] = image_bytes
@@ -245,7 +174,7 @@ def generate_image_with_reference(
     """
     Generate an image using a character reference for consistency.
 
-    Uses Nano Banana Pro's ability to maintain character consistency
+    Uses grok-imagine-image-2.0's ability to maintain character consistency
     across multiple images using reference images.
 
     Args:
@@ -254,9 +183,8 @@ def generate_image_with_reference(
         style: Visual style to maintain
 
     Returns:
-        Image bytes (PNG) or None if generation fails
+        Image bytes or None if generation fails
     """
-    from PIL import Image
 
     style_hints = {
         "real_person": "photorealistic, consistent with reference photo",
@@ -277,42 +205,9 @@ Style: {style_hint}"""
     try:
         logger.info(f"🎨 Generating image with character reference...")
 
-        # Load reference image
-        ref_image = Image.open(BytesIO(reference_image))
-
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=[
-                full_prompt,
-                ref_image
-            ],
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"]
-            )
-        )
-
-        # Extract image from response
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                logger.info(f"Image with reference generated successfully ({len(part.inline_data.data)} bytes)")
-                                return part.inline_data.data
-
-                        if hasattr(part, 'as_image'):
-                            try:
-                                image = part.as_image()
-                                if image and hasattr(image, 'save'):
-                                    img_byte_arr = BytesIO()
-                                    image.save(img_byte_arr, format='PNG')
-                                    return img_byte_arr.getvalue()
-                            except Exception as e:
-                                logger.warning(f"as_image() method failed: {e}")
-
-        logger.warning("No image found in response candidates")
-        return None
+        image_bytes = xai.generate_image(full_prompt, reference_images=[reference_image])
+        logger.info(f"Image with reference generated successfully ({len(image_bytes)} bytes)")
+        return image_bytes
 
     except Exception as e:
         logger.error(f"Error generating image with reference: {e}", exc_info=True)
@@ -324,7 +219,7 @@ def search_author_images(
     limit: int = 5
 ) -> List[Dict[str, str]]:
     """
-    Search for author/character images online using Google Search grounding.
+    Search for author/character images online using Grok web search.
 
     Args:
         author_name: Name of the author/person to search for
@@ -338,10 +233,8 @@ def search_author_images(
     try:
         logger.info(f"🔍 Searching for images of: {author_name}")
 
-        # Use Gemini with Google Search grounding
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=f"""Find portrait images or photos of {author_name}.
+        # Use Grok with live web search
+        text, sources = xai.web_search(f"""Find portrait images or photos of {author_name}.
 
 Return a JSON array of image search results with the following format:
 [
@@ -354,44 +247,29 @@ Return a JSON array of image search results with the following format:
 ]
 
 Return up to {limit} results. Focus on clear, high-quality portrait photos suitable for use as a reference image.
-Only return the JSON array, no other text.""",
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                response_mime_type="application/json"
-            )
-        )
+Only return the JSON array, no other text.""", temperature=0.3)
 
-        # Extract search results from grounding metadata
         results = []
 
         # Try to parse the response text as JSON first
-        if hasattr(response, 'text') and response.text:
+        if text:
             try:
-                import json
-                parsed = json.loads(response.text)
+                parsed = xai.parse_json(text)
                 if isinstance(parsed, list):
                     results = parsed[:limit]
-            except json.JSONDecodeError:
+            except ValueError:
                 logger.warning("Could not parse search results as JSON")
 
-        # Also extract URLs from grounding metadata if available
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'grounding_metadata'):
-                    metadata = candidate.grounding_metadata
-                    if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
-                        for chunk in metadata.grounding_chunks:
-                            if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
-                                # Add grounded URLs to results if not already present
-                                url = chunk.web.uri
-                                if not any(r.get('url') == url for r in results):
-                                    results.append({
-                                        "url": url,
-                                        "title": getattr(chunk.web, 'title', 'Search Result'),
-                                        "description": "",
-                                        "source": urlparse(url).netloc if url else ""
-                                    })
+        # Also add cited URLs from the web search
+        for src in sources:
+            url = src["url"]
+            if not any(r.get('url') == url for r in results):
+                results.append({
+                    "url": url,
+                    "title": src.get("title") or "Search Result",
+                    "description": "",
+                    "source": urlparse(url).netloc if url else ""
+                })
 
         logger.info(f"Found {len(results)} image results")
         return results[:limit]
