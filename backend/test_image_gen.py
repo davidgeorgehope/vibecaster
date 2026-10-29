@@ -15,7 +15,7 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Model to test
-IMAGE_MODEL = "gemini-3.1-flash-image-preview"
+IMAGE_MODEL = "gemini-3.1-flash-image"
 
 def extract_image_bytes(response):
     """

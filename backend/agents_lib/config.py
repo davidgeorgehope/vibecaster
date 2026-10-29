@@ -11,7 +11,7 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 # Model configurations
 LLM_MODEL = "gemini-3.1-pro-preview"  # Primary model
 LLM_FALLBACK = "gemini-2.5-pro"  # Fallback model
-IMAGE_MODEL = "gemini-3.1-flash-image-preview"  # Nano Banana 2
+IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
 
 # QUIC/HTTP3 error patterns for graceful handling
 QUIC_ERROR_PATTERNS = [
