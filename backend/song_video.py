@@ -2,7 +2,7 @@
 Song to Video Module - Generate karaoke-style videos from audio files.
 
 Provides functionality for:
-- Transcribing songs with word-level timestamps using Gemini
+- Transcribing songs with word-level timestamps using xAI speech-to-text
 - Generating cover art based on lyrics mood
 - Creating videos with karaoke-style captions using FFmpeg + ASS subtitles
 - SSE streaming for progress updates
@@ -14,21 +14,8 @@ import json
 import tempfile
 import subprocess
 from typing import Generator, Optional, Dict, List, Any
-from io import BytesIO
-from google import genai
-from google.genai import types
-from PIL import Image
-from dotenv import load_dotenv
 from logger_config import agent_logger as logger
-
-load_dotenv()
-
-# Initialize Google GenAI client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Models
-LLM_MODEL = "gemini-3.1-pro-preview"
-IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
+from xai_client import MIME_EXT, XaiError, chat, generate_image, generate_text, transcribe
 
 # Supported audio MIME types
 SUPPORTED_AUDIO_TYPES = {
@@ -83,7 +70,7 @@ def get_audio_duration(audio_bytes: bytes, mime_type: str) -> float:
 
 def transcribe_song_with_timestamps(audio_bytes: bytes, mime_type: str, filename: str) -> Dict[str, Any]:
     """
-    Transcribe a song with word-level timestamps using Gemini.
+    Transcribe a song with word-level timestamps using xAI speech-to-text.
 
     Args:
         audio_bytes: Raw audio file bytes
@@ -97,69 +84,48 @@ def transcribe_song_with_timestamps(audio_bytes: bytes, mime_type: str, filename
         - lyrics: Full lyrics text
         - words: List of {word, start_ms, end_ms} dicts
     """
-    from transcription import upload_to_gemini, cleanup_gemini_file
-
     logger.info(f"[SongVideo] Transcribing song: {filename} ({len(audio_bytes)} bytes)")
 
-    # Upload audio to Gemini
-    media_part, uploaded_file = upload_to_gemini(audio_bytes, filename, mime_type)
+    ext = os.path.splitext(filename)[1] or MIME_EXT.get(mime_type, ".mp3")
+    stt = transcribe(audio_bytes, os.path.splitext(filename)[0] + ext, diarize=False)
+    words = [
+        {"word": w.get("text", ""), "start_ms": int(float(w.get("start", 0)) * 1000),
+         "end_ms": int(float(w.get("end", 0)) * 1000)}
+        for w in stt.get("words") or [] if w.get("text")
+    ]
+    raw_lyrics = (stt.get("text") or " ".join(w["word"] for w in words)).strip()
+    if not raw_lyrics:
+        logger.error("No lyrics found in transcription")
+        return {"title": None, "mood": "unknown", "lyrics": "", "words": []}
 
-    try:
-        prompt = """Transcribe this song with precise word-level timestamps.
+    prompt = f"""These are the transcribed lyrics of a song:
 
-Listen carefully to the audio and provide timestamps for when each word starts and ends.
-Be as accurate as possible with the timing - this will be used for karaoke-style captions.
+{raw_lyrics}
 
 Return as JSON with this exact structure:
-{
+{{
   "title": "detected song title if recognizable, otherwise null",
   "artist": "detected artist if recognizable, otherwise null",
   "mood": "emotional tone (e.g., energetic, melancholic, upbeat, romantic, angry, peaceful)",
-  "lyrics": "full lyrics text with line breaks",
-  "words": [
-    {"word": "Hello", "start_ms": 1000, "end_ms": 1400},
-    {"word": "world", "start_ms": 1450, "end_ms": 1900}
-  ]
-}
-
-IMPORTANT:
-- Timestamps are in milliseconds from the start of the audio
-- Include ALL words, including repeated phrases and choruses
-- If a word is held/stretched, reflect that in the end_ms
-- For instrumental sections, you can skip to the next lyric
-- Keep punctuation with words where appropriate
-- Include newlines in the "lyrics" field to show verse/line structure
+  "lyrics": "the same lyrics with line breaks added to show verse/line structure (do not change the words)"
+}}
 
 Return ONLY valid JSON, no other text."""
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[prompt, media_part],
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json"
-            )
-        )
-
-        if hasattr(response, 'text') and response.text:
-            result = json.loads(response.text)
-            logger.info(f"[SongVideo] Transcription complete: {len(result.get('words', []))} words, mood: {result.get('mood')}")
-            return result
-
-        logger.error("No text in transcription response")
-        return {"title": None, "mood": "unknown", "lyrics": "", "words": []}
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse transcription JSON: {e}")
-        # Try to extract raw text as fallback
-        if hasattr(response, 'text'):
-            return {"title": None, "mood": "unknown", "lyrics": response.text[:2000], "words": []}
-        return {"title": None, "mood": "unknown", "lyrics": "", "words": []}
-    except Exception as e:
-        logger.error(f"Error transcribing song: {e}", exc_info=True)
-        raise
-    finally:
-        cleanup_gemini_file(uploaded_file)
+    try:
+        meta = json.loads(generate_text(prompt, temperature=0.3, json_mode=True))
+    except (json.JSONDecodeError, XaiError) as e:
+        logger.error(f"Failed to analyze lyrics: {e}")
+        meta = {}
+    result = {
+        "title": meta.get("title"),
+        "artist": meta.get("artist"),
+        "mood": meta.get("mood") or "unknown",
+        "lyrics": meta.get("lyrics") or raw_lyrics,
+        "words": words,
+    }
+    logger.info(f"[SongVideo] Transcription complete: {len(words)} words, mood: {result['mood']}")
+    return result
 
 
 def generate_song_cover_image(lyrics: str, mood: str, title: Optional[str] = None) -> Optional[bytes]:
@@ -172,7 +138,7 @@ def generate_song_cover_image(lyrics: str, mood: str, title: Optional[str] = Non
         title: Optional song title
 
     Returns:
-        Image bytes (PNG) or None if generation fails
+        Image bytes or None if generation fails
     """
     logger.info(f"[SongVideo] Generating cover image for mood: {mood}")
 
@@ -198,36 +164,9 @@ The image should:
 Style: Modern album artwork, digital art, cinematic lighting, high quality"""
 
     try:
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"]
-            )
-        )
-
-        # Extract image from response
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                logger.info(f"[SongVideo] Cover image generated ({len(part.inline_data.data)} bytes)")
-                                return part.inline_data.data
-
-                        if hasattr(part, 'as_image'):
-                            try:
-                                image = part.as_image()
-                                if image and hasattr(image, 'save'):
-                                    img_byte_arr = BytesIO()
-                                    image.save(img_byte_arr, format='PNG')
-                                    return img_byte_arr.getvalue()
-                            except Exception as e:
-                                logger.warning(f"as_image() method failed: {e}")
-
-        logger.warning("No image found in response")
-        return None
+        image_bytes = generate_image(prompt, aspect_ratio="1:1")
+        logger.info(f"[SongVideo] Cover image generated ({len(image_bytes)} bytes)")
+        return image_bytes
 
     except Exception as e:
         logger.error(f"Error generating cover image: {e}", exc_info=True)
@@ -699,14 +638,7 @@ Generate the following (output as JSON):
 Output ONLY valid JSON with these four fields. No other text."""
 
     try:
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                response_mime_type="application/json"
-            )
-        )
+        response = chat(prompt, temperature=0.7, json_mode=True)
         result = json.loads(response.text)
         return result
     except Exception as e:

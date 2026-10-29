@@ -14,7 +14,7 @@ const faqs = [
   },
   {
     question: 'How does it work?',
-    answer: 'After installing the skill, your AI agent can call Vibecaster commands to generate and post content. It uses Google Gemini AI for content generation and Imagen for image creation. You connect your social accounts via OAuth in the web dashboard, and your agent handles the rest.',
+    answer: 'After installing the skill, your AI agent can call Vibecaster commands to generate and post content. It uses xAI Grok for content generation and Grok Imagine for image creation. You connect your social accounts via OAuth in the web dashboard, and your agent handles the rest.',
   },
   {
     question: 'Which social media platforms are supported?',

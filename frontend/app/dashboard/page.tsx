@@ -380,7 +380,7 @@ export default function Dashboard() {
       <footer className="border-t border-gray-800 mt-12">
         <div className="container mx-auto px-6 py-6 text-center text-gray-500 text-sm">
           <p>Vibecaster - Local-first social media automation</p>
-          <p className="mt-1">Powered by Google Gemini AI & Imagen</p>
+          <p className="mt-1">Powered by xAI Grok</p>
         </div>
       </footer>
     </div>

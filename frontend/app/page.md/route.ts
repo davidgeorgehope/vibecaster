@@ -5,13 +5,13 @@ export async function GET() {
 
 AI-Powered Social Media Automation
 
-Powered by Google Gemini AI
+Powered by xAI Grok
 
 ## Overview
 
 Generate and post content to X, LinkedIn, and YouTube automatically. Set your strategy once, let AI handle the rest.
 
-Vibecaster is a social media automation tool that uses Google Gemini AI to generate and schedule posts across multiple platforms from a single prompt.
+Vibecaster is a social media automation tool that uses xAI Grok to generate and schedule posts across multiple platforms from a single prompt.
 
 ## Features
 
@@ -25,7 +25,7 @@ Drop any article or blog URL and get platform-optimized posts generated instantl
 Craft multi-platform posts with AI assistance and real-time preview for each network.
 
 ### AI Video Generation
-Create multi-scene videos with Google Veo AI. Perfect for Reels, Shorts, and TikTok.
+Create multi-scene videos with Grok Imagine Video. Perfect for Reels, Shorts, and TikTok.
 
 ### Transcription
 Convert audio and video files to text. Generate posts from your podcasts and videos.

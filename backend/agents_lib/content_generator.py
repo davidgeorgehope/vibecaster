@@ -1,11 +1,9 @@
 """Content generation helpers for drafting, critiquing, and validating posts."""
 import json
 from typing import Tuple, Optional
-from io import BytesIO
 
-from google.genai import types
 
-from .config import client, LLM_MODEL, IMAGE_MODEL
+from xai_client import chat, generate_image as xai_generate_image
 from logger_config import agent_logger as logger
 
 
@@ -57,16 +55,7 @@ CRITICAL REQUIREMENTS:
 Write only the post text, nothing else.
 """
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=draft_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.8,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(draft_prompt, temperature=0.8)
 
         post_text = response.text.strip()
 
@@ -109,16 +98,7 @@ If the post has issues, rewrite it. Otherwise, return it unchanged.
 Return only the final post text, nothing else.
 """
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=critique_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(critique_prompt, temperature=0.7)
 
         return response.text.strip()
 
@@ -165,17 +145,7 @@ Respond in this exact JSON format:
 }}
 """
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=validation_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json",
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(validation_prompt, temperature=0.3, json_mode=True)
 
         result = json.loads(response.text)
         is_valid = result.get("is_valid", False)
@@ -224,17 +194,7 @@ Respond in this exact JSON format:
 }}
 """
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=extraction_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json",
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(extraction_prompt, temperature=0.3, json_mode=True)
 
         result = json.loads(response.text)
         topics = result.get("topics", [])
@@ -302,16 +262,7 @@ OUTPUT: Write ONLY the final, detailed prompt for the image generator.
 
         logger.info("🧠 Thinking about image composition...")
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,  # Use text/reasoning model with thinking
-            contents=refining_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(refining_prompt, temperature=0.7)
 
         refined_prompt = response.text.strip()
         logger.info(f"📝 Refined image prompt: {refined_prompt[:200]}...")
@@ -328,11 +279,10 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str, topic_co
     """
     Generate an image using a two-step "Think then Draw" workflow:
 
-    STEP 1 (Brain/Reasoning): Uses LLM_MODEL with thinking to analyze the request
+    STEP 1 (Brain/Reasoning): Uses grok-4.7 to analyze the request
     and generate a highly detailed, refined image prompt.
 
-    STEP 2 (Artist/Generation): Uses IMAGE_MODEL to execute the refined prompt.
-    Note: IMAGE_MODEL does NOT support thinking_config.
+    STEP 2 (Artist/Generation): Uses grok-imagine-image-2.0 to execute the refined prompt.
 
     Args:
         post_text: The generated social media post content
@@ -350,63 +300,11 @@ def generate_image(post_text: str, visual_style: str, user_prompt: str, topic_co
         refined_prompt = refine_image_prompt(post_text, visual_style, user_prompt, topic_context)
 
         # STEP 2: The Artist (Generation Phase)
-        # Pass the refined prompt to the image model WITHOUT thinking_config
         logger.info("🎨 Generating image with refined prompt...")
 
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,  # Image model - NO thinking_config support
-            contents=refined_prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"]
-                # CRITICAL: Do NOT pass thinking_config here - image model doesn't support it
-            )
-        )
-
-        # Debug logging
-        logger.info(f"Image API response type: {type(response)}")
-        logger.info(f"Has candidates: {hasattr(response, 'candidates')}")
-        if hasattr(response, 'candidates'):
-            logger.info(f"Number of candidates: {len(response.candidates)}")
-            for i, candidate in enumerate(response.candidates):
-                logger.info(f"Candidate {i} type: {type(candidate)}")
-                if hasattr(candidate, 'content'):
-                    logger.info(f"  Has content: True")
-                    if hasattr(candidate.content, 'parts'):
-                        logger.info(f"  Number of parts: {len(candidate.content.parts)}")
-                        for j, part in enumerate(candidate.content.parts):
-                            logger.info(f"    Part {j} type: {type(part)}")
-                            logger.info(f"    Part {j} has as_image: {hasattr(part, 'as_image')}")
-                            logger.info(f"    Part {j} has inline_data: {hasattr(part, 'inline_data')}")
-                            logger.info(f"    Part {j} attributes: {dir(part)}")
-
-        # Extract image from response candidates
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        # Try inline_data first (raw bytes - most reliable)
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            logger.info(f"Found inline_data: {type(part.inline_data)}")
-                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                logger.info(f"Image generated successfully via inline_data ({len(part.inline_data.data)} bytes)")
-                                return part.inline_data.data
-
-                        # Try as_image method as fallback
-                        if hasattr(part, 'as_image'):
-                            try:
-                                image = part.as_image()
-                                if image:
-                                    img_byte_arr = BytesIO()
-                                    # Check if it's a PIL Image with save method that takes format
-                                    if hasattr(image, 'save'):
-                                        image.save(img_byte_arr, format='PNG')
-                                        logger.info(f"Image generated successfully via as_image() ({len(img_byte_arr.getvalue())} bytes)")
-                                        return img_byte_arr.getvalue()
-                            except Exception as e:
-                                logger.warning(f"as_image() method failed: {e}")
-
-        logger.warning("No image found in response candidates")
-        return None
+        image_bytes = xai_generate_image(refined_prompt)
+        logger.info(f"Image generated successfully ({len(image_bytes)} bytes)")
+        return image_bytes
 
     except Exception as e:
         logger.error(f"Error generating image: {e}", exc_info=True)

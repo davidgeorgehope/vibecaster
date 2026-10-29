@@ -11,6 +11,8 @@ import os
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from tests.xai_mock import make_xai_mock
+
 
 class TestEmitEvent:
     """Tests for emit_event function."""
@@ -42,7 +44,7 @@ class TestEmitEvent:
 class TestPlanVideoScript:
     """Tests for plan_video_script function."""
 
-    @patch('video_generation.client')
+    @patch('video_generation.xai', new_callable=make_xai_mock)
     def test_returns_valid_script_structure(self, mock_client):
         """Test that script planning returns correct structure."""
         from video_generation import plan_video_script
@@ -79,7 +81,7 @@ class TestPlanVideoScript:
         assert len(result['scenes']) == 1
         assert result['scenes'][0]['scene_number'] == 1
 
-    @patch('video_generation.client')
+    @patch('video_generation.xai', new_callable=make_xai_mock)
     def test_includes_character_context(self, mock_client):
         """Test that author bio is included in prompt."""
         from video_generation import plan_video_script
@@ -115,7 +117,7 @@ class TestPlanVideoScript:
 class TestGenerateSceneImage:
     """Tests for generate_scene_image function."""
 
-    @patch('video_generation.client')
+    @patch('video_generation.xai', new_callable=make_xai_mock)
     def test_generates_image_from_prompt(self, mock_client):
         """Test that scene image is generated."""
         from video_generation import generate_scene_image
@@ -136,7 +138,7 @@ class TestGenerateSceneImage:
 
         assert result == b'scene_image_bytes'
 
-    @patch('video_generation.client')
+    @patch('video_generation.xai', new_callable=make_xai_mock)
     def test_includes_character_reference(self, mock_client):
         """Test that character reference is included when provided."""
         from video_generation import generate_scene_image
@@ -173,325 +175,92 @@ class TestGenerateSceneImage:
 
 
 class TestGenerateVideoFromImage:
-    """Tests for generate_video_from_image function."""
+    """Tests for grok-imagine-video-1.5 image-to-video and scene chaining."""
 
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_generates_video_from_first_frame(self, mock_sleep, mock_client, mock_image_type):
-        """Test successful video generation from first frame."""
+    FRAME = b'\x89PNG fake first frame'
+
+    @patch('video_generation.xai')
+    def test_generates_video_from_first_frame(self, mock_xai):
+        from video_generation import generate_video_from_image, DEFAULT_VIDEO_DURATION
+        video = b'x' * 15000
+        mock_xai.generate_video.return_value = iter([('complete', video)])
+
+        result = generate_video_from_image(first_frame_bytes=self.FRAME, video_prompt="Test motion prompt")
+
+        assert result == video
+        mock_xai.generate_video.assert_called_once()
+        args, kwargs = mock_xai.generate_video.call_args
+        assert args[0] == "Test motion prompt"
+        assert kwargs['image'] == self.FRAME
+        assert kwargs['duration'] == DEFAULT_VIDEO_DURATION
+        assert kwargs['aspect_ratio'] == "16:9"
+
+    @patch('video_generation.xai')
+    def test_stream_emits_progress_then_complete(self, mock_xai):
+        from video_generation import generate_video_from_image_stream
+        video = b'v' * 20000
+        mock_xai.generate_video.return_value = iter([('progress', 10), ('progress', 20), ('complete', video)])
+
+        events = list(generate_video_from_image_stream(self.FRAME, "prompt", aspect_ratio="9:16"))
+
+        assert [e[0] for e in events] == ['progress', 'progress', 'complete']
+        assert events[0][1:] == (1, 90) and events[1][1:] == (2, 90)
+        assert events[-1] == ('complete', video, video)
+        assert mock_xai.generate_video.call_args.kwargs['aspect_ratio'] == "9:16"
+
+    @patch('video_generation.xai')
+    def test_returns_none_on_api_error(self, mock_xai):
+        from video_generation import generate_video_from_image, generate_video_from_image_stream
+
+        def boom(*a, **k):
+            raise RuntimeError("xAI video generation timed out")
+            yield  # pragma: no cover
+        mock_xai.generate_video.side_effect = boom
+
+        assert generate_video_from_image(first_frame_bytes=self.FRAME, video_prompt="x") is None
+        mock_xai.generate_video.side_effect = boom
+        events = list(generate_video_from_image_stream(self.FRAME, "x"))
+        assert events == [('error', 'xAI video generation timed out')]
+
+    @patch('video_generation.xai')
+    def test_returns_none_when_video_too_small(self, mock_xai):
         from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
+        mock_xai.generate_video.return_value = iter([('complete', b'tiny')])
 
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='blue')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
+        assert generate_video_from_image(first_frame_bytes=self.FRAME, video_prompt="x") is None
 
-        # Create mock video response with proper video data (> 10KB)
-        mock_video_bytes = b'x' * 15000  # 15KB - above MIN_VIDEO_SIZE threshold
-
-        # Mock types.Image.from_file to return a mock image
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock the video object
-        mock_video = Mock()
-        mock_video.video = Mock()
-
-        # Mock operation
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_client.models.generate_videos.return_value = mock_operation
-        mock_client.files.download = Mock()
-
-        # Mock video.save to write our mock bytes
-        def mock_save(path):
-            with open(path, 'wb') as f:
-                f.write(mock_video_bytes)
-
-        mock_video.video.save = mock_save
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Test motion prompt"
-        )
-
-        assert result is not None
-        assert len(result) == len(mock_video_bytes)
-        mock_client.models.generate_videos.assert_called_once()
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_polls_until_complete(self, mock_sleep, mock_client, mock_image_type):
-        """Test that operation is polled until done."""
+    @patch('video_generation.xai')
+    def test_returns_none_when_no_complete_event(self, mock_xai):
         from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
+        mock_xai.generate_video.return_value = iter([('progress', 10)])
 
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='green')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
+        assert generate_video_from_image(first_frame_bytes=self.FRAME, video_prompt="x") is None
 
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
+    @patch('video_generation.xai')
+    def test_extension_chains_from_last_frame_and_concatenates(self, mock_xai):
+        from video_generation import generate_video_extension_stream, EXTENSION_DURATION
+        previous, clip, combined = b'p' * 20000, b'c' * 20000, b'pc' * 20000
+        mock_xai.last_frame.return_value = b'last-frame'
+        mock_xai.generate_video.return_value = iter([('progress', 10), ('complete', clip)])
+        mock_xai.concat_videos.return_value = combined
 
-        # Mock operation that completes after 2 polls
-        poll_count = [0]
-        mock_video_bytes = b'v' * 20000
+        events = list(generate_video_extension_stream(previous, "next scene", aspect_ratio="16:9"))
 
-        mock_video = Mock()
-        mock_video.video = Mock()
+        assert events[-1] == ('complete', combined, combined)
+        mock_xai.last_frame.assert_called_once_with(previous)
+        kwargs = mock_xai.generate_video.call_args.kwargs
+        assert kwargs['image'] == b'last-frame' and kwargs['duration'] == EXTENSION_DURATION
+        mock_xai.concat_videos.assert_called_once_with(previous, clip)
 
-        def mock_save(path):
-            with open(path, 'wb') as f:
-                f.write(mock_video_bytes)
+    @patch('video_generation.xai')
+    def test_extension_errors_when_frame_extraction_fails(self, mock_xai):
+        from video_generation import generate_video_extension_stream
+        mock_xai.last_frame.side_effect = RuntimeError("ffmpeg failed")
 
-        mock_video.video.save = mock_save
+        events = list(generate_video_extension_stream(b'p' * 20000, "next"))
 
-        mock_operation = Mock()
-        mock_operation.done = False
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        def get_operation(op):
-            poll_count[0] += 1
-            if poll_count[0] >= 2:
-                op.done = True
-            return op
-
-        mock_client.models.generate_videos.return_value = mock_operation
-        mock_client.operations.get = get_operation
-        mock_client.files.download = Mock()
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Motion test"
-        )
-
-        assert result is not None
-        assert poll_count[0] == 2  # Polled exactly 2 times
-        assert mock_sleep.call_count >= 1  # Sleep was called during polling
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_returns_none_on_timeout(self, mock_sleep, mock_client, mock_image_type):
-        """Test that None is returned when operation times out.
-
-        Note: This test uses a smaller max_polls value to avoid long test times.
-        In production, max_polls=60 gives up to 10 minutes of polling.
-        """
-        from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
-
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='red')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
-
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock operation that never completes
-        poll_count = [0]
-
-        mock_operation = Mock()
-        mock_operation.done = False
-
-        def get_operation(op):
-            poll_count[0] += 1
-            return op
-
-        mock_client.models.generate_videos.return_value = mock_operation
-        mock_client.operations.get = get_operation
-
-        # The function has max_polls=60, so this will run 60 iterations
-        # with mocked time.sleep that returns immediately
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Timeout test"
-        )
-
-        assert result is None
-        assert poll_count[0] == 60  # Reached max polls
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_returns_none_when_video_object_missing_data(self, mock_sleep, mock_client, mock_image_type):
-        """Test that None is returned when Veo returns video object without video data.
-
-        This is a common production failure mode where the API returns a response
-        but the video.video attribute is None.
-        """
-        from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
-
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='yellow')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
-
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock video object with video=None (production failure scenario)
-        mock_video = Mock()
-        mock_video.video = None  # This is the failure mode
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_client.models.generate_videos.return_value = mock_operation
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Missing video data test"
-        )
-
-        assert result is None
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_returns_none_when_download_fails(self, mock_sleep, mock_client, mock_image_type):
-        """Test that None is returned when video download/save fails.
-
-        This covers the production failure where Veo returns success but
-        the actual video file cannot be downloaded or saved.
-        """
-        from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
-
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='purple')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
-
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock video that raises exception on save
-        mock_video = Mock()
-        mock_video.video = Mock()
-        mock_video.video.save = Mock(side_effect=Exception("Network error during download"))
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_client.models.generate_videos.return_value = mock_operation
-        mock_client.files.download = Mock()
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Download failure test"
-        )
-
-        assert result is None
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_returns_none_when_video_too_small(self, mock_sleep, mock_client, mock_image_type):
-        """Test that None is returned when video file is too small (< 10KB).
-
-        This covers the production failure where Veo generates a corrupt
-        or empty video file that passes initial validation but is unusable.
-        """
-        from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
-
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='orange')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
-
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock video that produces a tiny file (< 10KB MIN_VIDEO_SIZE threshold)
-        mock_video_bytes = b'tiny'  # Only 4 bytes - way below threshold
-
-        mock_video = Mock()
-        mock_video.video = Mock()
-
-        def mock_save(path):
-            with open(path, 'wb') as f:
-                f.write(mock_video_bytes)
-
-        mock_video.video.save = mock_save
-
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = [mock_video]
-
-        mock_client.models.generate_videos.return_value = mock_operation
-        mock_client.files.download = Mock()
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Small video test"
-        )
-
-        assert result is None
-
-    @patch('video_generation.types.Image')
-    @patch('video_generation.client')
-    @patch('video_generation.time.sleep')
-    def test_returns_none_when_generated_videos_empty(self, mock_sleep, mock_client, mock_image_type):
-        """Test that None is returned when generated_videos list is empty.
-
-        This covers the production failure where the API returns success
-        but the generated_videos list is empty.
-        """
-        from video_generation import generate_video_from_image
-        from PIL import Image
-        from io import BytesIO
-
-        # Create first frame
-        img = Image.new('RGB', (100, 100), color='cyan')
-        img_bytes = BytesIO()
-        img.save(img_bytes, format='PNG')
-        first_frame = img_bytes.getvalue()
-
-        # Mock types.Image.from_file
-        mock_image_type.from_file.return_value = Mock()
-
-        # Mock operation with empty generated_videos list
-        mock_operation = Mock()
-        mock_operation.done = True
-        mock_operation.response = Mock()
-        mock_operation.response.generated_videos = []  # Empty list
-
-        mock_client.models.generate_videos.return_value = mock_operation
-
-        result = generate_video_from_image(
-            first_frame_bytes=first_frame,
-            video_prompt="Empty videos test"
-        )
-
-        assert result is None
+        assert events == [('error', 'ffmpeg failed')]
+        mock_xai.generate_video.assert_not_called()
 
 
 class TestGenerateVideoStream:
@@ -575,14 +344,14 @@ class TestGetVideoJobStatus:
 
 
 # ===== LIVE API INTEGRATION TESTS =====
-# These tests call the actual Veo API and are marked with pytest.mark.integration
+# These tests call the actual xAI video API and are marked with pytest.mark.integration
 # Run with: pytest -m integration tests/test_video_generation.py -v
 # These tests cost API credits and may take 1-5 minutes to complete
 
 @pytest.mark.integration
-class TestVeoApiIntegration:
+class TestXaiVideoIntegration:
     """
-    Integration tests that call the live Veo API.
+    Integration tests that call the live xAI video API.
 
     These tests are designed to catch production failures like:
     - API returning video object without video data
@@ -595,7 +364,7 @@ class TestVeoApiIntegration:
 
     def test_live_video_generation_success(self):
         """
-        End-to-end test: Generate actual video from image using Veo API.
+        End-to-end test: Generate actual video from image using xAI video API.
 
         This test exercises the full production path and validates:
         1. Image is created from first frame bytes
@@ -610,8 +379,8 @@ class TestVeoApiIntegration:
         import os
 
         # Skip if no API key
-        if not os.getenv("GEMINI_API_KEY"):
-            pytest.skip("GEMINI_API_KEY not set")
+        if not os.getenv("XAI_API_KEY"):
+            pytest.skip("XAI_API_KEY not set")
 
         # Create a simple test image (solid color to minimize API complexity)
         img = Image.new('RGB', (512, 512), color=(100, 150, 200))
@@ -626,7 +395,7 @@ class TestVeoApiIntegration:
         )
 
         # Validate result
-        assert result is not None, "Veo API returned None - check logs for failure reason"
+        assert result is not None, "xAI video API returned None - check logs for failure reason"
         assert len(result) > 10000, f"Video too small ({len(result)} bytes), likely corrupt"
 
         # Basic MP4 header validation
@@ -644,8 +413,8 @@ class TestVeoApiIntegration:
         from io import BytesIO
         import os
 
-        if not os.getenv("GEMINI_API_KEY"):
-            pytest.skip("GEMINI_API_KEY not set")
+        if not os.getenv("XAI_API_KEY"):
+            pytest.skip("XAI_API_KEY not set")
 
         # Create test image with some variation (gradient)
         img = Image.new('RGB', (512, 512))
@@ -666,8 +435,6 @@ class TestVeoApiIntegration:
         assert result is not None, "Complex prompt caused generation failure"
         assert len(result) > 10000, f"Video too small ({len(result)} bytes)"
 
-    # NOTE: reference_images test removed - Veo API doesn't support
-    # reference_images with image-to-video mode (they're mutually exclusive)
 
 
 @pytest.mark.integration
@@ -679,8 +446,8 @@ class TestGenerateSceneImageIntegration:
         from video_generation import generate_scene_image
         import os
 
-        if not os.getenv("GEMINI_API_KEY"):
-            pytest.skip("GEMINI_API_KEY not set")
+        if not os.getenv("XAI_API_KEY"):
+            pytest.skip("XAI_API_KEY not set")
 
         result = generate_scene_image(
             image_prompt="A simple abstract background with geometric shapes",
@@ -690,8 +457,8 @@ class TestGenerateSceneImageIntegration:
         assert result is not None, "Image generation returned None"
         assert len(result) > 1000, f"Image too small ({len(result)} bytes)"
 
-        # Basic PNG validation
-        assert result[:8] == b'\x89PNG\r\n\x1a\n', "Not a valid PNG"
+        # Basic image validation (PNG or JPEG)
+        assert result[:8] == b'\x89PNG\r\n\x1a\n' or result[:3] == b'\xff\xd8\xff', "Not a valid image"
 
 
 @pytest.mark.integration
@@ -715,8 +482,8 @@ class TestFullVideoStreamIntegration:
         import os
         import json
 
-        if not os.getenv("GEMINI_API_KEY"):
-            pytest.skip("GEMINI_API_KEY not set")
+        if not os.getenv("XAI_API_KEY"):
+            pytest.skip("XAI_API_KEY not set")
 
         # Create test user for the video job
         with get_db() as conn:

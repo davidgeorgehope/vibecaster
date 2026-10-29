@@ -1,41 +1,27 @@
 """
-Video Generation Module - Multi-scene video generation with Veo 3.1
+Video Generation Module - Multi-scene video generation with grok-imagine-video-1.5
 
 Provides functionality for:
-- Script planning with LLM (scenes, narration, video prompts with dialogue)
-- Scene image generation with character reference (Nano Banana Pro)
-- Video generation from first frame (Veo 3.1)
-- Video extension for scene continuity (Veo 3.1 extend)
+- Script planning with grok-4.7 (scenes, narration, video prompts with dialogue)
+- Scene image generation with character references (grok-imagine-image-2.0)
+- Video generation from first frame (grok-imagine-video-1.5)
+- Scene continuity: each later scene starts from the previous clip's last frame,
+  and clips are joined into one video
 - SSE streaming for progress updates
 
-Note: Audio/dialogue is generated natively by Veo 3.1 when prompts include
+Note: Audio/dialogue is generated natively by grok-imagine-video-1.5 when prompts include
 quoted speech like: "The presenter says: \"Welcome to the tutorial.\""
 """
 
-import os
 import time
 import json
-import tempfile
 from typing import Optional, Dict, Any, List, Generator
-from io import BytesIO
-from google import genai
-from google.genai import types
-from PIL import Image
-from dotenv import load_dotenv
 from logger_config import agent_logger as logger
-
-load_dotenv()
-
-# Initialize Google GenAI client
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Models
-LLM_MODEL = "gemini-3.1-pro-preview"
-IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
-VIDEO_MODEL = "veo-3.1-generate-preview"
+import xai_client as xai
 
 # Video generation settings
-DEFAULT_VIDEO_DURATION = 8  # Veo generates 8-second clips
+DEFAULT_VIDEO_DURATION = 8  # Scene 1 clip length (seconds)
+EXTENSION_DURATION = 7  # Later scene clip length (seconds)
 MAX_SCENES = 6  # Cap at 6 scenes (48 seconds) to control costs
 POLL_INTERVAL = 10  # seconds between status checks
 
@@ -152,14 +138,7 @@ Return ONLY valid JSON, no other text."""
     try:
         logger.info("🔍 Analyzing prompt for character extraction...")
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json"
-            )
-        )
+        response = xai.chat(prompt, temperature=0.3, json_mode=True)
 
         if hasattr(response, 'text') and response.text:
             result = json.loads(response.text)
@@ -188,9 +167,9 @@ Return ONLY valid JSON, no other text."""
 
 def search_video_topic(topic: str, user_prompt: str = "") -> Dict[str, Any]:
     """
-    Search for content about a video topic using Google Search grounding.
+    Search for content about a video topic using Grok web search.
 
-    Uses Gemini's native search grounding to find accurate, current information
+    Uses Grok live web search to find accurate, current information
     about the topic that can be used to create an informed video script.
 
     Args:
@@ -227,29 +206,11 @@ Focus on accuracy and educational value. This will be used to script a video exp
     try:
         logger.info(f"🔍 Searching for content about: {topic[:50]}...")
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=search_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.5,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            )
-        )
-
-        # Extract URLs from grounding metadata
+        content, cited = xai.web_search(search_prompt, temperature=0.5)
         sources = []
-        if hasattr(response, 'candidates') and len(response.candidates) > 0:
-            candidate = response.candidates[0]
-            if hasattr(candidate, 'grounding_metadata'):
-                metadata = candidate.grounding_metadata
-                if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
-                    for chunk in metadata.grounding_chunks:
-                        if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri'):
-                            url = chunk.web.uri
-                            if url and url not in sources:
-                                sources.append(url)
-
-        content = response.text if hasattr(response, 'text') and response.text else ""
+        for src in cited:
+            if src["url"] not in sources:
+                sources.append(src["url"])
 
         if content:
             logger.info(f"✅ Search found content from {len(sources)} sources")
@@ -389,15 +350,7 @@ CRITICAL REQUIREMENTS:
     try:
         logger.info(f"🎬 Planning video script for: {topic}")
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                thinking_config=types.ThinkingConfig(thinking_level="HIGH"),
-                response_mime_type="application/json"
-            )
-        )
+        response = xai.chat(prompt, temperature=0.7, json_mode=True)
 
         script = json.loads(response.text)
         logger.info(f"Script planned: {script.get('title')} with {len(script.get('scenes', []))} scenes")
@@ -418,7 +371,7 @@ def refine_video_prompt(
     characters: Optional[List[Dict]] = None
 ) -> str:
     """
-    Use LLM with thinking to ENHANCE video prompts for Veo 3.1 best practices.
+    Use LLM with thinking to ENHANCE video prompts for grok-imagine-video best practices.
 
     CRITICAL: Preserves ALL character names, descriptions, story elements, and dialogue.
     Only ADDS cinematography and realism techniques - does NOT rewrite content.
@@ -466,7 +419,7 @@ CHARACTER VOICE STYLES (MUST include these when characters speak):
 
 """
 
-    prompt = f"""You are enhancing a video prompt for Veo 3.1. Your job is to ADD technical details while PRESERVING the original content exactly.
+    prompt = f"""You are enhancing a video prompt for an AI video generator (grok-imagine-video-1.5). Your job is to ADD technical details while PRESERVING the original content exactly.
 
 {context_section}{voice_section}SCENE {scene_number} OF {total_scenes} - PROMPT TO ENHANCE:
 {video_prompt}
@@ -498,14 +451,7 @@ OUTPUT the enhanced prompt only. No explanations."""
     try:
         logger.info(f"🎬 Refining video prompt for scene {scene_number}...")
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.5,  # Lower temp for more consistent structure
-                thinking_config=types.ThinkingConfig(thinking_level="HIGH")
-            )
-        )
+        response = xai.chat(prompt, temperature=0.5)
 
         refined = response.text.strip()
         logger.info(f"📝 Refined prompt: {refined[:150]}...")
@@ -524,7 +470,7 @@ def generate_scene_image(
     aspect_ratio: str = "16:9"
 ) -> Optional[bytes]:
     """
-    Generate a scene's first frame using Nano Banana Pro.
+    Generate a scene's first frame using grok-imagine-image-2.0.
 
     Args:
         image_prompt: Detailed prompt for the image
@@ -554,54 +500,34 @@ def generate_scene_image(
     try:
         logger.info(f"🖼️ Generating scene image...")
 
-        contents = [full_prompt]
-
-        # Add character references if provided (max 3)
-        if character_references:
-            refs_to_use = character_references[:3]
-            if len(refs_to_use) == 1:
-                contents.insert(0, "Use this character reference for consistency:")
-            else:
-                contents.insert(0, f"Use these {len(refs_to_use)} character references for consistency:")
-            for i, ref in enumerate(refs_to_use):
-                ref_image = Image.open(BytesIO(ref))
-                contents.insert(1 + i, ref_image)
+        refs_to_use = (character_references or [])[:3]
+        prompt = full_prompt
+        if refs_to_use:
+            noun = "this character reference" if len(refs_to_use) == 1 else f"these {len(refs_to_use)} character references"
+            prompt = f"Use {noun} for consistency. {full_prompt}"
             logger.info(f"Including {len(refs_to_use)} character reference(s) in scene image")
 
-        response = client.models.generate_content(
-            model=IMAGE_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE"]
-            )
-        )
-
-        # Extract image from response
-        if hasattr(response, 'candidates'):
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'inline_data') and part.inline_data:
-                            if hasattr(part.inline_data, 'data') and part.inline_data.data:
-                                logger.info(f"Scene image generated ({len(part.inline_data.data)} bytes)")
-                                return part.inline_data.data
-
-                        if hasattr(part, 'as_image'):
-                            try:
-                                image = part.as_image()
-                                if image and hasattr(image, 'save'):
-                                    img_byte_arr = BytesIO()
-                                    image.save(img_byte_arr, format='PNG')
-                                    return img_byte_arr.getvalue()
-                            except Exception as e:
-                                logger.warning(f"as_image() method failed: {e}")
-
-        logger.warning("No image found in response")
-        return None
+        image_bytes = xai.generate_image(prompt, reference_images=refs_to_use, aspect_ratio=aspect_ratio)
+        logger.info(f"Scene image generated ({len(image_bytes)} bytes)")
+        return image_bytes
 
     except Exception as e:
         logger.error(f"Error generating scene image: {e}", exc_info=True)
         return None
+
+
+def _video_events(prompt: str, image: bytes, duration: int, aspect_ratio: str):
+    """Run grok-imagine-video-1.5 and translate to ('progress', poll, max) / ('complete', bytes)."""
+    max_polls = 90  # 15 minutes at POLL_INTERVAL
+    poll = 0
+    for event in xai.generate_video(prompt, image=image, aspect_ratio=aspect_ratio, duration=duration,
+                                poll_interval=POLL_INTERVAL, max_wait=max_polls * POLL_INTERVAL):
+        if event[0] == "progress":
+            poll += 1
+            logger.info(f"Video generation in progress... (poll {poll}/{max_polls})")
+            yield ('progress', poll, max_polls)
+        else:
+            yield event
 
 
 def generate_video_from_image_stream(
@@ -610,222 +536,75 @@ def generate_video_from_image_stream(
     aspect_ratio: str = "16:9"
 ):
     """
-    Generate a video using Veo 3.1 with progress events (generator).
+    Generate a video with grok-imagine-video-1.5 with progress events (generator).
 
     Args:
-        first_frame_bytes: PNG bytes of the first frame image
+        first_frame_bytes: Image bytes of the first frame
         video_prompt: The video generation prompt
-        aspect_ratio: "16:9" (landscape) or "9:16" (portrait)
+        aspect_ratio: "16:9" (landscape) or "9:16" (portrait); image-to-video follows the image
 
     Yields:
         ('progress', poll_count, max_polls) during polling
-        ('complete', video_object, video_bytes) on success - returns both for extension chaining
+        ('complete', video_bytes, video_bytes) on success - the first value is passed
+            to generate_video_extension_stream() for continuity
         ('error', error_message) on failure
 
     NOTE: Use this for SSE streaming to keep Cloudflare connection alive.
-    The video_object can be passed to generate_video_extension_stream() for continuity.
     """
-    tmp_image_path = None
-    tmp_video_path = None
-
     try:
-        logger.info(f"🎥 Generating video from first frame...")
-
-        # Save first frame to temp file
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
-            tmp_image_path = tmp_img.name
-            tmp_img.write(first_frame_bytes)
-            tmp_img.flush()
-
-        first_frame = types.Image.from_file(location=tmp_image_path)
-
-        # Start video generation with aspect ratio
-        operation = client.models.generate_videos(
-            model=VIDEO_MODEL,
-            prompt=video_prompt,
-            image=first_frame,
-            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio)
-        )
-
-        # Poll until complete, yielding progress for SSE keepalive
-        poll_count = 0
-        max_polls = 60  # 10 minutes max
-        while not operation.done and poll_count < max_polls:
-            poll_count += 1
-            logger.info(f"Video generation in progress... (poll {poll_count}/{max_polls})")
-
-            # Yield progress event to keep SSE connection alive through Cloudflare
-            yield ('progress', poll_count, max_polls)
-
-            time.sleep(POLL_INTERVAL)
-            operation = client.operations.get(operation)
-
-        if not operation.done:
-            logger.error(f"Video generation timed out after {poll_count * POLL_INTERVAL} seconds")
-            yield ('error', 'Video generation timed out')
-            return
-
-        # Download the generated video
-        if operation.response and operation.response.generated_videos:
-            video = operation.response.generated_videos[0]
-
-            if not hasattr(video, 'video') or video.video is None:
-                logger.error("Veo API returned video object without video data")
-                yield ('error', 'No video data in response')
+        logger.info("🎥 Generating video from first frame...")
+        for event in _video_events(video_prompt, first_frame_bytes, DEFAULT_VIDEO_DURATION, aspect_ratio):
+            if event[0] == "complete":
+                video_bytes = event[1]
+                if len(video_bytes) < 10000:
+                    yield ('error', 'Video file too small')
+                    return
+                logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
+                yield ('complete', video_bytes, video_bytes)
                 return
-
-            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
-                tmp_video_path = tmp_vid.name
-
-            try:
-                client.files.download(file=video.video)
-                video.video.save(tmp_video_path)
-            except Exception as save_error:
-                logger.error(f"Failed to download/save video from Veo: {save_error}")
-                yield ('error', f'Failed to download video: {save_error}')
-                return
-
-            with open(tmp_video_path, 'rb') as f:
-                video_bytes = f.read()
-
-            MIN_VIDEO_SIZE = 10000
-            if len(video_bytes) < MIN_VIDEO_SIZE:
-                logger.error(f"Video file too small ({len(video_bytes)} bytes)")
-                yield ('error', 'Video file too small')
-                return
-
-            logger.info(f"Video generated successfully ({len(video_bytes)} bytes)")
-            # Return both video object (for extension chaining) and bytes (for storage)
-            yield ('complete', video.video, video_bytes)
-        else:
-            logger.warning("No video in response")
-            yield ('error', 'No video in API response')
-
+            yield event
     except Exception as e:
         logger.error(f"Error generating video: {e}", exc_info=True)
         yield ('error', str(e))
 
-    finally:
-        # Cleanup temp files
-        if tmp_image_path and os.path.exists(tmp_image_path):
-            try:
-                os.unlink(tmp_image_path)
-            except:
-                pass
-        if tmp_video_path and os.path.exists(tmp_video_path):
-            try:
-                os.unlink(tmp_video_path)
-            except:
-                pass
-
 
 def generate_video_extension_stream(
-    previous_video,  # Veo Video object from previous generation
+    previous_video: bytes,
     video_prompt: str,
     aspect_ratio: str = "16:9"
 ):
     """
-    Extend a video using Veo 3.1 with progress events (generator).
+    Continue a video with the next scene (generator).
 
-    Uses the last second of the previous video to maintain visual and audio
-    continuity. Each extension adds ~7 seconds to the video.
-
-    Note: Veo API does NOT support reference_images with video extension mode.
-    Character consistency relies on the video chain continuity from previous scene.
+    Takes the last frame of `previous_video`, generates a new grok-imagine-video-1.5
+    clip from it (EXTENSION_DURATION seconds), and appends it to the previous video.
 
     Args:
-        previous_video: The Veo Video object from the previous scene's generation
-        video_prompt: Prompt for the extension (should include dialogue in quotes)
+        previous_video: mp4 bytes of the video so far
+        video_prompt: Prompt for the next scene (should include dialogue in quotes)
         aspect_ratio: "16:9" (landscape) or "9:16" (portrait) - must match original
 
     Yields:
         ('progress', poll_count, max_polls) during polling
-        ('complete', video_object, video_bytes) on success - returns both for chaining
+        ('complete', combined_bytes, combined_bytes) on success - returns both for chaining
         ('error', error_message) on failure
     """
-    tmp_video_path = None
-
     try:
-        logger.info(f"🔗 Extending video with next scene...")
-
-        # NOTE: Veo API does NOT support reference_images with video extension mode
-        # Reference images only work with "ingredients to video" mode (no first frame, no previous video)
-        # Character consistency in extensions relies on the video chain continuity from previous scene
-        config_kwargs = {"aspect_ratio": aspect_ratio}
-
-        # Start video extension with aspect ratio
-        operation = client.models.generate_videos(
-            model=VIDEO_MODEL,
-            prompt=video_prompt,
-            video=previous_video,  # Pass video object for extension
-            config=types.GenerateVideosConfig(**config_kwargs)
-        )
-
-        # Poll until complete, yielding progress for SSE keepalive
-        poll_count = 0
-        max_polls = 60  # 10 minutes max
-        while not operation.done and poll_count < max_polls:
-            poll_count += 1
-            logger.info(f"Video extension in progress... (poll {poll_count}/{max_polls})")
-
-            yield ('progress', poll_count, max_polls)
-
-            time.sleep(POLL_INTERVAL)
-            operation = client.operations.get(operation)
-
-        if not operation.done:
-            logger.error(f"Video extension timed out after {poll_count * POLL_INTERVAL} seconds")
-            yield ('error', 'Video extension timed out')
-            return
-
-        # Get the extended video
-        if operation.response and operation.response.generated_videos:
-            video = operation.response.generated_videos[0]
-
-            if not hasattr(video, 'video') or video.video is None:
-                logger.error("Veo API returned video object without video data")
-                yield ('error', 'No video data in response')
+        logger.info("🔗 Extending video with next scene...")
+        start_frame = xai.last_frame(previous_video)
+        for event in _video_events(video_prompt, start_frame, EXTENSION_DURATION, aspect_ratio):
+            if event[0] == "complete":
+                combined = xai.concat_videos(previous_video, event[1])
+                if len(combined) < 10000:
+                    yield ('error', 'Extended video too small')
+                    return
+                logger.info(f"Video extended successfully ({len(combined)} bytes)")
+                yield ('complete', combined, combined)
                 return
-
-            # Download video bytes for storage
-            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_vid:
-                tmp_video_path = tmp_vid.name
-
-            try:
-                client.files.download(file=video.video)
-                video.video.save(tmp_video_path)
-            except Exception as save_error:
-                logger.error(f"Failed to download/save extended video: {save_error}")
-                yield ('error', f'Failed to download video: {save_error}')
-                return
-
-            with open(tmp_video_path, 'rb') as f:
-                video_bytes = f.read()
-
-            MIN_VIDEO_SIZE = 10000
-            if len(video_bytes) < MIN_VIDEO_SIZE:
-                logger.error(f"Extended video too small ({len(video_bytes)} bytes)")
-                yield ('error', 'Extended video too small')
-                return
-
-            logger.info(f"Video extended successfully ({len(video_bytes)} bytes)")
-            # Return both the video object (for next extension) and bytes (for storage)
-            yield ('complete', video.video, video_bytes)
-        else:
-            logger.warning("No video in extension response")
-            yield ('error', 'No video in API response')
-
+            yield event
     except Exception as e:
         logger.error(f"Error extending video: {e}", exc_info=True)
         yield ('error', str(e))
-
-    finally:
-        # Cleanup temp video file
-        if tmp_video_path and os.path.exists(tmp_video_path):
-            try:
-                os.unlink(tmp_video_path)
-            except:
-                pass
 
 
 def generate_video_from_image(
@@ -834,7 +613,7 @@ def generate_video_from_image(
     aspect_ratio: str = "16:9"
 ) -> Optional[bytes]:
     """
-    Generate a video using Veo 3.1 (blocking wrapper).
+    Generate a video using grok-imagine-video-1.5 (blocking wrapper).
 
     For SSE streaming with Cloudflare, use generate_video_from_image_stream() instead.
     Returns just the video bytes (not the video object).
@@ -843,7 +622,7 @@ def generate_video_from_image(
         first_frame_bytes, video_prompt, aspect_ratio
     ):
         if event_type == 'complete':
-            # data is (video_object, video_bytes) - return bytes
+            # data is (chain_video, video_bytes) - return bytes
             return data[1]
         elif event_type == 'error':
             return None
@@ -1095,7 +874,7 @@ def generate_video_stream(
                                total=len(scenes),
                                message=f"Generating video for scene {scene_num}...")
 
-                # Refine the video prompt for Veo 3.1 best practices + realism
+                # Refine the video prompt for grok-imagine-video best practices + realism
                 raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
                 yield emit_event("refining_prompt", scene=scene_num,
                                message=f"Refining prompt for scene {scene_num}...")
@@ -1182,7 +961,7 @@ def generate_video_stream(
                                total=len(scenes),
                                message=f"Extending video for scene {scene_num}...")
 
-                # Refine the video prompt for Veo 3.1 best practices + realism
+                # Refine the video prompt for grok-imagine-video best practices + realism
                 raw_prompt = scene.get('video_prompt', scene.get('visual_description', ''))
                 yield emit_event("refining_prompt", scene=scene_num,
                                message=f"Refining prompt for scene {scene_num}...")
@@ -1256,12 +1035,12 @@ def generate_video_stream(
                 # Update chain for next extension
                 current_video_object = video_object
                 final_video_bytes = video_bytes  # Extended video includes all previous scenes
-                total_duration += 7  # Extensions add ~7 seconds
+                total_duration += EXTENSION_DURATION
                 update_video_scene(scene_id, video_data=video_bytes,
-                                 duration_seconds=7, status="complete")
+                                 duration_seconds=EXTENSION_DURATION, status="complete")
                 yield emit_event("scene_complete", scene=scene_num, total=len(scenes))
 
-        # Final video is already combined by Veo extension - no stitching needed
+        # Final video is the running concatenation of all scene clips
         if final_video_bytes:
             update_video_job(job_id, status="complete",
                            final_video=final_video_bytes, final_video_mime="video/mp4")

@@ -6,7 +6,6 @@ import html
 import json
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
-from google.genai import types
 import tweepy
 import requests
 from PIL import Image
@@ -18,10 +17,6 @@ from logger_config import agent_logger as logger
 # Import shared utilities from agents_lib
 from agents_lib.content_filter import validate_post_content
 from agents_lib import (
-    client,
-    LLM_MODEL,
-    LLM_FALLBACK,
-    IMAGE_MODEL,
     QUIC_ERROR_PATTERNS,
     TOPIC_STOPWORDS,
     is_network_error,
@@ -62,7 +57,7 @@ from agents_lib import (
     agent_brainstorm,
     agent_generate_campaign_prompt,
     POST_BUILDER_SYSTEM_PROMPT,
-    POST_BUILDER_FUNCTION_TOOL,
+    POST_BUILDER_FUNCTIONS,
     # URL content
     generate_from_url,
     generate_from_url_stream,
@@ -73,8 +68,6 @@ from agents_lib import (
     generate_image_for_post_builder,
     generate_video_for_post,
     generate_media_for_post_builder,
-    ORCHESTRATOR_SYSTEM_PROMPT,
-    ORCHESTRATOR_TOOLS,
 )
 
 # Alias private function names for backward compatibility within this file
@@ -290,5 +283,4 @@ def run_agent_cycle(user_id: int):
 
 # generate_from_url, generate_from_url_stream, post_url_content are now imported from agents_lib.url_content
 # chat_post_builder_stream, parse_generated_posts, generate_image_for_post_builder,
-# generate_video_for_post, generate_media_for_post_builder, ORCHESTRATOR_SYSTEM_PROMPT,
-# ORCHESTRATOR_TOOLS are now imported from agents_lib.chat_stream
+# generate_video_for_post, generate_media_for_post_builder are now imported from agents_lib.chat_stream

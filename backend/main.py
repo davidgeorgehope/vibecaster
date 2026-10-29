@@ -1172,7 +1172,7 @@ class PostVideoRequest(BaseModel):
 
 def generate_video_posts_from_transcript(transcript: str, user_id: int) -> dict:
     """Generate promotional posts for X, LinkedIn, and YouTube from transcript."""
-    from agents_lib import client, LLM_MODEL
+    from xai_client import chat
     import json
 
     # Get campaign for persona context
@@ -1209,13 +1209,7 @@ Generate the following (output as JSON):
 Output ONLY valid JSON with these five fields. No other text."""
 
     try:
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=[prompt],
-            config={
-                "response_mime_type": "application/json"
-            }
-        )
+        response = chat(prompt, json_mode=True)
         result = json.loads(response.text)
         return result
     except Exception as e:
@@ -1244,7 +1238,7 @@ async def generate_video_post_stream_endpoint(
     - upload_id: Reference to a chunked upload (for large files up to 500MB)
 
     Flow:
-    1. Transcribe video using Gemini
+    1. Transcribe video using xAI speech-to-text
     2. Generate X post, LinkedIn post, YouTube title/description
     3. Return video bytes for posting
 
@@ -1311,39 +1305,9 @@ async def generate_video_post_stream_endpoint(
             # Step 1: Emit processing started
             yield f"data: {json.dumps({'type': 'progress', 'step': 'uploading', 'message': 'Processing video...', 'timestamp': time_module.time()})}\n\n"
 
-            from transcription import upload_to_gemini, cleanup_gemini_file, client, LLM_MODEL
+            from xai_client import understand_media
 
-            # Step 2: Upload to Gemini with keepalives
-            uploaded_file = None
-            upload_result = {'media_part': None, 'uploaded_file': None, 'error': None}
-            upload_done = threading.Event()
-
-            def do_upload():
-                try:
-                    media_part, ufile = upload_to_gemini(file_bytes, filename, content_type)
-                    upload_result['media_part'] = media_part
-                    upload_result['uploaded_file'] = ufile
-                except Exception as e:
-                    upload_result['error'] = e
-                finally:
-                    upload_done.set()
-
-            upload_thread = threading.Thread(target=do_upload)
-            upload_thread.start()
-
-            # Send keepalives every 15 seconds while upload processes
-            keepalive_count = 0
-            while not upload_done.wait(timeout=15):
-                keepalive_count += 1
-                yield f"data: {json.dumps({'type': 'keepalive', 'step': 'uploading', 'message': f'Processing file... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
-
-            if upload_result['error']:
-                raise upload_result['error']
-
-            media_part = upload_result['media_part']
-            uploaded_file = upload_result['uploaded_file']
-
-            # Step 3: Transcribe video with keepalives
+            # Step 2: Transcribe video (xAI speech-to-text) with keepalives
             yield f"data: {json.dumps({'type': 'progress', 'step': 'transcribing', 'message': 'Extracting transcript...', 'timestamp': time_module.time()})}\n\n"
 
             transcribe_result = {'transcript': None, 'error': None}
@@ -1351,15 +1315,7 @@ async def generate_video_post_stream_endpoint(
 
             def do_transcribe():
                 try:
-                    response = client.models.generate_content(
-                        model=LLM_MODEL,
-                        contents=[
-                            "Generate a complete, accurate, verbatim transcript of this video. "
-                            "Include all spoken words exactly as said.",
-                            media_part
-                        ]
-                    )
-                    transcribe_result['transcript'] = response.text.strip()
+                    transcribe_result['transcript'] = understand_media(file_bytes, filename, content_type).strip()
                 except Exception as e:
                     transcribe_result['error'] = e
                 finally:
@@ -1373,9 +1329,6 @@ async def generate_video_post_stream_endpoint(
             while not transcribe_done.wait(timeout=15):
                 keepalive_count += 1
                 yield f"data: {json.dumps({'type': 'keepalive', 'step': 'transcribing', 'message': f'Transcribing audio... ({keepalive_count * 15}s)', 'timestamp': time_module.time()})}\n\n"
-
-            # Clean up Gemini file
-            cleanup_gemini_file(uploaded_file)
 
             if transcribe_result['error']:
                 raise transcribe_result['error']

@@ -1,13 +1,6 @@
 """Shared pytest fixtures for agent tests."""
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-
-
-@pytest.fixture
-def mock_gemini_client():
-    """Mock the Gemini API client."""
-    with patch('agents.client') as mock_client:
-        yield mock_client
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -15,53 +8,6 @@ def mock_requests():
     """Mock requests library for URL validation."""
     with patch('agents.requests') as mock_req:
         yield mock_req
-
-
-@pytest.fixture
-def mock_gemini_response():
-    """Factory for creating mock Gemini API responses."""
-    def _create_response(text: str = None, urls: list = None, function_call: dict = None):
-        response = Mock()
-        response.text = text
-
-        # Mock candidates structure
-        candidate = Mock()
-        candidate.finish_reason = "STOP"
-        candidate.safety_ratings = []
-
-        # Mock content parts
-        part = Mock()
-        part.text = text
-        part.thought = False
-
-        if function_call:
-            fc = Mock()
-            fc.name = function_call.get('name')
-            fc.args = function_call.get('args', {})
-            part.function_call = fc
-        else:
-            part.function_call = None
-
-        candidate.content = Mock()
-        candidate.content.parts = [part]
-
-        # Mock grounding metadata with URLs
-        if urls:
-            chunks = []
-            for url in urls:
-                chunk = Mock()
-                chunk.web = Mock()
-                chunk.web.uri = url
-                chunks.append(chunk)
-            candidate.grounding_metadata = Mock()
-            candidate.grounding_metadata.grounding_chunks = chunks
-        else:
-            candidate.grounding_metadata = None
-
-        response.candidates = [candidate]
-        return response
-
-    return _create_response
 
 
 @pytest.fixture

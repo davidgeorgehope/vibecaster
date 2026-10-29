@@ -34,11 +34,12 @@ def generate_thing():
 **Files using this pattern:**
 - `backend/video_generation.py`: `generate_video_from_image_stream()`
 
-### Google GenAI SDK Notes
+### xAI (Grok) API Notes
 
-- `types.Image.from_file()` requires keyword arg: `from_file(location=path)`
-- `VideoGenerationReferenceImage` uses camelCase: `referenceType="ASSET"`
-- Veo API: `image` (first frame) and `reference_images` are mutually exclusive
+- All AI calls go through `backend/xai_client.py` (httpx, `XAI_API_KEY`); no provider SDK.
+- Models (flagship only): `grok-4.7` (text/JSON/vision/web search/tools), `grok-imagine-image-2.0` (images, up to 5 reference images via `/images/edits`), `grok-imagine-video-1.5` (image-to-video).
+- Scene chaining: the last frame of the video so far seeds the next 1.5 clip, then ffmpeg concatenates (xAI's extend endpoint is non-flagship only).
+- Audio/video understanding: xAI STT (diarized, word timestamps); silent video falls back to grok-4.7 over sampled frames.
 
 ### Chunked Uploads for Large Files
 

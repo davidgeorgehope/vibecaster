@@ -4,7 +4,7 @@ const betaFeatures = [
   'Unlimited AI post generation',
   'X (Twitter) & LinkedIn integration',
   'YouTube video uploads',
-  'Video generation with Google Veo',
+  'Video generation with Grok Imagine Video',
   'Audio/video transcription',
   'Campaign automation',
 ];

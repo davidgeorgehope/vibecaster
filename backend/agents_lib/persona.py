@@ -2,9 +2,8 @@
 import json
 import re
 from typing import Tuple, List
-from google.genai import types
 
-from .config import client, LLM_MODEL
+from xai_client import chat
 from logger_config import agent_logger as logger
 
 
@@ -83,17 +82,7 @@ def analyze_user_prompt(user_prompt: str) -> Tuple[str, str]:
     try:
         analysis_prompt = PERSONA_ANALYSIS_PROMPT.format(user_prompt=user_prompt)
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=analysis_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.5,  # Lower temp to stay faithful to user input
-                response_mime_type="application/json",
-                thinking_config=types.ThinkingConfig(
-                    thinking_level="HIGH"
-                )
-            )
-        )
+        response = chat(analysis_prompt, temperature=0.5, json_mode=True)
 
         result = response.text
         data = json.loads(result)
@@ -125,7 +114,7 @@ def create_fallback_persona(user_prompt: str) -> Tuple[str, str]:
 
 def infer_excluded_companies(prompt: str, author_bio: str = "") -> List[str]:
     """
-    Use Gemini to infer which companies should be excluded from posts
+    Use grok-4.7 to infer which companies should be excluded from posts
     based on the campaign prompt and author bio.
     
     Args:
@@ -141,14 +130,7 @@ def infer_excluded_companies(prompt: str, author_bio: str = "") -> List[str]:
             bio=author_bio or "No bio provided"
         )
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=inference_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                response_mime_type="application/json",
-            )
-        )
+        response = chat(inference_prompt, temperature=0.3, json_mode=True)
 
         result = json.loads(response.text)
         
@@ -205,14 +187,7 @@ def infer_schedule_from_prompt(prompt: str) -> Tuple[str, str]:
 
         inference_prompt = SCHEDULE_INFERENCE_PROMPT.format(prompt=prompt)
         
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=inference_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-            )
-        )
+        response = chat(inference_prompt, temperature=0.1, json_mode=True)
 
         result = json.loads(response.text)
         cron = result.get("cron", "0 9 * * *")

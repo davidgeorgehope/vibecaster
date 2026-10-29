@@ -185,7 +185,7 @@ Create a page rule for `https://your-domain.com/*`:
 
 ```bash
 # API Keys
-GEMINI_API_KEY=your_key_here
+XAI_API_KEY=your_key_here
 X_CLIENT_ID=your_client_id
 X_CLIENT_SECRET=your_secret
 LINKEDIN_CLIENT_ID=your_client_id

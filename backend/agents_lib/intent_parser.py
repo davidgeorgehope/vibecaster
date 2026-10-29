@@ -1,9 +1,8 @@
 """Intent parsing agent for analyzing user messages."""
 import json
 from typing import Optional
-from google.genai import types
 
-from .config import client, LLM_MODEL
+from xai_client import chat
 from logger_config import agent_logger as logger
 
 
@@ -40,7 +39,7 @@ IMPORTANT: If user says things like "generate a campaign prompt", "create a camp
    - "mario and luigi explain kubernetes" → topic is "kubernetes"
    - "gordon ramsay talks about cloud computing" → topic is "cloud computing"
 
-4. "search_query": Optimized Google search query
+4. "search_query": Optimized web search query
    - Should find recent, relevant content about the TOPIC
    - Do NOT include persona in search query
    - Add context like "2024", "best practices", "news" if appropriate
@@ -79,15 +78,7 @@ def agent_intent_parser(message: str, history: list = None) -> dict:
         context_parts.append(f"Current user message: {message}")
         full_context = "\n".join(context_parts)
 
-        response = client.models.generate_content(
-            model=LLM_MODEL,
-            contents=full_context,
-            config=types.GenerateContentConfig(
-                system_instruction=INTENT_PARSER_PROMPT,
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
-        )
+        response = chat(full_context, system=INTENT_PARSER_PROMPT, temperature=0.2, json_mode=True)
         result = json.loads(response.text)
         logger.info(f"Intent parser result: {result}")
         return result

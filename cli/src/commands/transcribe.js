@@ -82,7 +82,7 @@ export function registerTranscribe(program) {
       // Poll for completion
       const statusLabels = {
         pending: 'Queued',
-        uploading: 'Uploading to Gemini',
+        uploading: 'Uploading',
         transcribing: 'Transcribing audio',
         summarizing: 'Generating summary',
         generating_blog: 'Writing blog post',

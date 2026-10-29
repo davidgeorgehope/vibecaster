@@ -115,7 +115,7 @@ class TestIsIntentHelpers:
 class TestAgentIntentParser:
     """Tests for agent_intent_parser function."""
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_returns_parsed_intent_from_llm(self, mock_client):
         """Should return parsed intent from LLM response."""
         mock_response = Mock()
@@ -126,7 +126,7 @@ class TestAgentIntentParser:
             "search_query": "cloud computing trends 2024",
             "visual_style": "chef in kitchen with laptop"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("gordon ramsay explains cloud computing")
 
@@ -135,7 +135,7 @@ class TestAgentIntentParser:
         assert result["topic"] == "cloud computing"
         assert "cloud" in result["search_query"].lower()
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_includes_history_in_context(self, mock_client):
         """Should include conversation history in context."""
         mock_response = Mock()
@@ -146,7 +146,7 @@ class TestAgentIntentParser:
             "search_query": "AI trends",
             "visual_style": "modern"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         history = [
             {"role": "user", "content": "I want to talk about AI"},
@@ -156,12 +156,12 @@ class TestAgentIntentParser:
         agent_intent_parser("latest developments", history=history)
 
         # Verify the call was made with context containing history
-        call_args = mock_client.models.generate_content.call_args
-        contents = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        contents = call_args.args[0]
         assert "Previous conversation" in contents
         assert "I want to talk about AI" in contents
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_limits_history_to_last_6_messages(self, mock_client):
         """Should only include last 6 messages from history."""
         mock_response = Mock()
@@ -172,21 +172,21 @@ class TestAgentIntentParser:
             "search_query": "query",
             "visual_style": "style"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         # Create 10 messages
         history = [{"role": "user", "content": f"message {i}"} for i in range(10)]
 
         agent_intent_parser("latest", history=history)
 
-        call_args = mock_client.models.generate_content.call_args
-        contents = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        contents = call_args.args[0]
         # Should include messages 4-9 (last 6), not 0-3
         assert "message 9" in contents
         assert "message 4" in contents
         assert "message 3" not in contents
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_truncates_long_history_content(self, mock_client):
         """Should truncate history content longer than 500 chars."""
         mock_response = Mock()
@@ -197,24 +197,24 @@ class TestAgentIntentParser:
             "search_query": "query",
             "visual_style": "style"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         long_content = "x" * 1000  # 1000 char message
         history = [{"role": "user", "content": long_content}]
 
         agent_intent_parser("test", history=history)
 
-        call_args = mock_client.models.generate_content.call_args
-        contents = call_args.kwargs['contents']
+        call_args = mock_client.call_args
+        contents = call_args.args[0]
         # The full 1000-char message should NOT appear
         assert long_content not in contents
         # But truncated version (500 chars) should
         assert "x" * 500 in contents
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_returns_fallback_on_llm_error(self, mock_client):
         """Should return fallback values when LLM fails."""
-        mock_client.models.generate_content.side_effect = Exception("API error")
+        mock_client.side_effect = Exception("API error")
 
         result = agent_intent_parser("make posts about kubernetes")
 
@@ -224,19 +224,19 @@ class TestAgentIntentParser:
         assert result["search_query"] == "make posts about kubernetes"
         assert result["visual_style"] == DEFAULT_VISUAL_STYLE
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_returns_fallback_on_invalid_json(self, mock_client):
         """Should return fallback values when LLM returns invalid JSON."""
         mock_response = Mock()
         mock_response.text = "not valid json {"
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("create posts")
 
         assert result["intent"] == INTENT_GENERATE_POSTS
         assert result["persona"] == DEFAULT_PERSONA
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_works_with_empty_history(self, mock_client):
         """Should work correctly with empty history list."""
         mock_response = Mock()
@@ -247,13 +247,13 @@ class TestAgentIntentParser:
             "search_query": "",
             "visual_style": ""
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("hello", history=[])
 
         assert result["intent"] == "greeting"
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_works_with_none_history(self, mock_client):
         """Should work correctly with None history."""
         mock_response = Mock()
@@ -264,13 +264,13 @@ class TestAgentIntentParser:
             "search_query": "AI trends",
             "visual_style": "modern"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("posts about AI", history=None)
 
         assert result["intent"] == "generate_posts"
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_uses_low_temperature_for_consistency(self, mock_client):
         """Should use low temperature (0.2) for consistent parsing."""
         mock_response = Mock()
@@ -281,15 +281,14 @@ class TestAgentIntentParser:
             "search_query": "query",
             "visual_style": "style"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         agent_intent_parser("test message")
 
-        call_args = mock_client.models.generate_content.call_args
-        config = call_args.kwargs['config']
-        assert config.temperature == 0.2
+        call_args = mock_client.call_args
+        assert call_args.kwargs['temperature'] == 0.2
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_requests_json_response_format(self, mock_client):
         """Should request JSON response format from LLM."""
         mock_response = Mock()
@@ -300,19 +299,18 @@ class TestAgentIntentParser:
             "search_query": "query",
             "visual_style": "style"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         agent_intent_parser("test message")
 
-        call_args = mock_client.models.generate_content.call_args
-        config = call_args.kwargs['config']
-        assert config.response_mime_type == "application/json"
+        call_args = mock_client.call_args
+        assert call_args.kwargs['json_mode'] is True
 
 
 class TestIntentParserEdgeCases:
     """Tests for edge cases in intent parsing."""
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_handles_empty_message(self, mock_client):
         """Should handle empty message gracefully."""
         mock_response = Mock()
@@ -323,14 +321,14 @@ class TestIntentParserEdgeCases:
             "search_query": "",
             "visual_style": DEFAULT_VISUAL_STYLE
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("")
 
         # Should not crash and should return something
         assert "intent" in result
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_handles_very_long_message(self, mock_client):
         """Should handle very long messages."""
         mock_response = Mock()
@@ -341,7 +339,7 @@ class TestIntentParserEdgeCases:
             "search_query": "query",
             "visual_style": "style"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         long_message = "a" * 10000  # Very long message
 
@@ -350,7 +348,7 @@ class TestIntentParserEdgeCases:
         # Should not crash
         assert "intent" in result
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_handles_special_characters(self, mock_client):
         """Should handle messages with special characters."""
         mock_response = Mock()
@@ -361,13 +359,13 @@ class TestIntentParserEdgeCases:
             "search_query": "kubernetes",
             "visual_style": "modern"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("create posts about k8s! @#$%^&*()")
 
         assert "intent" in result
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_handles_unicode_characters(self, mock_client):
         """Should handle messages with unicode characters."""
         mock_response = Mock()
@@ -378,13 +376,13 @@ class TestIntentParserEdgeCases:
             "search_query": "technology",
             "visual_style": "modern"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         result = agent_intent_parser("create posts about 技術 and тех")
 
         assert "intent" in result
 
-    @patch('agents_lib.intent_parser.client')
+    @patch('agents_lib.intent_parser.chat')
     def test_handles_history_with_missing_fields(self, mock_client):
         """Should handle history entries with missing fields."""
         mock_response = Mock()
@@ -395,7 +393,7 @@ class TestIntentParserEdgeCases:
             "search_query": "AI",
             "visual_style": "modern"
         })
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.return_value = mock_response
 
         # History with missing 'content' and 'role' fields
         history = [

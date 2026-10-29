@@ -5,7 +5,7 @@ This module provides agent functionality for post generation.
 The main implementation is still in agents.py at the backend root.
 These sub-modules provide shared utilities and configuration.
 """
-from .config import client, LLM_MODEL, LLM_FALLBACK, IMAGE_MODEL, QUIC_ERROR_PATTERNS, TOPIC_STOPWORDS
+from .config import QUIC_ERROR_PATTERNS, TOPIC_STOPWORDS
 from .utils import is_network_error, emit_agent_event, strip_markdown_formatting, sanitize_for_linkedin
 from .exceptions import AgentError, SearchError, NetworkError, URLValidationError, GenerationError
 from .url_utils import (
@@ -65,7 +65,7 @@ from .agent_tools import (
     agent_brainstorm,
     agent_generate_campaign_prompt,
     POST_BUILDER_SYSTEM_PROMPT,
-    POST_BUILDER_FUNCTION_TOOL,
+    POST_BUILDER_FUNCTIONS,
 )
 from .url_content import (
     generate_from_url,
@@ -78,8 +78,6 @@ from .chat_stream import (
     generate_image_for_post_builder,
     generate_video_for_post,
     generate_media_for_post_builder,
-    ORCHESTRATOR_SYSTEM_PROMPT,
-    ORCHESTRATOR_TOOLS,
 )
 from .video_posting import (
     upload_video_to_twitter,
@@ -91,10 +89,6 @@ from .video_posting import (
 
 __all__ = [
     # Config
-    'client',
-    'LLM_MODEL',
-    'LLM_FALLBACK',
-    'IMAGE_MODEL',
     'QUIC_ERROR_PATTERNS',
     'TOPIC_STOPWORDS',
     # Utils
@@ -158,7 +152,7 @@ __all__ = [
     'agent_brainstorm',
     'agent_generate_campaign_prompt',
     'POST_BUILDER_SYSTEM_PROMPT',
-    'POST_BUILDER_FUNCTION_TOOL',
+    'POST_BUILDER_FUNCTIONS',
     # URL Content
     'generate_from_url',
     'generate_from_url_stream',
@@ -169,8 +163,6 @@ __all__ = [
     'generate_image_for_post_builder',
     'generate_video_for_post',
     'generate_media_for_post_builder',
-    'ORCHESTRATOR_SYSTEM_PROMPT',
-    'ORCHESTRATOR_TOOLS',
     # Video Posting
     'upload_video_to_twitter',
     'upload_video_to_linkedin',
