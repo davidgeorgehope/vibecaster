@@ -31,7 +31,7 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Models
 LLM_MODEL = "gemini-3.1-pro-preview"
-IMAGE_MODEL = "gemini-3.1-flash-image-preview"  # Nano Banana 2
+IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
 VIDEO_MODEL = "veo-3.1-generate-preview"
 
 # Video generation settings

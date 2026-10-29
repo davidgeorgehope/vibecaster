@@ -156,8 +156,8 @@ def test_api_call():
         print(f"[FAIL] gemini-3.1-pro-preview JSON failed: {e}")
         return False
 
-    # Test 3: gemini-3.1-flash-image-preview (just verify model exists)
-    print("[TEST] Testing gemini-3.1-flash-image-preview availability...")
+    # Test 3: gemini-3.1-flash-image (just verify model exists)
+    print("[TEST] Testing gemini-3.1-flash-image availability...")
     try:
         # Just test that we can create a valid config for image generation
         config = types.GenerateContentConfig(
@@ -167,10 +167,10 @@ def test_api_call():
             )
         )
         print(f"[TEST] Image config created: {config.response_modalities}")
-        print("[PASS] gemini-3.1-flash-image-preview config works")
+        print("[PASS] gemini-3.1-flash-image config works")
         print("[INFO] Skipping actual image generation to save API costs")
     except Exception as e:
-        print(f"[FAIL] gemini-3.1-flash-image-preview config failed: {e}")
+        print(f"[FAIL] gemini-3.1-flash-image config failed: {e}")
         return False
 
     return True
